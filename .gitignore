@@ -1,0 +1,6 @@
+**/xcuserdata/
+**/Moonlight.xcscmblueprint
+**/xcschemes/*.xcscheme
+Build
+DerivedData
+*.DS_Store

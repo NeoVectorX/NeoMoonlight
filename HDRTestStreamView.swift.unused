@@ -1,0 +1,491 @@
+//
+//  HDRTestStreamView.swift
+//  NeoMoonlight - HDR Test Renderer
+//
+//  Flat 2D RealityKit renderer with enhanced HDR
+//  Matches UIKit window behavior exactly
+//
+
+import SwiftUI
+import RealityKit
+import simd
+
+struct HDRTestStreamView: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
+    @Binding var streamConfig: StreamConfiguration?
+    
+    var body: some View {
+        if streamConfig != nil {
+            _HDRTestStreamView(
+                streamConfig: Binding<StreamConfiguration>(
+                    get: { streamConfig ?? StreamConfiguration() },
+                    set: { streamConfig = $0 }
+                )
+            ) {
+                dismissWindow(id: "hdrTestWindow")
+                streamConfig = nil
+            }
+        } else {
+            ProgressView().onAppear {
+                dismissWindow(id: "hdrTestWindow")
+            }
+        }
+    }
+}
+
+struct _HDRTestStreamView: View {
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var viewModel: MainViewModel
+    
+    @Binding var streamConfig: StreamConfiguration
+    let closeAction: () -> Void
+
+    @State private var controllerSupport: ControllerSupport?
+    @State private var streamMan: StreamManager?
+    @ObservedObject var connectionCallbacks: ObservableConnectionManager = .init()
+
+    @State private var texture: TextureResource
+    @State private var screen: ModelEntity = ModelEntity()
+    @State private var videoMode: VideoMode = .standard2D
+    @State private var surfaceMaterial: ShaderGraphMaterial?
+
+    @State private var hideOrnament = false
+    @State private var hideTimer: Timer?
+    @State private var spatialAudioMode: Bool = true
+    @State private var shouldClose: Bool = false
+
+    @State private var statsOverlayText: String = ""
+    @State private var statsTimer: Timer?
+
+    var aspectRatio: Float {
+        if videoMode == .sideBySide3D && isSBSVideo {
+            return Float(streamConfig.height) / Float(streamConfig.width / 2)
+        } else {
+            return Float(streamConfig.height) / Float(streamConfig.width)
+        }
+    }
+    
+    var isSBSVideo: Bool {
+        let ratio = Float(streamConfig.width) / Float(streamConfig.height)
+        return abs(ratio - (32.0 / 9.0)) < 0.01
+    }
+
+    init(streamConfig: Binding<StreamConfiguration>, closeAction: @escaping () -> Void) {
+        self.closeAction = closeAction
+        self._streamConfig = streamConfig
+        self.controllerSupport = ControllerSupport(config: streamConfig.wrappedValue, delegate: DummyControllerDelegate())
+
+        let bytesPerPixel = 8
+        let data = Data(count: bytesPerPixel * Int(streamConfig.wrappedValue.width) * Int(streamConfig.wrappedValue.height))
+        self.texture = try! TextureResource(
+            dimensions: .dimensions(width: Int(streamConfig.wrappedValue.width), height: Int(streamConfig.wrappedValue.height)),
+            format: .raw(pixelFormat: .rgba16Float),
+            contents: .init(
+                mipmapLevels: [
+                    .mip(data: data, bytesPerRow: bytesPerPixel * Int(streamConfig.wrappedValue.width)),
+                ]
+            )
+        )
+    }
+
+    var body: some View {
+        GeometryReader3D { proxy in
+            RealityView { content in
+                setupRealityView(content: content)
+            } update: { content in
+                updateRealityView(content: content, proxy: proxy)
+            }
+        }
+        .task {
+            await setupMaterial()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            dismissWindow(id: "mainView")
+            if self.spatialAudioMode {
+                AudioHelpers.fixAudioForSurroundForCurrentWindow()
+            } else {
+                AudioHelpers.fixAudioForDirectStereo()
+            }
+        }
+        .overlay {
+            if viewModel.streamSettings.statsOverlay && !statsOverlayText.isEmpty {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text(statsOverlayText)
+                            .font(.system(size: 14, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(.black.opacity(0.7))
+                            .cornerRadius(8)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding()
+                .allowsHitTesting(false)
+                .zIndex(1000)
+            }
+        }
+        .persistentSystemOverlays(hideOrnament ? .hidden : .visible)
+        .ornament(visibility: connectionCallbacks.showAlert ? .visible : .hidden, 
+                  attachmentAnchor: .scene(.bottomFront), contentAlignment: .bottom) {
+            errorOrnament
+        }
+        .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
+            controlIcons
+        }
+        .onAppear {
+            NotificationCenter.default.addObserver(
+                forName: Notification.Name("ResumeStreamFromMenu"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                dismissWindow(id: "mainView")
+                if self.spatialAudioMode {
+                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
+                } else {
+                    AudioHelpers.fixAudioForDirectStereo()
+                }
+            }
+
+            if !viewModel.activelyStreaming {
+                openWindow(id: "mainView")
+                self.closeAction()
+            } else {
+                startStream()
+            }
+        }
+        .onChange(of: shouldClose) { _, val in
+            if val { triggerClose() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            handleScenePhase(phase)
+        }
+        .onChange(of: viewModel.activelyStreaming) { _, isActive in
+            if !isActive {
+                stopStreamAndCleanup()
+            }
+        }
+        .onChange(of: viewModel.streamSettings.statsOverlay) { _, enabled in
+            if enabled {
+                startStatsTimer()
+            } else {
+                statsTimer?.invalidate()
+                statsTimer = nil
+                statsOverlayText = ""
+            }
+        }
+        .onDisappear {
+            statsTimer?.invalidate()
+            statsTimer = nil
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+
+    @ViewBuilder
+    var controlIcons: some View {
+        HStack(spacing: 16) {
+            Button {
+                if hideOrnament {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideOrnament = false
+                        hideTimer?.invalidate()
+                        startHideTimer()
+                    }
+                }
+                dismissWindow(id: "mainView")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    openWindow(id: "mainView")
+                }
+            } label: {
+                Label("Home", systemImage: "house.fill")
+            }
+            .labelStyle(.iconOnly)
+
+            Button {
+                if hideOrnament {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideOrnament = false
+                        hideTimer?.invalidate()
+                        startHideTimer()
+                    }
+                }
+                spatialAudioMode.toggle()
+                if spatialAudioMode {
+                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
+                } else {
+                    AudioHelpers.fixAudioForDirectStereo()
+                }
+            } label: {
+                Label(spatialAudioMode ? "Spatial Audio" : "Direct Audio",
+                      systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones")
+            }
+            .labelStyle(.iconOnly)
+
+            Button {
+                if hideOrnament {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideOrnament = false
+                        hideTimer?.invalidate()
+                        startHideTimer()
+                    }
+                }
+                videoMode = videoMode == .standard2D ? .sideBySide3D : .standard2D
+                updateScreenMaterial()
+            } label: {
+                Label(videoMode == .standard2D ? "2D" : "3D",
+                      systemImage: videoMode == .standard2D ? "rectangle" : "rectangle.split.2x1")
+            }
+            .labelStyle(.iconOnly)
+        }
+        .padding()
+        .opacity(hideOrnament ? 0.03 : 0.5)
+        .animation(.easeInOut(duration: 0.3), value: hideOrnament)
+        .allowsHitTesting(true)
+    }
+    
+    @ViewBuilder
+    var errorOrnament: some View {
+        VStack(alignment: .center) {
+            Image(systemName: "exclamationmark.triangle")
+            Text("Stream Error").font(.title)
+            Text(connectionCallbacks.errorMessage ?? "Unknown error")
+            Button("Close") {
+                viewModel.activelyStreaming = false
+                shouldClose.toggle()
+            }
+        }
+        .padding()
+        .glassBackgroundEffect()
+    }
+    
+    @ViewBuilder
+    var streamStoppedOverlay: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+            Text("Stream Stopped").font(.title2)
+            Text("The stream has ended or disconnected.")
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Button {
+                viewModel.savedStreamConfigForResume = nil
+                triggerClose()
+            } label: {
+                Label("Open Main Menu", systemImage: "house.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.horizontal)
+        }
+        .frame(width: 600, height: 400)
+        .padding()
+        .glassBackgroundEffect()
+    }
+
+    func setupRealityView(content: RealityViewContent) {
+        let mesh = try! Self.generateFlatPlane(
+            width: 2.0,
+            aspectRatio: aspectRatio,
+            resolution: (100, 100)
+        )
+
+        screen = ModelEntity(mesh: mesh, materials: [])
+
+        if videoMode == .sideBySide3D, let material = surfaceMaterial {
+            screen.model?.materials = [material]
+        } else {
+            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
+        }
+
+        screen.collision = CollisionComponent(
+            shapes: [ShapeResource.generateBox(width: 2, height: 2 * aspectRatio, depth: 0.001)],
+            mode: .trigger
+        )
+        screen.components.set(InputTargetComponent())
+
+        content.add(screen)
+    }
+
+    func updateRealityView(content: RealityViewContent, proxy: GeometryProxy3D) {
+        if let mesh = try? Self.generateFlatPlane(
+            width: 2.0,
+            aspectRatio: aspectRatio,
+            resolution: (100, 100)
+        ) {
+            try? screen.model!.mesh.replace(with: mesh.contents)
+        }
+        let size = content.convert(proxy.frame(in: .local), from: .local, to: .scene)
+        screen.transform.scale = .init(repeating: size.extents.x / 2)
+        screen.position = [0, 0, 0]
+    }
+    
+    func updateScreenMaterial() {
+        if videoMode == .sideBySide3D, let material = surfaceMaterial {
+            screen.model?.materials = [material]
+        } else {
+            screen.model?.materials = [UnlitMaterial(texture: texture)]
+        }
+    }
+    
+    func setupMaterial() async {
+        if surfaceMaterial == nil {
+            do {
+                var material = try await ShaderGraphMaterial(named: "/Root/SBSMaterial", from: "SBSMaterial.usda")
+                try material.setParameter(name: "texture", value: .textureResource(self.texture))
+                self.surfaceMaterial = material
+            } catch {
+                print("[HDR Test] Material error: \(error)")
+            }
+        }
+    }
+
+    func startStream() {
+        dismissWindow(id: "mainView")
+        dismissWindow(id: "dummy")
+        hideOrnament = false
+        spatialAudioMode = true
+        self.streamMan = StreamManager(
+            config: self.streamConfig,
+            rendererProvider: {
+                DrawableVideoDecoder(
+                    texture: self.texture,
+                    callbacks: self.connectionCallbacks,
+                    aspectRatio: Float(self.streamConfig.width) / Float(self.streamConfig.height),
+                    useFramePacing: self.streamConfig.useFramePacing,
+                    enableHDR: true,
+                    callbackToRender: { texture, correctedResolution in
+                        DispatchQueue.main.async {
+                            if let correctedResolution = correctedResolution {
+                                streamConfig.width = Int32(correctedResolution.0)
+                                streamConfig.height = Int32(correctedResolution.1)
+                            }
+                            self.texture.replace(withDrawables: texture)
+                            self.controllerSupport?.connectionEstablished()
+                            startHideTimer()
+
+                            if viewModel.streamSettings.statsOverlay, statsTimer == nil {
+                                startStatsTimer()
+                            }
+                        }
+                    }
+                )
+            },
+            connectionCallbacks: self.connectionCallbacks
+        )
+        let operationQueue = OperationQueue()
+        operationQueue.addOperation(streamMan!)
+    }
+
+    func triggerClose() {
+        openWindow(id: "mainView")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.closeAction()
+        }
+    }
+
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            viewModel.activelyStreaming = false
+            stopStreamAndCleanup()
+        default:
+            break
+        }
+    }
+
+    func startHideTimer() {
+        hideTimer?.invalidate()
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+            if viewModel.activelyStreaming {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    hideOrnament = true
+                }
+            }
+        }
+    }
+
+    func startStatsTimer() {
+        statsTimer?.invalidate()
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            if let streamMan = self.streamMan, let stats = streamMan.getStatsOverlayText() {
+                DispatchQueue.main.async {
+                    self.statsOverlayText = stats
+                }
+            }
+        }
+        statsTimer?.fire()
+    }
+
+    private func refreshAfterResume() {
+        LiRequestIdrFrame()
+        updateScreenMaterial()
+    }
+
+    // Robust cleanup helper
+    private func stopStreamAndCleanup() {
+        hideOrnament = false
+        hideTimer?.invalidate()
+
+        if let sm = streamMan {
+            streamMan = nil
+            DispatchQueue.global(qos: .userInitiated).async {
+                sm.stopStream()
+            }
+        }
+
+        controllerSupport?.cleanup()
+        controllerSupport = nil
+
+        openWindow(id: "mainView")
+        self.closeAction()
+    }
+
+    static func generateFlatPlane(
+        width: Float,
+        aspectRatio: Float,
+        resolution: (UInt32, UInt32)
+    ) throws -> MeshResource {
+        var descr = MeshDescriptor(name: "hdr_test_flat_plane")
+        let height = width * aspectRatio
+
+        let vertexCount = Int(resolution.0 * resolution.1)
+        let triangleCount = Int((resolution.0 - 1) * (resolution.1 - 1) * 2)
+
+        var positions: [SIMD3<Float>] = .init(repeating: .zero, count: vertexCount)
+        var textureCoordinates: [SIMD2<Float>] = .init(repeating: .zero, count: vertexCount)
+        var indices: [UInt32] = .init(repeating: 0, count: triangleCount * 3)
+
+        var vertexIndex = 0
+        var indicesIndex = 0
+
+        for y_v in 0..<resolution.1 {
+            let v_geo = Float(y_v) / Float(resolution.1 - 1)
+            let yPosition = (0.5 - v_geo) * height
+            let v_tex = 1.0 - v_geo
+
+            for x_v in 0..<resolution.0 {
+                let u = Float(x_v) / Float(resolution.0 - 1)
+                let xPosition = (u - 0.5) * width
+                let zPosition: Float = 0.0
+                positions[vertexIndex] = [xPosition, yPosition, zPosition]
+                textureCoordinates[vertexIndex] = [u, v_tex]
+                if x_v < (resolution.0 - 1) && y_v < (resolution.1 - 1) {
+                    let current = UInt32(vertexIndex)
+                    let nextRow = current + resolution.0
+                    indices[indicesIndex...] = [current, nextRow, nextRow+1, current, nextRow+1, current+1]
+                    indicesIndex += 6
+                }
+                vertexIndex += 1
+            }
+        }
+        descr.positions = MeshBuffer(positions)
+        descr.textureCoordinates = MeshBuffers.TextureCoordinates(textureCoordinates)
+        descr.primitives = .triangles(indices)
+        return try MeshResource.generate(from: [descr])
+    }
+}
