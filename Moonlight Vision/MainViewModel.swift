@@ -618,9 +618,44 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
             return
         }
 
-        print("[ViewModel] Setting state to 'stopping'. Firing 'shouldCloseStream'.")
+        print("[ViewModel] Setting state to 'stopping'. Sending quit request to server.")
         self.streamState = .stopping
-        self.shouldCloseStream = true
+        
+        // Send quit app request to Sunshine BEFORE tearing down locally
+        if let appId = currentlyStreamingAppId,
+           let host = hosts.first(where: { $0.appList.contains(where: { $0.id == appId || $0.name == appId }) }) {
+            
+            print("[ViewModel] ✅ Found host: \(host.name) for app: \(appId)")
+            print("[ViewModel] 📡 Creating quit request to \(host.activeAddress ?? "unknown")")
+            
+            let httpManager = HttpManager(host: host)
+            let httpResponse = HttpResponse()
+            let quitRequest = HttpRequest(for: httpResponse, with: httpManager?.newQuitAppRequest())
+            
+            print("[ViewModel] 🚀 Executing quit request synchronously...")
+            
+            // Execute quit request synchronously to ensure it completes before teardown
+            Task.detached {
+                httpManager?.executeRequestSynchronously(quitRequest)
+                
+                await MainActor.run {
+                    if httpResponse.isStatusOk() {
+                        print("[ViewModel] ✅ Quit request SUCCESS - Server responded OK")
+                        print("[ViewModel] Response status: \(httpResponse.statusCode), message: \(httpResponse.statusMessage ?? "none")")
+                    } else {
+                        print("[ViewModel] ❌ Quit request FAILED - Server error")
+                        print("[ViewModel] Response status: \(httpResponse.statusCode), message: \(httpResponse.statusMessage ?? "none")")
+                    }
+                    
+                    print("[ViewModel] Quit request completed. Now firing 'shouldCloseStream'.")
+                    self.shouldCloseStream = true
+                }
+            }
+        } else {
+            print("[ViewModel] ⚠️ WARNING: No active app found (appId: \(currentlyStreamingAppId ?? "nil")), skipping quit request")
+            print("[ViewModel] Available hosts: \(hosts.map { $0.name })")
+            self.shouldCloseStream = true
+        }
 
         beginReconnectCooldown(2.0)
         
