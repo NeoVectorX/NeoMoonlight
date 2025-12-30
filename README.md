@@ -34,6 +34,8 @@
 Click the link below to install the build on your Vision Pro:  
 [Join the Beta via TestFlight](https://testflight.apple.com/join/maak7yCK)
 
+
+
 ## Credits & Contributors
 
 Neo Moonlight builds upon the excellent work of the Moonlight streaming community. This project is a modified fork with enhanced visionOS gaming features and UI improvements.
@@ -56,8 +58,6 @@ Neo Moonlight builds upon the excellent work of the Moonlight streaming communit
 - **shinyquagsire23** - Performance optimizations and bandwidth improvements
 - **JFuellem** - Controller crash fixes
 
-#### Neo Moonlight
-- **NeoVectorX** - UI/UX overhaul, feature enhancements, and continued development
 
 ### Special Thanks
 
@@ -75,10 +75,4 @@ This project is licensed under the GPL-3.0 License, the same license as the orig
 
 [View License](LICENSE.txt)
 
----
 
-### Support
-
-If you enjoy Neo Moonlight and would like to support continued development:
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/neovectorx)
