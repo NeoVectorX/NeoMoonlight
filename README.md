@@ -34,7 +34,51 @@
 Click the link below to install the build on your Vision Pro:  
 [Join the Beta via TestFlight](https://testflight.apple.com/join/maak7yCK)
 
-> Note: You will need the TestFlight app installed on your Vision Pro.
+## Credits & Contributors
 
-### Build from Source  
-1. Clone this repository:
+Neo Moonlight builds upon the excellent work of the Moonlight streaming community. This project is a modified fork with enhanced visionOS gaming features and UI improvements.
+
+### Based On
+
+- [Moonlight Game Streaming Project](https://moonlight-stream.org/) - The original open-source game streaming solution
+- [Moonlight iOS](https://github.com/moonlight-stream/moonlight-ios) - iOS/tvOS implementation
+- [Moonlight visionOS Port](https://github.com/RikuKunMS2/moonlight-ios-vision/tree/vision-testflight) - Initial visionOS adaptation
+
+### Core Contributors
+
+#### Original Moonlight Team
+- **cgutman** - Lead developer of Moonlight iOS
+- **dwaxemberg**, **ascagnel**, and [many others](https://github.com/moonlight-stream/moonlight-ios/graphs/contributors)
+
+#### VisionOS Port & Foundation
+- **RikuKunMS2** - Initial visionOS port and foundation work
+- **tht7** - Curved screen feature implementation
+- **shinyquagsire23** - Performance optimizations and bandwidth improvements
+- **JFuellem** - Controller crash fixes
+
+#### Neo Moonlight
+- **NeoVectorX** - UI/UX overhaul, feature enhancements, and continued development
+
+### Special Thanks
+
+#### Beta Testers
+- **skynet01** - Beta testing and valuable feedback
+- **Delt31** - Beta testing and feature suggestions
+
+*And many others in the community who contributed through issues, testing, and feedback.*
+
+---
+
+### License
+
+This project is licensed under the GPL-3.0 License, the same license as the original Moonlight project. This means the source code is freely available and can be modified and redistributed under the same terms.
+
+[View License](LICENSE.txt)
+
+---
+
+### Support
+
+If you enjoy Neo Moonlight and would like to support continued development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/neovectorx)
