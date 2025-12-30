@@ -5,13 +5,29 @@
 
 **Neo Moonlight** is a community‑fork of [RikuKunMS2's moonlight-ios-vision](https://github.com/RikuKunMS2/moonlight-ios-vision) and the original [Moonlight iOS](https://github.com/moonlight-stream/moonlight-ios) project, enhanced specifically for the Apple Vision Pro.
 
-## 🚀 Features & Improvements  
-- **Low‑Latency Streaming Entitlement** — Implements Apple's [`com.apple.developer.low-latency-streaming`](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.low-latency-streaming) entitlement for smoother, lag‑reduced streaming.  
-- **Spatial Audio / Stereo Toggle** — Added a new top icon that lets you switch between spatial audio and stereo while gaming.  
-- **Auto‑Hiding UI Icons** — Icons disappear automatically during streaming to maximize immersion.  
-- **Rounded Corners** — Rounded corners to better fit visionOS design aesthetics.  
-- **Automatic Aspect Ratio** — Stream aspect ratio adjusts automatically.
-- **Mouse Cursor Toggle** — Added a toggle switch in settings to disable VisionOS cursor, eliminating duplicate cursors.
+## Neo Moonlight Version 11.1 - December 2025
+
+### Features & Improvements
+
+- **Complete UI/UX overhaul** - Redesigned interface with depth effects, glass morphism, and navy blue/orange theme
+- **Added a Moonlight user guide** - Comprehensive documentation covering all features
+- **Added multiple dimming options** - Gradient dimming for environment backgrounds with smooth transitions
+- **Added 360° environments** - High-quality 4K skybox system for immersive viewing
+- **Added curvature presets** - Match popular gaming monitor industry standards (1800R, 1000R, 800R)
+- **Icons automatically hide for better immersion** - Auto-fade to 1% opacity after 5 seconds with gaze-hover reveal
+- **Added statistics overlay to Immersive mode** - Real-time performance metrics display
+- **Added preset color grading options** - Enhanced visual customization
+- **Added a tilt feature to Curved Display mode** - Customizable viewing angles with persistence
+- **Increased options for framerate and bitrate** - More granular streaming quality control
+- **Added a disconnect button in the main menu while streaming** - Improved session management
+- **Updated Renderers to a more user-friendly naming structure** - Better clarity and organization
+- **Implemented Apple's new low-latency streaming entitlement** - Enhanced streaming performance
+- **Added new toggle for switching between spatial audio and stereo modes** - Optimized gaming audio
+- **Added AV1 Codec support for M5 Owners** - Latest codec technology support
+- **Rounded UI corners slightly** - Better match visionOS aesthetic design
+- **Set aspect ratio to automatically configure when streaming** - Seamless streaming experience
+- **Added toggle to hide system cursor** - Remove duplicate mouse cursors
+
 
 ## 🎮 Getting Started  
 ### Install via TestFlight  
