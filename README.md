@@ -16,7 +16,7 @@
 ## 🎮 Getting Started  
 ### Install via TestFlight  
 Click the link below to install the build on your Vision Pro:  
-[Join the Beta via TestFlight](INSERT_TESTFLIGHT_LINK_HERE)  
+[Join the Beta via TestFlight]((https://testflight.apple.com/join/maak7yCK))  
 > Note: You will need the TestFlight app installed on your Vision Pro.
 
 ### Build from Source  
