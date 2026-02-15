@@ -1,9 +1,8 @@
 //
 //  UserGuideView.swift
-//  Moonlight Vision
+//  Neo Moonlight
 //
-//  Created by NeoVectorX on 2/2/25.
-//  Copyright © 2025 Moonlight Game Streaming Project. All rights reserved.
+//  
 //
 
 import SwiftUI
@@ -96,7 +95,7 @@ struct UserGuideView: View {
                 
                 // Step 2: Optimal Settings
                 GuideSection(
-                    title: "Step 2: Optimal Moonlight Settings",
+                    title: "Step 2: Recommended Moonlight Settings",
                     icon: "slider.horizontal.3",
                     iconColor: brandBlue
                 ) {
@@ -160,7 +159,7 @@ struct UserGuideView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("M5 Vision Pro Only: AV1 Codec")
                                         .font(.headline)
-                                    Text("AV1 offers slightly improved image quality and compression efficiency.")
+                                    Text("AV1 offers slightly improved image quality and higher compression efficiency.")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -199,6 +198,331 @@ struct UserGuideView: View {
                                 "Smoothest Video: Consistent frame display timing. Best for visually demanding games where stutter-free streaming is the priority"
                             ]
                         )
+
+                        SpecialSettingCard(
+                            icon: "gamecontroller.fill",
+                            iconColor: brandBlue,
+                            title: "Input Mode Toggle (Curved Display)",
+                            description: "Cycle through three input modes in Curved Display mode for different use cases.",
+                            details: [
+                                "Three Input Modes: Toggle between Gaze Control, Screen Adjust, and Controller Mode",
+                                "Controller Mode: When enabled, Bluetooth controllers connected to Vision Pro will function. Ensure keyboard is disabled to avoid conflict with controller input"
+                            ]
+                        )
+
+                        SpecialSettingCard(
+                            icon: "mic.fill",
+                            iconColor: brandBlue,
+                            title: "Mic Streamer Compatibility Mode",
+                            description: "Adds a mute button in Curved Display immersive mode that connects to Mic Streamer.",
+                            details: [
+                                "Run Mic Streamer and start streaming the mic. Toggle Mic Streamer Compatibility Mode On for mic control while in the Curved Display immersive mode"
+                            ]
+                        )
+                    }
+                }
+                
+                // Co-op Gameplay Section
+                GuideSection(
+                    title: "Co-op Gameplay",
+                    icon: "person.2.fill",
+                    iconColor: brandBlue
+                ) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Play together with a friend using SharePlay. One person hosts the session while the other joins as a guest.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.bottom, 4)
+                        
+                        // Host Instructions
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top) {
+                                Image(systemName: "person.crop.circle.badge.checkmark")
+                                    .foregroundColor(.orange)
+                                    .font(.title3)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Host Setup")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Text("The person who owns the gaming PC starts and manages the session.")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.6))
+                                }
+                            }
+                            .padding()
+                            .background(Color.orange.opacity(0.15))
+                            .cornerRadius(10)
+                            
+                            // Network Configuration for Hosts
+                            VStack(alignment: .leading, spacing: 16) {
+                                // Connection Mode Selection
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.left.arrow.right.circle.fill")
+                                            .foregroundColor(brandBlue)
+                                        Text("Connection Mode")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Text("Choose your connection mode when hosting:")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .padding(.leading, 28)
+                                    
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Image(systemName: "house.fill")
+                                                .foregroundColor(.green)
+                                                .font(.caption)
+                                                .frame(width: 20)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Local Mode")
+                                                    .font(.caption)
+                                                    .fontWeight(.semibold)
+                                                    .foregroundColor(.white)
+                                                Text("Both players on the same Wi-Fi network. No setup required.")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.7))
+                                            }
+                                        }
+                                        
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Image(systemName: "globe")
+                                                .foregroundColor(.orange)
+                                                .font(.caption)
+                                                .frame(width: 20)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text("Online Mode")
+                                                    .font(.caption)
+                                                    .fontWeight(.semibold)
+                                                    .foregroundColor(.white)
+                                                Text("Playing remotely over the internet. Requires port forwarding.")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.white.opacity(0.7))
+                                            }
+                                        }
+                                    }
+                                    .padding(.leading, 28)
+                                }
+                                
+                                // Port Forwarding Requirements
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.red)
+                                        Text("Port Forwarding (Online Mode Only)")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Text("If using Online Mode, you MUST forward these ports on your router or the connection will fail:")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .padding(.leading, 28)
+                                    
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack(spacing: 12) {
+                                            Text("TCP")
+                                                .font(.caption)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.orange)
+                                                .frame(width: 40, alignment: .leading)
+                                            
+                                            Text("47984-47990, 48000-48010")
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.white)
+                                        }
+                                        
+                                        HStack(spacing: 12) {
+                                            Text("UDP")
+                                                .font(.caption)
+                                                .fontWeight(.bold)
+                                                .foregroundColor(.orange)
+                                                .frame(width: 40, alignment: .leading)
+                                            
+                                            Text("47998-48010")
+                                                .font(.caption)
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.white)
+                                        }
+                                    }
+                                    .padding(10)
+                                    .background(Color.white.opacity(0.08))
+                                    .cornerRadius(8)
+                                    .padding(.leading, 28)
+                                    
+                                    Text("Forward these ports to your gaming PC's local IP address in your router settings.")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.7))
+                                        .italic()
+                                        .padding(.leading, 28)
+                                }
+                                
+                                // Security Note
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "info.circle.fill")
+                                            .foregroundColor(.cyan)
+                                        Text("Note on Port Forwarding")
+                                            .font(.caption)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.white)
+                                    }
+                                    
+                                    Text("Opening ports allows external connections but makes your PC visible online. Only share your connection with people you trust. If you want a more secure alternative to opening ports, look at options for private VPN like Tailscale or ZeroTier.")
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.7))
+                                        .padding(.leading, 28)
+                                }
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(12)
+                            
+                            VStack(alignment: .leading, spacing: 10) {
+                                CoopStep(text: "Start a FaceTime call with your friend")
+                                CoopStep(text: "In Neo Moonight settings, set Controller Mode to 'Single/Co-op'")
+                                CoopStep(text: "Click the Co-op button on the main menu")
+                                CoopStep(text: "Click 'Host Co-op Session'")
+                                CoopStep(text: "Select your gaming PC/App to stream")
+                                CoopStep(text: "Toggle between 'Local' or 'Online' mode (see Connection Mode above)")
+                                CoopStep(text: "Click 'Start Co-op Session' - the session will launch for you and a SharePlay audio cue will play")
+                                CoopStep(text: "Wait for your friend to join. If they're a new guest, you'll need to authorize the PIN that will appear for them. They will need to share the PIN with you to add them in Apollo. Important: Enable controller permissions for the guest client in Sunshine/Apollo settings, otherwise their gamepad won't work")
+                                CoopStep(text: "If using Curved Display mode, select Controller Mode to activate your gamepad")
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.03))
+                            .cornerRadius(12)
+                        }
+                        
+                        // Guest Instructions
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(alignment: .top) {
+                                Image(systemName: "person.crop.circle.badge.plus")
+                                    .foregroundColor(.pink)
+                                    .font(.title3)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Guest Setup")
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Text("Join your friend's gaming session and play together.")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.6))
+                                }
+                            }
+                            .padding()
+                            .background(Color.pink.opacity(0.15))
+                            .cornerRadius(10)
+                            
+                            VStack(alignment: .leading, spacing: 10) {
+                                CoopStep(text: "Join the FaceTime call with the host")
+                                CoopStep(text: "In Settings, set Controller Mode to 'Single/Co-op'")
+                                CoopStep(text: "Wait for the host to launch their session - you'll hear a SharePlay audio cue")
+                                CoopStep(text: "A SharePlay window will appear - click 'Open' to reveal the session")
+                                CoopStep(text: "In Neo Moonlight, click the Co-op button on the main menu")
+                                CoopStep(text: "Click 'Join Co-op Session' and select the available session")
+                                CoopStep(text: "Click 'Join Session' - if you've connected before, the stream launches automatically")
+                                CoopStep(text: "For first-time connections, you'll see a PIN - share it with the host")
+                                CoopStep(text: "The host must enter your PIN in Sunshine/Apollo to authorize you")
+                                CoopStep(text: "Once authorized, your stream will launch")
+                                CoopStep(text: "If using Curved Display mode, select Controller Mode to activate your gamepad")
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.03))
+                            .cornerRadius(12)
+                        }
+                        
+                        // Important Notes
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Important Co-op Notes:")
+                                .font(.headline)
+                                .foregroundColor(brandBlue)
+                                .padding(.top, 8)
+                            
+                            QuickTip(
+                                icon: "exclamationmark.triangle.fill",
+                                iconColor: .yellow,
+                                tip: "Experimental Feature",
+                                detail: "Co-op mode is highly experimental. You may encounter bugs, connection issues, or unexpected behavior."
+                            )
+                            
+                            QuickTip(
+                                icon: "person.2.fill",
+                                iconColor: .blue,
+                                tip: "Maximum Players",
+                                detail: "Co-op sessions support a maximum of 2 players (1 host + 1 guest)."
+                            )
+                            
+                            QuickTip(
+                                icon: "video.fill",
+                                iconColor: .orange,
+                                tip: "FaceTime Required",
+                                detail: "Both players must be in an active FaceTime call for co-op to work. "
+                            )
+                            
+                            QuickTip(
+                                icon: "gamecontroller.fill",
+                                iconColor: .purple,
+                                tip: "Controller Setup",
+                                detail: "IMPORTANT: Connect your controller via Bluetooth BEFORE joining the co-op session to ensure correct player assignment (Player 1 for host, Player 2 for guest). Set Controller Mode to 'Single/Co-op' in Settings before starting. Once streaming in Curved Display mode, use the input mode toggle to select Controller Mode. Ensure keyboard is disabled to avoid conflicts."
+                            )
+                            
+                            QuickTip(
+                                icon: "wifi",
+                                iconColor: .green,
+                                tip: "Network Performance",
+                                detail: "For best results, both players should be on the same local network. Remote play over the internet is supported but may have higher latency. If experiencing connection issues or poor quality, try reducing the resolution (1080p or 1440p recommended for remote play) and lowering the bitrate."
+                            )
+                            
+                            QuickTip(
+                                icon: "slider.horizontal.3",
+                                iconColor: brandBlue,
+                                tip: "Frame Rate",
+                                detail: "Co-op sessions run at 90 FPS for compatibility with all Vision Pro models (M2 and M5). Solo streaming supports up to 120 FPS on M5 units."
+                            )
+                            
+                            QuickTip(
+                                icon: "envelope.badge.fill",
+                                iconColor: .orange,
+                                tip: "Invite Button",
+                                detail: "If your guest disconnects during the session, use the Invite button in the top control bar to re-invite them. The guest will receive a new SharePlay notification and can rejoin the same session without the host needing to restart."
+                            )
+                            
+                            QuickTip(
+                                icon: "key.fill",
+                                iconColor: .cyan,
+                                tip: "PIN Authorization",
+                                detail: "First-time guests need PIN authorization. The guest receives a PIN that must be entered by the host in Sunshine/Apollo. Important: The host must also enable all permissions in Apollo for the guest client, otherwise their gamepad won't work."
+                            )
+                            
+                            QuickTip(
+                                icon: "clock.fill",
+                                iconColor: .yellow,
+                                tip: "Connection Time",
+                                detail: "The initial connection between host and guest can sometimes take a moment to establish, please be patient."
+                            )
+                            
+                            QuickTip(
+                                icon: "shield.fill",
+                                iconColor: .red,
+                                tip: "Firewall Settings",
+                                detail: "If the guest cannot connect in Online mode, ensure your PC's firewall (Windows Defender, antivirus software, etc.) allows Sunshine/Apollo through. Firewall blocking is a common connection issue."
+                            )
+                            
+                            QuickTip(
+                                icon: "person.crop.circle",
+                                iconColor: .purple,
+                                tip: "FaceTime Personas",
+                                detail: "In Curved Display mode (immersive space) you won't see your friend's FaceTime persona . Only Flat Display mode shows personas during co-op sessions."
+                            )
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(12)
                     }
                 }
                 
@@ -209,7 +533,7 @@ struct UserGuideView: View {
                     iconColor: brandBlue
                 ) {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Once you're actively streaming, both Standard and Curved Display modes offer powerful controls and features:")
+                        Text("Once you're actively streaming, both Flat and Curved Display modes offer powerful controls and features:")
                             .font(.subheadline)
                             .foregroundColor(.white.opacity(0.6))
                             .padding(.bottom, 4)
@@ -221,10 +545,10 @@ struct UserGuideView: View {
                                     .foregroundColor(.blue)
                                     .font(.title3)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Standard Display Features")
+                                    Text("Flat Display Features")
                                         .font(.headline)
                                         .foregroundColor(.white)
-                                    Text("Traditional windowed gaming with full system integration.")
+                                    Text("Traditional windowed gaming with full system integration and external app visibility.")
                                         .font(.caption)
                                         .foregroundColor(.white.opacity(0.6))
                                 }
@@ -250,6 +574,12 @@ struct UserGuideView: View {
                                     icon: "person.spatialaudio.fill",
                                     title: "Audio Mode Toggle",
                                     description: "Switch between Spatial Audio and Direct Stereo",
+                                    brandBlue: brandBlue
+                                )
+                                InStreamFeature(
+                                    icon: "hand.point.up.left.fill",
+                                    title: "Touch Control",
+                                    description: "Trackpad-style hand dragging or physical mouse/trackpad support",
                                     brandBlue: brandBlue
                                 )
                             }
@@ -283,14 +613,8 @@ struct UserGuideView: View {
                                 )
                                 InStreamFeature(
                                     icon: "arrow.up.left.and.arrow.down.right",
-                                    title: "Pinch to Scale",
-                                    description: "Pinch with two fingers to resize the screen",
-                                    brandBlue: brandBlue
-                                )
-                                InStreamFeature(
-                                    icon: "hand.point.up.left.fill",
-                                    title: "Screen AutoLock",
-                                    description: "The screen auto locks when the icons fade out. Click the icons to highlight them, then pinch-hold the screen to drag the screen to preferred position ",
+                                    title: "Screen Adjustment",
+                                    description: "Enable Screen Adjust Mode using the input mode toggle. Once enabled, pinch and drag to reposition the screen, or pinch with both fingers to change the scale.",
                                     brandBlue: brandBlue
                                 )
                                 InStreamFeature(
@@ -313,8 +637,8 @@ struct UserGuideView: View {
                                 )
                                 InStreamFeature(
                                     icon: "moon.fill",
-                                    title: "Advanced Dimming",
-                                    description: "Multiple dimming modes",
+                                    title: "Advanced Lighting",
+                                    description: "Choose from various gradient presets, two reactive modes that dynamically respond to screen content, or the immersive Starfield effect.",
                                     brandBlue: brandBlue
                                 )
                                 InStreamFeature(
@@ -337,14 +661,14 @@ struct UserGuideView: View {
                                 icon: "eye.slash.fill",
                                 iconColor: .orange,
                                 tip: "Curved Display Immersive Mode",
-                                detail: "In Curved Display mode, other apps and system windows will not be visible. Switch to Standard Display if you need to multitask. "
+                                detail: "In Curved Display mode, other apps and system windows will not be visible. Switch to Flat Display if you need to multitask. "
                             )
                             
                             QuickTip(
                                 icon: "mountain.2.fill",
                                 iconColor: .green,
                                 tip: "Apple Environments",
-                                detail: "Choose an Apple environment first, launch Curved Display mode, then rotate the digital crown wheel to reveal the scenic backdrop."
+                                detail: "Choose an Apple environment first, launch Curved Display mode, then rotate the digital crown to reveal the environment."
                             )
                             
                         }
@@ -372,7 +696,7 @@ struct UserGuideView: View {
                             icon: "wifi",
                             iconColor: brandBlue,
                             tip: "Wi-Fi Optimization",
-                            detail: "Manually set your 5 GHz router channel to 149 (or 44). This eliminates rhythmic stuttering caused by Apple's AWDL protocol (AirDrop/Handoff)."
+                            detail: "Manually set your router channel to 149 (or 44). This eliminates rhythmic stuttering caused by Apple's AWDL protocol (AirDrop/Handoff)."
                         )
                         
                         PerformanceTip(
@@ -380,6 +704,13 @@ struct UserGuideView: View {
                             iconColor: brandBlue,
                             tip: "Controller Connection",
                             detail: "Connect your controller via Bluetooth directly to your PC for the lowest latency input."
+                        )
+                        
+                        PerformanceTip(
+                            icon: "exclamationmark.triangle.fill",
+                            iconColor: .red,
+                            tip: "Controller Not Working in Curved Display?",
+                            detail: "Enable Controller Mode in the control bar and ensure the keyboard is disabled."
                         )
                         
                         PerformanceTip(
@@ -650,6 +981,23 @@ struct QuickTip: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             }
+        }
+    }
+}
+
+struct CoopStep: View {
+    let text: String
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(Color(red: 0.5, green: 0.7, blue: 1.0).opacity(0.7))
+                .frame(width: 16)
+            
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.85))
         }
     }
 }

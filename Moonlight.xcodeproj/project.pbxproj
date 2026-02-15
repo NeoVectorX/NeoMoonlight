@@ -59,6 +59,33 @@
 		B1EDB13D2D4D95BF00EB1839 /* StreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EDB13B2D4D95BF00EB1839 /* StreamConfiguration.swift */; };
 		B1EDB13E2D4D95BF00EB1839 /* StreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EDB13B2D4D95BF00EB1839 /* StreamConfiguration.swift */; };
 		DC1F5A07206436B20037755F /* ConnectionHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = DC1F5A06206436B20037755F /* ConnectionHelper.m */; };
+		DD2563522F1A8FF7008F8B66 /* camo.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563512F1A8FF7008F8B66 /* camo.jpg */; };
+		DD2563542F1AEC82008F8B66 /* ParticleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2563532F1AEC82008F8B66 /* ParticleManager.swift */; };
+		DD2563562F1C1841008F8B66 /* nebula.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563552F1C1841008F8B66 /* nebula.jpg */; };
+		DD25654A2F1EA750008F8B66 /* street1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565482F1EA750008F8B66 /* street1.jpg */; };
+		DD25654B2F1EA750008F8B66 /* cobblestone1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565432F1EA750008F8B66 /* cobblestone1.jpg */; };
+		DD25654C2F1EA750008F8B66 /* temple1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565492F1EA750008F8B66 /* temple1.jpg */; };
+		DD25654D2F1EA750008F8B66 /* nexus1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565442F1EA750008F8B66 /* nexus1.jpg */; };
+		DD25654E2F1EA750008F8B66 /* outpost.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565452F1EA750008F8B66 /* outpost.jpg */; };
+		DD25654F2F1EA750008F8B66 /* plant1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565462F1EA750008F8B66 /* plant1.jpg */; };
+		DD2565502F1EA750008F8B66 /* santorini1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565472F1EA750008F8B66 /* santorini1.jpg */; };
+		DD2565522F1EB13D008F8B66 /* terrace1.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2565512F1EB13D008F8B66 /* terrace1.jpg */; };
+		DD273A8A2F01857000ED7528 /* ConditionalGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD273A892F01857000ED7528 /* ConditionalGlass.swift */; };
+		DD273A8C2F01858500ED7528 /* CenterPresetPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD273A8B2F01858500ED7528 /* CenterPresetPopup.swift */; };
+		DD273AD02F01969F00ED7528 /* FloatingMicButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD273ACE2F01969F00ED7528 /* FloatingMicButton.swift */; };
+		DD273AD12F01969F00ED7528 /* RemoteMicManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD273ACF2F01969F00ED7528 /* RemoteMicManager.swift */; };
+		DD273CC52F030ED800ED7528 /* FlatDisplayStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD273CC42F030ED800ED7528 /* FlatDisplayStreamView.swift */; };
+		DD7DD6CF2F423FFE0010D797 /* DebugLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD7DD6CE2F423FFE0010D797 /* DebugLogger.swift */; };
+		DD8A1D702F101C0B00230746 /* MoonlightCoopActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1D6F2F101C0B00230746 /* MoonlightCoopActivity.swift */; };
+		DD8A1D712F101C0B00230746 /* CoopSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1D6D2F101C0B00230746 /* CoopSessionCoordinator.swift */; };
+		DD8A1D722F101C0B00230746 /* CoopSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1D6E2F101C0B00230746 /* CoopSetupView.swift */; };
+		DD8A1F232F11ADF000230746 /* CoopJoinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1F222F11ADF000230746 /* CoopJoinView.swift */; };
+		DD8A1F262F11ADF900230746 /* CoopModeSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1F252F11ADF900230746 /* CoopModeSelectionView.swift */; };
+		DD8A1F272F11ADF900230746 /* CoopHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1F242F11ADF900230746 /* CoopHostView.swift */; };
+		DD8A1F292F14023C00230746 /* CoopConnectingPopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1F282F14023C00230746 /* CoopConnectingPopup.swift */; };
+		DD8A1FEE2F15EA7600230746 /* DimmingPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */; };
+		DD8A1FF02F15EAB300230746 /* Polar.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD8A1FEF2F15EAB300230746 /* Polar.jpg */; };
+		DD8A202F2F16CE8B00230746 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A202E2F16CE8B00230746 /* SplashView.swift */; };
 		DDA65F742EF5CAD100E58211 /* placeholderthumb.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA65F732EF5CAD100E58211 /* placeholderthumb.jpg */; };
 		DDA668AC2EF72AE200E58211 /* 17.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668A12EF72AE200E58211 /* 17.jpg */; };
 		DDA668AD2EF72AE200E58211 /* 18.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668A22EF72AE200E58211 /* 18.jpg */; };
@@ -86,7 +113,9 @@
 		DDA668C32EF72AE200E58211 /* 2.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668922EF72AE200E58211 /* 2.jpg */; };
 		DDA668C42EF72AE200E58211 /* 6.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668962EF72AE200E58211 /* 6.jpg */; };
 		DDA668C52EF72AE200E58211 /* 26.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668AA2EF72AE200E58211 /* 26.jpg */; };
-		DDAB46FA2ECE440A00590015 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDAB46F92ECE440A00590015 /* SplashView.swift */; };
+		DDB7A94F2F08B6CB00F0DF39 /* DataCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB7A94E2F08B6CB00F0DF39 /* DataCatalog.swift */; };
+		DDB7A9512F08BA2200F0DF39 /* ControlComponents+LongPress.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB7A9502F08BA2200F0DF39 /* ControlComponents+LongPress.swift */; };
+		DDB7AB412F0DE4B800F0DF39 /* EnvironmentPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB7AB402F0DE4B800F0DF39 /* EnvironmentPickerView.swift */; };
 		DDCAEC3E2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = DDCAEC3D2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist */; };
 		DDD5894A2EC8FC6B00D56AA8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */; };
 		DDE4F1B52ED8C588002C2394 /* MainContentViewAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE4F1B42ED8C588002C2394 /* MainContentViewAttachment.swift */; };
@@ -385,6 +414,33 @@
 		D4746EEA1CBC740C006FB401 /* Moonlight-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Moonlight-Bridging-Header.h"; path = "Input/Moonlight-Bridging-Header.h"; sourceTree = "<group>"; };
 		DC1F5A05206436B10037755F /* ConnectionHelper.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ConnectionHelper.h; sourceTree = "<group>"; };
 		DC1F5A06206436B20037755F /* ConnectionHelper.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ConnectionHelper.m; sourceTree = "<group>"; };
+		DD2563512F1A8FF7008F8B66 /* camo.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = camo.jpg; sourceTree = "<group>"; };
+		DD2563532F1AEC82008F8B66 /* ParticleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticleManager.swift; sourceTree = "<group>"; };
+		DD2563552F1C1841008F8B66 /* nebula.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = nebula.jpg; sourceTree = "<group>"; };
+		DD2565432F1EA750008F8B66 /* cobblestone1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = cobblestone1.jpg; sourceTree = "<group>"; };
+		DD2565442F1EA750008F8B66 /* nexus1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = nexus1.jpg; sourceTree = "<group>"; };
+		DD2565452F1EA750008F8B66 /* outpost.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = outpost.jpg; sourceTree = "<group>"; };
+		DD2565462F1EA750008F8B66 /* plant1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = plant1.jpg; sourceTree = "<group>"; };
+		DD2565472F1EA750008F8B66 /* santorini1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = santorini1.jpg; sourceTree = "<group>"; };
+		DD2565482F1EA750008F8B66 /* street1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = street1.jpg; sourceTree = "<group>"; };
+		DD2565492F1EA750008F8B66 /* temple1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = temple1.jpg; sourceTree = "<group>"; };
+		DD2565512F1EB13D008F8B66 /* terrace1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = terrace1.jpg; sourceTree = "<group>"; };
+		DD273A892F01857000ED7528 /* ConditionalGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConditionalGlass.swift; sourceTree = "<group>"; };
+		DD273A8B2F01858500ED7528 /* CenterPresetPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterPresetPopup.swift; sourceTree = "<group>"; };
+		DD273ACE2F01969F00ED7528 /* FloatingMicButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingMicButton.swift; sourceTree = "<group>"; };
+		DD273ACF2F01969F00ED7528 /* RemoteMicManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteMicManager.swift; sourceTree = "<group>"; };
+		DD273CC42F030ED800ED7528 /* FlatDisplayStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlatDisplayStreamView.swift; sourceTree = "<group>"; };
+		DD7DD6CE2F423FFE0010D797 /* DebugLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogger.swift; sourceTree = "<group>"; };
+		DD8A1D6D2F101C0B00230746 /* CoopSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopSessionCoordinator.swift; sourceTree = "<group>"; };
+		DD8A1D6E2F101C0B00230746 /* CoopSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopSetupView.swift; sourceTree = "<group>"; };
+		DD8A1D6F2F101C0B00230746 /* MoonlightCoopActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoonlightCoopActivity.swift; sourceTree = "<group>"; };
+		DD8A1F222F11ADF000230746 /* CoopJoinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopJoinView.swift; sourceTree = "<group>"; };
+		DD8A1F242F11ADF900230746 /* CoopHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopHostView.swift; sourceTree = "<group>"; };
+		DD8A1F252F11ADF900230746 /* CoopModeSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopModeSelectionView.swift; sourceTree = "<group>"; };
+		DD8A1F282F14023C00230746 /* CoopConnectingPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoopConnectingPopup.swift; sourceTree = "<group>"; };
+		DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmingPickerView.swift; sourceTree = "<group>"; };
+		DD8A1FEF2F15EAB300230746 /* Polar.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = Polar.jpg; sourceTree = "<group>"; };
+		DD8A202E2F16CE8B00230746 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		DDA65F732EF5CAD100E58211 /* placeholderthumb.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = placeholderthumb.jpg; sourceTree = "<group>"; };
 		DDA668912EF72AE200E58211 /* 1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 1.jpg; sourceTree = "<group>"; };
 		DDA668922EF72AE200E58211 /* 2.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 2.jpg; sourceTree = "<group>"; };
@@ -412,7 +468,9 @@
 		DDA668A82EF72AE200E58211 /* 24.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 24.jpg; sourceTree = "<group>"; };
 		DDA668A92EF72AE200E58211 /* 25.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 25.jpg; sourceTree = "<group>"; };
 		DDA668AA2EF72AE200E58211 /* 26.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 26.jpg; sourceTree = "<group>"; };
-		DDAB46F92ECE440A00590015 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
+		DDB7A94E2F08B6CB00F0DF39 /* DataCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataCatalog.swift; sourceTree = "<group>"; };
+		DDB7A9502F08BA2200F0DF39 /* ControlComponents+LongPress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlComponents+LongPress.swift"; sourceTree = "<group>"; };
+		DDB7AB402F0DE4B800F0DF39 /* EnvironmentPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPickerView.swift; sourceTree = "<group>"; };
 		DDCAEC3D2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Moonlight copy-Info.plist"; sourceTree = "<group>"; };
 		DDCAEC3F2EC814FF0073A6C7 /* Vision.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Vision.entitlements; sourceTree = "<group>"; };
 		DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -754,6 +812,17 @@
 				DDA668A82EF72AE200E58211 /* 24.jpg */,
 				DDA668A92EF72AE200E58211 /* 25.jpg */,
 				DDA668AA2EF72AE200E58211 /* 26.jpg */,
+				DD8A1FEF2F15EAB300230746 /* Polar.jpg */,
+				DD2563512F1A8FF7008F8B66 /* camo.jpg */,
+				DD2563552F1C1841008F8B66 /* nebula.jpg */,
+				DD2565432F1EA750008F8B66 /* cobblestone1.jpg */,
+				DD2565442F1EA750008F8B66 /* nexus1.jpg */,
+				DD2565452F1EA750008F8B66 /* outpost.jpg */,
+				DD2565462F1EA750008F8B66 /* plant1.jpg */,
+				DD2565472F1EA750008F8B66 /* santorini1.jpg */,
+				DD2565482F1EA750008F8B66 /* street1.jpg */,
+				DD2565492F1EA750008F8B66 /* temple1.jpg */,
+				DD2565512F1EB13D008F8B66 /* terrace1.jpg */,
 			);
 			path = 360;
 			sourceTree = "<group>";
@@ -783,6 +852,25 @@
 		F7A119592B5DE1AB001E8686 /* Moonlight Vision */ = {
 			isa = PBXGroup;
 			children = (
+				DD7DD6CE2F423FFE0010D797 /* DebugLogger.swift */,
+				DD2563532F1AEC82008F8B66 /* ParticleManager.swift */,
+				DD8A202E2F16CE8B00230746 /* SplashView.swift */,
+				DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */,
+				DD8A1F282F14023C00230746 /* CoopConnectingPopup.swift */,
+				DD8A1F242F11ADF900230746 /* CoopHostView.swift */,
+				DD8A1F252F11ADF900230746 /* CoopModeSelectionView.swift */,
+				DD8A1F222F11ADF000230746 /* CoopJoinView.swift */,
+				DD8A1D6D2F101C0B00230746 /* CoopSessionCoordinator.swift */,
+				DD8A1D6E2F101C0B00230746 /* CoopSetupView.swift */,
+				DD8A1D6F2F101C0B00230746 /* MoonlightCoopActivity.swift */,
+				DDB7AB402F0DE4B800F0DF39 /* EnvironmentPickerView.swift */,
+				DDB7A9502F08BA2200F0DF39 /* ControlComponents+LongPress.swift */,
+				DDB7A94E2F08B6CB00F0DF39 /* DataCatalog.swift */,
+				DD273CC42F030ED800ED7528 /* FlatDisplayStreamView.swift */,
+				DD273ACE2F01969F00ED7528 /* FloatingMicButton.swift */,
+				DD273ACF2F01969F00ED7528 /* RemoteMicManager.swift */,
+				DD273A892F01857000ED7528 /* ConditionalGlass.swift */,
+				DD273A8B2F01858500ED7528 /* CenterPresetPopup.swift */,
 				DDF84F192EECBFCB00FACAA3 /* kofi.webp */,
 				DDA668AB2EF72AE200E58211 /* 360 */,
 				DDF84EB32EEB2D4D00FACAA3 /* Fredoka-Bold.ttf */,
@@ -855,7 +943,6 @@
 			children = (
 				DDEDDEA52ED4A2F0008A337C /* UserGuideView.swift */,
 				DDEDDE952ED3EE9F008A337C /* HDRControlPanel.swift */,
-				DDAB46F92ECE440A00590015 /* SplashView.swift */,
 				DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */,
 				F7A119592B5DE1AB001E8686 /* Moonlight Vision */,
 				F7A119072B5DDECC001E8686 /* Moonlight iOS */,
@@ -1418,7 +1505,9 @@
 				DDA668B32EF72AE200E58211 /* 14.jpg in Resources */,
 				DDA668B42EF72AE200E58211 /* 23.jpg in Resources */,
 				DDA668B52EF72AE200E58211 /* 8.jpg in Resources */,
+				DD8A1FF02F15EAB300230746 /* Polar.jpg in Resources */,
 				DDA668B62EF72AE200E58211 /* 10.jpg in Resources */,
+				DD2563562F1C1841008F8B66 /* nebula.jpg in Resources */,
 				DDA668B72EF72AE200E58211 /* 3.jpg in Resources */,
 				DDA668B82EF72AE200E58211 /* 4.jpg in Resources */,
 				DDA668B92EF72AE200E58211 /* 25.jpg in Resources */,
@@ -1428,7 +1517,15 @@
 				DDA668BD2EF72AE200E58211 /* 5.jpg in Resources */,
 				DDA668BE2EF72AE200E58211 /* 16.jpg in Resources */,
 				DDA668BF2EF72AE200E58211 /* 21.jpg in Resources */,
+				DD25654A2F1EA750008F8B66 /* street1.jpg in Resources */,
+				DD25654B2F1EA750008F8B66 /* cobblestone1.jpg in Resources */,
+				DD25654C2F1EA750008F8B66 /* temple1.jpg in Resources */,
+				DD25654D2F1EA750008F8B66 /* nexus1.jpg in Resources */,
+				DD25654E2F1EA750008F8B66 /* outpost.jpg in Resources */,
+				DD25654F2F1EA750008F8B66 /* plant1.jpg in Resources */,
+				DD2565502F1EA750008F8B66 /* santorini1.jpg in Resources */,
 				DDA668C02EF72AE200E58211 /* 12.jpg in Resources */,
+				DD2565522F1EB13D008F8B66 /* terrace1.jpg in Resources */,
 				DDA668C12EF72AE200E58211 /* 13.jpg in Resources */,
 				DDA668C22EF72AE200E58211 /* 20.jpg in Resources */,
 				DDA668C32EF72AE200E58211 /* 2.jpg in Resources */,
@@ -1439,6 +1536,7 @@
 				DDF84EBA2EEB2D4D00FACAA3 /* Fredoka-Medium.ttf in Resources */,
 				DDF84EBB2EEB2D4D00FACAA3 /* Fredoka-SemiBold.ttf in Resources */,
 				DDF84EBC2EEB2D4D00FACAA3 /* Fredoka-Bold.ttf in Resources */,
+				DD2563522F1A8FF7008F8B66 /* camo.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1476,6 +1574,7 @@
 				B19362F02D4ECDD6004F88FA /* NSData+Conversion.m in Sources */,
 				F7A1190C2B5DDF73001E8686 /* Limelight.xcdatamodeld in Sources */,
 				F7A1190D2B5DDF73001E8686 /* AbsoluteTouchHandler.m in Sources */,
+				DD8A1FEE2F15EA7600230746 /* DimmingPickerView.swift in Sources */,
 				F7A1190E2B5DDF73001E8686 /* RelativeTouchHandler.m in Sources */,
 				F7A1190F2B5DDF73001E8686 /* KeyboardSupport.m in Sources */,
 				F7A119102B5DDF73001E8686 /* VideoDecoderRenderer.m in Sources */,
@@ -1484,19 +1583,25 @@
 				F7A119132B5DDF73001E8686 /* Utils.m in Sources */,
 				F7A119152B5DDF73001E8686 /* Connection.m in Sources */,
 				E77582EB2D5550D500948545 /* AudioHelpers.swift in Sources */,
+				DD8A202F2F16CE8B00230746 /* SplashView.swift in Sources */,
+				DD8A1F262F11ADF900230746 /* CoopModeSelectionView.swift in Sources */,
+				DD8A1F272F11ADF900230746 /* CoopHostView.swift in Sources */,
 				DDF84E7A2EE3BE9000FACAA3 /* CurvedDisplayStreamView.swift in Sources */,
 				F7A119162B5DDF73001E8686 /* AppAssetRetriever.m in Sources */,
 				F7A119172B5DDF73001E8686 /* WakeOnLanManager.m in Sources */,
 				B1EDB1352D4D95A700EB1839 /* StreamControls.swift in Sources */,
 				B1EDB1362D4D95A700EB1839 /* DrawableVideoDecoder.swift in Sources */,
 				3E86FC1D2D4FFDF20016BB8E /* UpdatesView.swift in Sources */,
-				DDAB46FA2ECE440A00590015 /* SplashView.swift in Sources */,
 				B1EDB1372D4D95A700EB1839 /* UIKitStreamView.swift in Sources */,
 				B1EDB1382D4D95A700EB1839 /* RealityKitStreamView.swift in Sources */,
 				B1EDB1392D4D95A700EB1839 /* ObservableConnectionManager.swift in Sources */,
+				DD273CC52F030ED800ED7528 /* FlatDisplayStreamView.swift in Sources */,
+				DDB7AB412F0DE4B800F0DF39 /* EnvironmentPickerView.swift in Sources */,
+				DD2563542F1AEC82008F8B66 /* ParticleManager.swift in Sources */,
 				DDEDDEA62ED4A2F0008A337C /* UserGuideView.swift in Sources */,
 				F7A119182B5DDF73001E8686 /* IdManager.m in Sources */,
 				F7A119192B5DDF73001E8686 /* Controller.m in Sources */,
+				DD8A1F292F14023C00230746 /* CoopConnectingPopup.swift in Sources */,
 				3E4F94692DC2E2D6006CF0C1 /* ComputerViewWrapper.swift in Sources */,
 				F71801562B658C0900A9336B /* StreamFrameViewController.m in Sources */,
 				F7A1191A2B5DDF73001E8686 /* mkcert.c in Sources */,
@@ -1510,7 +1615,11 @@
 				F7A119212B5DDF73001E8686 /* HttpManager.m in Sources */,
 				DDE4F1C02ED91011002C2394 /* ColorGradingHelpers.swift in Sources */,
 				F7A1195D2B5DE1FD001E8686 /* MainContentView.swift in Sources */,
+				DD8A1D702F101C0B00230746 /* MoonlightCoopActivity.swift in Sources */,
+				DD8A1D712F101C0B00230746 /* CoopSessionCoordinator.swift in Sources */,
+				DD8A1D722F101C0B00230746 /* CoopSetupView.swift in Sources */,
 				F7A119222B5DDF73001E8686 /* MDNSManager.m in Sources */,
+				DDB7A94F2F08B6CB00F0DF39 /* DataCatalog.swift in Sources */,
 				F7A11A232B5DF76F001E8686 /* AppDelegate.m in Sources */,
 				DDF84E9C2EE8BABE00FACAA3 /* CurvedDisplayTutorialView.swift in Sources */,
 				F7A119232B5DDF73001E8686 /* StreamView.m in Sources */,
@@ -1531,18 +1640,25 @@
 				F7A1192F2B5DDF73001E8686 /* PairManager.m in Sources */,
 				F7A119302B5DDF73001E8686 /* HttpRequest.m in Sources */,
 				F7A119312B5DDF73001E8686 /* OnScreenControls.m in Sources */,
+				DD273A8A2F01857000ED7528 /* ConditionalGlass.swift in Sources */,
 				F7A119332B5DDF73001E8686 /* X1Kit.swift in Sources */,
 				F7A119342B5DDF73001E8686 /* AppAssetManager.m in Sources */,
 				F7A119352B5DDF73001E8686 /* DiscoveryWorker.m in Sources */,
 				F7A119362B5DDF73001E8686 /* ControllerSupport.m in Sources */,
 				F71801422B65483D00A9336B /* AppsView.swift in Sources */,
 				F7199B002B72FC1400E6D62D /* TemporarySettings.swift in Sources */,
+				DD273AD02F01969F00ED7528 /* FloatingMicButton.swift in Sources */,
+				DD273AD12F01969F00ED7528 /* RemoteMicManager.swift in Sources */,
+				DD7DD6CF2F423FFE0010D797 /* DebugLogger.swift in Sources */,
 				F7A119372B5DDF73001E8686 /* AppAssetResponse.m in Sources */,
+				DDB7A9512F08BA2200F0DF39 /* ControlComponents+LongPress.swift in Sources */,
 				F7A119382B5DDF73001E8686 /* DataManager.m in Sources */,
 				F7A1193A2B5DDF73001E8686 /* ServerInfoResponse.m in Sources */,
 				F778956E2B65975900F02568 /* SDLMainWrapper.m in Sources */,
+				DD8A1F232F11ADF000230746 /* CoopJoinView.swift in Sources */,
 				DDE4F1B52ED8C588002C2394 /* MainContentViewAttachment.swift in Sources */,
 				F7A1193B2B5DDF73001E8686 /* StreamManager.m in Sources */,
+				DD273A8C2F01858500ED7528 /* CenterPresetPopup.swift in Sources */,
 				F7A1193C2B5DDF73001E8686 /* KeyboardInputField.m in Sources */,
 				F7A4A4D12B5F216C001591F3 /* MainViewModel.swift in Sources */,
 				DDEDDE962ED3EE9F008A337C /* HDRControlPanel.swift in Sources */,
@@ -1716,7 +1832,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 6;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1765,7 +1881,7 @@
 					"$(PROJECT_DIR)/libs/FFmpeg/lib/iOS",
 					"$(PROJECT_DIR)/libs/SDL2/lib/visionOS-Sim",
 				);
-				MARKETING_VERSION = 11.1;
+				MARKETING_VERSION = 12.0;
 				OTHER_LDFLAGS = "-ld64";
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1795,7 +1911,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 6;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1844,7 +1960,7 @@
 					"$(PROJECT_DIR)/libs/FFmpeg/lib/iOS",
 					"$(PROJECT_DIR)/libs/SDL2/lib/visionOS-Sim",
 				);
-				MARKETING_VERSION = 11.1;
+				MARKETING_VERSION = 12.0;
 				OTHER_LDFLAGS = "-ld64";
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";

@@ -160,19 +160,14 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
     private var lastScrollTranslation: CGPoint = .zero
     private let wheelDelta: CGFloat = 120.0
 
-    // Multi-click/drag gesture state (retuned for responsiveness)
+    // Click/drag gesture state
     private var selectPressStart: TimeInterval?
-    private var leftDownSent = false
-    private var dragTimer: Timer?
-    private var pendingLeftClickTimer: Timer?
-    private var clickQueue: [TimeInterval] = []
+    private var leftDownSent = false  // True when we've sent mouse-down for drag
 
-    // Tighter timings for snappier feel
-    private let clickMaxDuration: TimeInterval = 0.18
-    private let dragHoldThreshold: TimeInterval = 0.12
-    private let multiClickWindow: TimeInterval = 0.20
+    // Timing: if held longer than this WITHOUT moving, it's a right-click
+    private let rightClickHoldThreshold: TimeInterval = 0.35
 
-    // Movement-based early drag trigger
+    // Movement-based drag trigger
     private var lastOverlayPoint: CGPoint = .zero
     private var pressStartOverlayPoint: CGPoint?
     private let movementToDragThreshold: CGFloat = 6.0
@@ -199,7 +194,8 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
         return result
     }
     
-    // Map visionOS pinch (.select press) to mouse down/up for click/drag + multi-click promotion
+    // Map visionOS pinch (.select press) to mouse down/up for click/drag
+    // New behavior: quick pinch = left click, hold still = right click, hold + move = drag
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
 
@@ -210,16 +206,6 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
 
             // Record where the press began (overlay coords) for movement-based drag
             pressStartOverlayPoint = lastOverlayPoint
-
-            // Schedule time-based drag fallback
-            dragTimer?.invalidate()
-            dragTimer = Timer.scheduledTimer(withTimeInterval: dragHoldThreshold, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
-                if self.selectPressStart != nil && !self.leftDownSent {
-                    self.sendMouseButton(action: BUTTON_ACTION_PRESS, button: BUTTON_LEFT)
-                    self.leftDownSent = true
-                }
-            }
         }
 
         // Existing keyboard mapping
@@ -238,28 +224,23 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
         if presses.contains(where: { $0.type == .select }) {
             handled = true
             let now = CACurrentMediaTime()
-            dragTimer?.invalidate()
-            dragTimer = nil
+            let duration = now - (selectPressStart ?? now)
 
             if leftDownSent {
-                // End of drag
+                // We were dragging - end the drag
                 sendMouseButton(action: BUTTON_ACTION_RELEASE, button: BUTTON_LEFT)
                 leftDownSent = false
-                selectPressStart = nil
-                pressStartOverlayPoint = nil
+            } else if duration >= rightClickHoldThreshold {
+                // Held long enough WITHOUT moving = RIGHT CLICK
+                sendRightClick()
             } else {
-                // Quick pinch -> candidate click
-                let started = selectPressStart ?? now
-                let duration = now - started
-                selectPressStart = nil
-                pressStartOverlayPoint = nil
-
-                if duration <= clickMaxDuration {
-                    enqueueClickAndMaybePromote(now: now)
-                } else {
-                    scheduleOrSendSingleLeftClick(now: now)
-                }
+                // Quick release = LEFT CLICK (immediate, no delay)
+                // PC naturally handles double-click if user pinches twice fast
+                sendLeftClick()
             }
+            
+            selectPressStart = nil
+            pressStartOverlayPoint = nil
         }
 
         // Existing keyboard mapping
@@ -270,36 +251,6 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
         }
 
         if !handled { super.pressesEnded(presses, with: event) }
-    }
-
-    // Click promotion logic (double = right, triple = middle)
-    private func enqueueClickAndMaybePromote(now: TimeInterval) {
-        pendingLeftClickTimer?.invalidate()
-        pendingLeftClickTimer = nil
-
-        clickQueue.append(now)
-        clickQueue = clickQueue.filter { now - $0 <= multiClickWindow }
-
-        if clickQueue.count >= 3 {
-            sendMiddleClick()
-            clickQueue.removeAll()
-        } else if clickQueue.count == 2 {
-            sendRightClick()
-            clickQueue.removeAll()
-        } else {
-            scheduleOrSendSingleLeftClick(now: now)
-        }
-    }
-
-    private func scheduleOrSendSingleLeftClick(now: TimeInterval) {
-        pendingLeftClickTimer?.invalidate()
-        pendingLeftClickTimer = Timer.scheduledTimer(withTimeInterval: multiClickWindow, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            if self.clickQueue.count == 1 {
-                self.sendLeftClick()
-            }
-            self.clickQueue.removeAll()
-        }
     }
 
     private func sendLeftClick() {
@@ -318,23 +269,9 @@ class RealityKitInputOverlay: UIView, UIKeyInput, UIPointerInteractionDelegate, 
         }
     }
 
-    private func sendMiddleClick() {
-        let BUTTON_MIDDLE: Int32 = 3
-        DispatchQueue.global(qos: .userInteractive).async {
-            self.sendMouseButton(action: BUTTON_ACTION_PRESS, button: BUTTON_MIDDLE)
-            usleep(25_000)
-            self.sendMouseButton(action: BUTTON_ACTION_RELEASE, button: BUTTON_MIDDLE)
-        }
-    }
-
-    // Optional: Clean up timers
+    // Clean up state
     override func removeFromSuperview() {
         super.removeFromSuperview()
-        dragTimer?.invalidate()
-        dragTimer = nil
-        pendingLeftClickTimer?.invalidate()
-        pendingLeftClickTimer = nil
-        clickQueue.removeAll()
         selectPressStart = nil
         pressStartOverlayPoint = nil
     }

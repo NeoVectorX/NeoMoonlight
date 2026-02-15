@@ -121,12 +121,10 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         // Setup Metal view - use exact bounds
         self.metalView = MTKView(frame: view.bounds, device: MTLCreateSystemDefaultDevice())
         self.metalView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        
+        // CRITICAL FIX: Let the system manage scaling and drawable size
+        // DO NOT force contentScaleFactor - this causes softness
         self.metalView.autoResizeDrawable = true
-        // Ensure 16pt rounded corners at the UIKit layer
-        view.layer.cornerRadius = 16
-        view.layer.masksToBounds = true
-        self.metalView.layer.cornerRadius = 16
-        self.metalView.layer.masksToBounds = true
         
         if enableHDR {
             metalFormat = .bgra10_xr
@@ -135,8 +133,13 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
             if let metalLayer = metalView.layer as? CAMetalLayer {
                 metalLayer.wantsExtendedDynamicRangeContent = true
                 metalLayer.pixelFormat = .bgra10_xr
-                metalLayer.cornerRadius = 16
-                metalLayer.masksToBounds = true
+                
+                // CRITICAL: Disable all implicit filtering for maximum sharpness
+                metalLayer.magnificationFilter = .nearest
+                metalLayer.minificationFilter = .nearest
+                metalLayer.allowsEdgeAntialiasing = false
+                metalLayer.framebufferOnly = true
+                
                 if let extendedColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3) {
                     metalLayer.colorspace = extendedColorSpace
                     print("MetalVideoDecoderRenderer: Set extended color space (EDR XR)")
@@ -147,19 +150,26 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         } else {
             metalFormat = .bgra8Unorm_srgb
             metalView.colorPixelFormat = .bgra8Unorm_srgb
+            
+            // CRITICAL: Disable all implicit filtering for SDR too
             if let metalLayer = metalView.layer as? CAMetalLayer {
-                metalLayer.cornerRadius = 16
-                metalLayer.masksToBounds = true
+                metalLayer.magnificationFilter = .nearest
+                metalLayer.minificationFilter = .nearest
+                metalLayer.allowsEdgeAntialiasing = false
+                metalLayer.framebufferOnly = true
             }
         }
         
-        // Ensure view is visible and properly configured
+        // CRITICAL: Keep layer OPAQUE for maximum sharpness (no compositor blur)
         self.metalView.isHidden = false
         self.metalView.alpha = 1.0
         self.metalView.backgroundColor = .black
         self.metalView.isOpaque = true
         self.metalView.layer.isOpaque = true
         self.metalView.clearsContextBeforeDrawing = false
+        
+        // CRITICAL: NO corner radius, NO masking - keep completely raw
+        // Let SwiftUI overlay handle the visual rounding
         
         self.callbacks = callbacks
         self.streamAspectRatio = streamAspectRatio
@@ -181,6 +191,8 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         }
         
         super.init()
+        
+        // self.applyRoundedCornerMask(to: self.metalView)
         
         decoderCallback.decompressionOutputRefCon = Unmanaged.passUnretained(self).toOpaque()
         
@@ -311,7 +323,7 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
             if let parent = self.parentView {
                 parent.bringSubviewToFront(self.metalView)
             }
-            print("MetalVideoDecoderRenderer: Metal view visible, frame=\(self.metalView.frame)")
+            print("MetalVideoDecoderRenderer: Metal view visible, frame=\(self.metalView.frame), drawableSize=\(self.metalView.drawableSize)")
         }
     }
     
@@ -775,7 +787,12 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         // DON'T deallocate - the buffer is managed by C code
         
         let blockBufferLength = buffer.count + naluIndices.filter(\.threeByteHeader).count
-        let blockBuffer = try! CMBlockBuffer(length: blockBufferLength, flags: .assureMemoryNow)
+        
+        // Safe allocation with graceful frame dropping on OOM
+        guard let blockBuffer = try? CMBlockBuffer(length: blockBufferLength, flags: .assureMemoryNow) else {
+            print("⚠️ Failed to allocate CMBlockBuffer (\(blockBufferLength) bytes) - dropping frame due to memory pressure")
+            return nil
+        }
         
         var contiguousBuffer: CMBlockBuffer!
         if !CMBlockBufferIsRangeContiguous(blockBuffer, atOffset: 0, length: 0) {
@@ -898,6 +915,27 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         print("[MetalRenderer] 🛑 ForceStopRendering received. Pausing MTKView.")
         self.metalView.isPaused = true
     }
+    
+    // MARK: - Corner Masking
+    
+    /*
+    private func applyRoundedCornerMask(to view: MTKView) {
+        let maskLayer = CAShapeLayer()
+        let rect = view.bounds
+        let cornerRadius: CGFloat = 16
+        let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).cgPath
+        maskLayer.path = path
+        view.layer.mask = maskLayer
+    }
+    
+    private func updateRoundedCornerMask() {
+        guard let maskLayer = metalView.layer.mask as? CAShapeLayer else { return }
+        let rect = metalView.bounds
+        let cornerRadius: CGFloat = 16
+        let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).cgPath
+        maskLayer.path = path
+    }
+    */
 }
 
 // MARK: - MTKViewDelegate
@@ -905,6 +943,8 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
 extension MetalVideoDecoderRenderer: MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         print("MetalVideoDecoderRenderer: Drawable size changed to \(size.width) x \(size.height)")
+        
+        // updateRoundedCornerMask()
     }
     
     func draw(in view: MTKView) {
@@ -954,8 +994,8 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             isBiPlanar = (planeCount >= 2) && (cbcrFormat != .invalid)
         }
         
-        // 4. Setup Pipeline
-        let fragmentName = isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+        // 4. Setup Pipeline - Use UIKit-specific sharpened shaders
+        let fragmentName = isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit" : "copyFragmentShaderHEVC_EDR_UIKit"
         
         if isBiPlanar {
             if copyPipelineStateYUV == nil || lastCopyFragment != fragmentName {

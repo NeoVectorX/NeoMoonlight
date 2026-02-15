@@ -18,7 +18,7 @@ struct OpenMoonlightApp: AppIntent {
     @Parameter(title: "Steamed App")
     var app: TemporaryApp
     
-    @Parameter(title: "Renderer")
+    @Parameter(title: "Display Mode")
     var renderer: Renderer
 
     static var title: LocalizedStringResource = "Start streaming app"
@@ -33,13 +33,15 @@ struct OpenMoonlightApp: AppIntent {
         activity.targetContentIdentifier = "dummy" // IMPORTANT
         try! activity.setTypedPayload(config!)
         MainViewModel.shared.streamSettings.renderer = self.renderer
+        // Persist renderer selection so App Intent launches don't revert on reboot
+        MainViewModel.shared.streamSettings.save()
         UIApplication.shared.requestSceneSessionActivation(nil, userActivity: activity, options: nil)
         print("perform intent")
         return .result()
     }
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Stream from \(\.$host), stream app \(\.$app) with renderer \(\.$renderer)")
+        Summary("Stream from \(\.$host), stream app \(\.$app) with display mode \(\.$renderer)")
     }
   
     init() {

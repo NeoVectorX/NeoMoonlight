@@ -1,8 +1,8 @@
 //
 //  CurvedDisplayTutorialView.swift
-//  NeoMoonlight - First-Time Tutorial for Curved Display
+//  Neo Moonlight
 //
-//  Premium polished tutorial matching navy + orange theme
+// 
 //
 
 import SwiftUI
@@ -23,24 +23,39 @@ struct CurvedDisplayTutorialView: View {
             description: "Hold the Digital Crown to recenter the screen directly in front of you."
         ),
         (
+            icon: "gamecontroller.fill",
+            title: "Control Modes",
+            description: "Switch between Gaze Control, Screen Adjust, and Controller Mode using the toggle in top controls. Enable Controller Mode for gamepads connected directly to Vision Pro Bluetooth."
+        ),
+        (
             icon: "arrow.up.left.and.arrow.down.right",
-            title: "Resize with Pinch",
-            description: "Pinch with both fingers inwards and outwards to adjust screen size."
+            title: "Screen Adjust",
+            description: "Enable Screen Adjust Mode to unlock the screen. Pinch and drag to reposition. Pinch with both fingers inwards and outwards to change the scale."
         ),
         (
             icon: "hand.point.up.left.fill",
             title: "Reveal & Unlock Controls",
-            description: "Icons auto-hide. Tap the top icons to reveal them. When highlighted, pinch-hold to move the screen to your preferred position."
+            description: "Icons auto-hide. Tap any icon to reveal the controls and interact with them."
+        ),
+        (
+            icon: "hand.tap.fill",
+            title: "Long Press to Reset",
+            description: "Long Press (Pinch & Hold) on Tilt, Dimming, and Environment icons to quickly reset to default state."
         ),
         (
             icon: "eye.slash.fill",
             title: "App Visibility",
-            description: "In Curved Display mode, external apps and system windows aren't visible. Switch to Standard Display if you need to use other apps."
+            description: "In Curved Display mode, external apps and system windows aren't visible. Switch to Flat Display if you need to use other apps."
+        ),
+        (
+            icon: "person.2.fill",
+            title: "Couch Co-op Mode",
+            description: "Play couch co-op games with a friend via SharePlay. This is an experimental feature, so bear with any quirks or bugs you may encounter."
         ),
         (
             icon: "mountain.2.fill",
             title: "Apple Environments",
-            description: "Choose an Apple environment first, connect to immersive mode, then rotate the Digital Crown to reveal and enjoy the scene."
+            description: "Select your preferred Apple environment. Connect to Curved Display, then rotate the digital crown to reveal the environment."
         )
     ]
     

@@ -46,11 +46,11 @@ struct UIKitStreamView: View {
     // Profiles: Default, Cinematic, Vivid, Realistic
     private func presetName(_ v: Int32) -> String {
         switch v {
-        case 0: return "Default"
-        case 1: return "Cinematic"
-        case 2: return "Vivid"
-        case 3: return "Realistic"
-        default: return "Default"
+        case 0: return "FILTER: Default"
+        case 1: return "FILTER: Cinematic"
+        case 2: return "FILTER: Vi\u{200A}vid"  // Hair space between I and V
+        case 3: return "FILTER: Realistic"
+        default: return "FILTER: Default"
         }
     }
 
@@ -115,9 +115,10 @@ struct UIKitStreamView: View {
                         .ignoresSafeArea()
                     }
 
+                    // RAW METAL STREAM - Let native window handle rounding
                     _UIKitStreamView(streamConfig: configBinding)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .preferredSurroundingsEffect(dimLevel == 0 ? nil : .systemDark)
+                       
                         .persistentSystemOverlays(hideOrnament ? .hidden : .visible)
                         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
                             HStack {
@@ -192,6 +193,10 @@ struct UIKitStreamView: View {
                                 }
                                 .labelStyle(.iconOnly)
 
+                                // DISABLED: Preset button (hidden for now, can be re-enabled later)
+                                // The preset functionality is kept in the code but the UI is hidden
+                                // since we're using native VideoDecoderRenderer which doesn't support presets
+                                /*
                                 Button {
                                     if hideOrnament && !controlsHighlighted {
                                         withAnimation(.easeInOut(duration: 0.3)) {
@@ -209,6 +214,7 @@ struct UIKitStreamView: View {
                                     Label("Preset", systemImage: "camera.filters")
                                 }
                                 .labelStyle(.iconOnly)
+                                */
 
 //                                Button {
 //                                    if hideOrnament && !controlsHighlighted {

@@ -4,5 +4,7 @@
 <dict>
 	<key>com.apple.developer.low-latency-streaming</key>
 	<true/>
+	<key>com.apple.developer.group-session</key>
+	<true/>
 </dict>
 </plist>

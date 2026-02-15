@@ -34,7 +34,9 @@
 realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
      realitykitRendererCurvature:(NSNumber*)realitykitRendererCurvature
                   dimPassthrough:(BOOL)dimPassthrough
-                hideSystemCursor:(BOOL)hideSystemCursor;
+                hideSystemCursor:(BOOL)hideSystemCursor
+                  showMicButton:(BOOL)showMicButton
+       hideHandsIn360Environment:(BOOL)hideHandsIn360Environment;
 
 - (NSArray<TemporaryHost*>*) getHosts;
 - (void) updateHost:(TemporaryHost*)host;
@@ -46,5 +48,11 @@ realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
 
 - (void) updateUniqueId:(NSString*)uniqueId;
 - (NSString*) getUniqueId;
+
+// Co-op Session Support
+- (NSData* _Nullable) exportPairingDataForHost:(TemporaryHost*)host;
+- (TemporaryHost* _Nullable) importPairingData:(NSData*)data address:(NSString*)address name:(NSString*)name coopTag:(NSString* _Nullable)coopTag;
+- (TemporaryHost* _Nullable) findHostByAddress:(NSString*)address;
+- (void) removeCoopHosts;
 
 @end

@@ -51,6 +51,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     char _controllerNumbers;
     bool _multiController;
     bool _swapABXYButtons;
+    int _controllerSlotOffset;  // For co-op: offset added to controller index
 }
 
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
@@ -169,8 +170,12 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
 {
-    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:controllerNumber]];
-    if (controller == nil && controllerNumber == 0 && _oscEnabled) {
+    // FIX: Adjust the controller number by subtracting the offset to find the LOCAL controller index.
+    // Host sends command for "Controller 1" (Guest), but locally it is index 0.
+    int localIndex = controllerNumber - _controllerSlotOffset;
+    
+    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
+    if (controller == nil && localIndex == 0 && _oscEnabled) {
         // TODO: Rumble emulation for OSC
     }
     if (controller == nil) {
@@ -184,8 +189,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(void) rumbleTriggers:(uint16_t)controllerNumber leftTrigger:(uint16_t)leftTrigger rightTrigger:(uint16_t)rightTrigger
 {
-    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:controllerNumber]];
-    if (controller == nil && controllerNumber == 0 && _oscEnabled) {
+    // FIX: Subtract offset to find local controller
+    int localIndex = controllerNumber - _controllerSlotOffset;
+    
+    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
+    if (controller == nil && localIndex == 0 && _oscEnabled) {
         // TODO: Trigger rumble emulation for OSC
     }
     if (controller == nil) {
@@ -431,7 +439,16 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(uint16_t) getActiveGamepadMask
 {
-    return (_multiController ? _controllerNumbers : 1) | (_oscEnabled ? 1 : 0);
+    // Base mask: which controllers are present locally
+    uint16_t baseMask = (_multiController ? _controllerNumbers : 1) | (_oscEnabled ? 1 : 0);
+    
+    // FIX: For co-op mode, shift the mask to match the slot offset
+    // Host (slot 0): mask stays as 0x1 (bit 0 = controller 0 present)
+    // Guest (slot 1): mask becomes 0x2 (bit 1 = controller 1 present)
+    if (_controllerSlotOffset > 0) {
+        return baseMask << _controllerSlotOffset;
+    }
+    return baseMask;
 }
 
 -(void) updateFinished:(Controller*)controller
@@ -468,7 +485,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
             
             // Player 1 is always present for OSC
-            LiSendMultiControllerEvent(_multiController ? controller.playerIndex : 0, [self getActiveGamepadMask],
+            // Apply co-op slot offset to controller number (guest sends as controller 1, not 0)
+            int controllerNumber = (_multiController ? controller.playerIndex : 0) + _controllerSlotOffset;
+            LiSendMultiControllerEvent(controllerNumber, [self getActiveGamepadMask],
                                        buttonFlags, leftTrigger, rightTrigger,
                                        leftStickX, leftStickY, rightStickX, rightStickY);
         }
@@ -743,7 +762,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     // Report the new controller to the host
     // NB: This will fail if the connection hasn't been fully established yet
     // and we will try again later.
-    if (LiSendControllerArrivalEvent(controller.playerIndex,
+    // FIX: Apply co-op slot offset to controller number (must match LiSendMultiControllerEvent)
+    int controllerNumber = controller.playerIndex + _controllerSlotOffset;
+    Log(LOG_I, @"Reporting controller arrival: playerIndex=%d, slotOffset=%d, controllerNumber=%d",
+        controller.playerIndex, _controllerSlotOffset, controllerNumber);
+    if (LiSendControllerArrivalEvent(controllerNumber,
                                      [self getActiveGamepadMask],
                                      type,
                                      supportedButtonFlags,
@@ -1287,9 +1310,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     return mask;
 }
 
++(int) getGamepadMaskForSlot:(int)slot
+{
+    // Return a bitmask for a specific controller slot
+    // Used for co-op sessions to assign specific slots to players
+    return 1 << slot;
+}
+
 -(NSUInteger) getConnectedGamepadCount
 {
     return _controllers.count;
+}
+
+-(void) setSwapABXYButtons:(BOOL)swap
+{
+    _swapABXYButtons = swap;
+    Log(LOG_I, @"Swap A/B X/Y buttons updated to: %d", swap);
 }
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate
@@ -1301,7 +1337,10 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     _controllerNumbers = 0;
     _multiController = streamConfig.multiController;
     _swapABXYButtons = streamConfig.swapABXYButtons;
+    _controllerSlotOffset = streamConfig.controllerSlotOffset;
     _delegate = delegate;
+    
+    Log(LOG_I, @"ControllerSupport initialized with slotOffset: %d, multiController: %d", _controllerSlotOffset, _multiController);
 
     _oscController = [[Controller alloc] init];
     _oscController.playerIndex = 0;

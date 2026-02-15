@@ -5,51 +5,55 @@ struct CenterPresetPopup: View {
     var icon: String
     
     var body: some View {
-        let brandBlue = Color(red: 0.5, green: 0.7, blue: 1.0)
+        let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
+        let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
         let babyBlue = Color(red: 0.72, green: 0.85, blue: 1.0)
+        let radius: CGFloat = 24
         
-        ZStack {
-            Circle()
-                .fill(RadialGradient(colors: [brandBlue.opacity(0.35), .clear], center: .center, startRadius: 0, endRadius: 220))
-                .frame(width: 420, height: 420)
-                .blur(radius: 24)
-            
-            VStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(
+        HStack(spacing: 12) {
+            Spacer()
+            ZStack {
+                Circle()
+                    .fill(
                         LinearGradient(
-                            colors: [babyBlue, brandBlue],
+                            colors: [brandOrange, brandOrange.opacity(0.85)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
-                
-                Text(text)
-                    .font(.custom("Fredoka-SemiBold", size: 20))
-                    .foregroundColor(.white)
-                    .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 1)
+                    .frame(width: 83, height: 83)
+                    .shadow(color: brandOrange.opacity(0.5), radius: 12, x: 0, y: 8)
+                Image(systemName: icon)
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(.white)
             }
-            .padding(.horizontal, 36)
-            .padding(.vertical, 26)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [babyBlue.opacity(0.65), brandBlue.opacity(0.25)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
-                    )
-            )
-            .shadow(color: brandBlue.opacity(0.35), radius: 28, x: 0, y: 14)
+            Text(text.uppercased())
+                .font(.custom("Fredoka-SemiBold", size: 50))
+                .tracking(1.2)
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 713, height: 132)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(brandNavy.opacity(0.92))
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+        )
+        .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 16)
         .allowsHitTesting(false)
     }
 }

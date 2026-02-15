@@ -72,7 +72,9 @@
 realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
      realitykitRendererCurvature:(NSNumber*)realitykitRendererCurvature
                   dimPassthrough:(BOOL)dimPassthrough
-                hideSystemCursor:(BOOL)hideSystemCursor {
+                hideSystemCursor:(BOOL)hideSystemCursor
+                  showMicButton:(BOOL)showMicButton
+       hideHandsIn360Environment:(BOOL)hideHandsIn360Environment {
     [_managedObjectContext performBlockAndWait:^{
         MoonlightSettings* settingsToSave = [self retrieveSettings];
         settingsToSave.framerate = [NSNumber numberWithInteger:framerate];
@@ -96,6 +98,8 @@ realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
         settingsToSave.realitykitRendererCurvature = realitykitRendererCurvature;
         settingsToSave.dimPassthrough = [NSNumber numberWithBool: dimPassthrough];
         settingsToSave.hideSystemCursor = [NSNumber numberWithBool:hideSystemCursor];
+        settingsToSave.showMicButton = [NSNumber numberWithBool:showMicButton];
+        settingsToSave.hideHandsIn360Environment = [NSNumber numberWithBool:hideHandsIn360Environment];
         [self saveData];
     }];
 }
@@ -195,6 +199,26 @@ realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
     }];
 }
 
+- (void) removeCoopHosts {
+    [_managedObjectContext performBlockAndWait:^{
+        NSArray *hosts = [self fetchRecords:@"Host"];
+        BOOL didDelete = NO;
+        
+        for (MoonlightHost* host in hosts) {
+            if ([host.name hasPrefix:@"🎮 Co-op:"]) {
+                Log(LOG_I, @"Removing co-op host from database: %@", host.name);
+                [self->_managedObjectContext deleteObject:host];
+                didDelete = YES;
+            }
+        }
+        
+        if (didDelete) {
+            [self saveData];
+            Log(LOG_I, @"Co-op hosts removed from database");
+        }
+    }];
+}
+
 - (void) saveData {
     NSError* error;
     if ([_managedObjectContext hasChanges] && ![_managedObjectContext save:&error]) {
@@ -257,6 +281,123 @@ realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
     //TODO: handle errors
     
     return fetchedRecords;
+}
+
+// MARK: - Co-op Session Support
+
+- (NSData* _Nullable) exportPairingDataForHost:(TemporaryHost*)host
+{
+    if (!host || !host.serverCert) {
+        Log(LOG_W, @"Cannot export pairing data - host or serverCert is nil");
+        return nil;
+    }
+    
+    // Package the essential pairing info into a dictionary
+    NSDictionary *pairingInfo = @{
+        @"serverCert": host.serverCert,
+        @"uuid": host.uuid ?: @"",
+        @"httpsPort": @(host.httpsPort),
+        @"pairState": @(host.pairState)
+    };
+    
+    // Serialize to NSData
+    NSError *error = nil;
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:pairingInfo requiringSecureCoding:NO error:&error];
+    
+    if (error) {
+        Log(LOG_E, @"Failed to export pairing data: %@", error.localizedDescription);
+        return nil;
+    }
+    
+    Log(LOG_I, @"Exported pairing data for host: %@", host.name);
+    return data;
+}
+
+- (TemporaryHost* _Nullable) importPairingData:(NSData*)data address:(NSString*)address name:(NSString*)name coopTag:(NSString* _Nullable)coopTag
+{
+    if (!data || !address || !name) {
+        Log(LOG_W, @"Cannot import pairing data - missing required parameters");
+        return nil;
+    }
+    
+    // Deserialize pairing info
+    NSError *error = nil;
+    NSDictionary *pairingInfo = [NSKeyedUnarchiver unarchivedObjectOfClass:[NSDictionary class] fromData:data error:&error];
+    
+    if (error || !pairingInfo) {
+        Log(LOG_E, @"Failed to import pairing data: %@", error ? error.localizedDescription : @"Invalid data");
+        return nil;
+    }
+    
+    // Check if host already exists (but only for non-coop hosts)
+    if (!coopTag) {
+    TemporaryHost *existingHost = [self findHostByAddress:address];
+    if (existingHost) {
+        Log(LOG_I, @"Host already exists: %@", existingHost.name);
+        return existingHost;
+        }
+    }
+    
+    // Create new host with imported pairing data
+    NSString *displayName = coopTag ? [NSString stringWithFormat:@"🎮 Co-op: %@", name] : name;
+    
+    // For co-op hosts, create temporary in-memory only host (not saved to Core Data)
+    if (coopTag) {
+        TemporaryHost *tempHost = [[TemporaryHost alloc] init];
+        tempHost.name = displayName;
+        tempHost.address = address;
+        tempHost.localAddress = address;
+        tempHost.externalAddress = address;
+        tempHost.activeAddress = address;
+        tempHost.uuid = pairingInfo[@"uuid"];
+        tempHost.serverCert = pairingInfo[@"serverCert"];
+        tempHost.pairState = [pairingInfo[@"pairState"] intValue];
+        tempHost.httpsPort = [pairingInfo[@"httpsPort"] unsignedShortValue];
+        
+        Log(LOG_I, @"Created temporary co-op host (not saved to database): %@", displayName);
+        return tempHost;
+    }
+    
+    // For regular hosts, save to Core Data
+    __block TemporaryHost *newHost = nil;
+    [_managedObjectContext performBlockAndWait:^{
+        MoonlightHost *host = [NSEntityDescription insertNewObjectForEntityForName:@"Host" inManagedObjectContext:self->_managedObjectContext];
+        host.name = displayName;
+        host.address = address;
+        host.localAddress = address;
+        host.externalAddress = address;
+        host.uuid = pairingInfo[@"uuid"];
+        host.serverCert = pairingInfo[@"serverCert"];
+        host.pairState = pairingInfo[@"pairState"];
+        
+        [self saveData];
+        
+        newHost = [[TemporaryHost alloc] initFromHost:host];
+        // Set httpsPort on the TemporaryHost (not persisted in Core Data)
+        newHost.httpsPort = [pairingInfo[@"httpsPort"] unsignedShortValue];
+    }];
+    
+    Log(LOG_I, @"Imported pairing data, created and saved host: %@", displayName);
+    return newHost;
+}
+
+- (TemporaryHost* _Nullable) findHostByAddress:(NSString*)address
+{
+    if (!address) {
+        return nil;
+    }
+    
+    NSArray<TemporaryHost*> *allHosts = [self getHosts];
+    for (TemporaryHost *host in allHosts) {
+        if ([host.address isEqualToString:address] ||
+            [host.localAddress isEqualToString:address] ||
+            [host.externalAddress isEqualToString:address] ||
+            [host.activeAddress isEqualToString:address]) {
+            return host;
+        }
+    }
+    
+    return nil;
 }
 
 @end

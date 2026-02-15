@@ -272,7 +272,11 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 
     _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
                                       rendererProvider:^id<AnyVideoDecoderRenderer> __strong {
-        // Always use the Metal renderer on visionOS so presets affect all codecs
+        // Always use native VideoDecoderRenderer on visionOS for UIKit mode
+        // The Metal renderer is kept in the project but disabled for now due to quality issues
+        // It can be re-enabled later once the quality is sorted out
+        
+        /* DISABLED: Metal renderer for UIKit mode
         BOOL useMetal = NO;
 #if TARGET_OS_VISION
         useMetal = YES;
@@ -301,7 +305,6 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
                 id<AnyVideoDecoderRenderer, MetalPresetControllable> renderer = (id)instance;
                 self->_metalRenderer = renderer;
 
-                // Always apply current preset (0=Off, 1=Cinematic, 2=Vivid, 3=Realistic) for uniformity
                 if (renderer) {
                     [self applyUIKitPreset:self->_settings.uikitPreset];
                 }
@@ -312,11 +315,12 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
             }
             self->_metalRenderer = nil;
 #else
-            // Not building for visionOS: do not even reference the Swift renderer
             self->_metalRenderer = nil;
 #endif
         }
+        */
 
+        // Always use native VideoDecoderRenderer for UIKit mode
         return [[VideoDecoderRenderer alloc] initWithView:self->_streamView
                                                 callbacks:self
                                         streamAspectRatio:(float)self.streamConfig.width / (float)self.streamConfig.height

@@ -54,31 +54,8 @@ void setVolume(int newVol) {
 
 static id<AnyVideoDecoderRenderer> __strong renderer;
 
-void ResetConnectionStaticState(void) {
-    Log(LOG_I, @"[Connection] Resetting static state for clean reconnection");
-    
-    // Clear renderer reference safely
-    if (renderer) {
-        [renderer stop];
-        renderer = nil;
-    }
-    
-    // Clear callbacks
-    _callbacks = nil;
-    
-    // Reset video stats
-    if (videoStatsLock) {
-        [videoStatsLock lock];
-        memset(&currentVideoStats, 0, sizeof(currentVideoStats));
-        memset(&lastVideoStats, 0, sizeof(lastVideoStats));
-        [videoStatsLock unlock];
-    }
-    
-    lastFrameNumber = 0;
-    activeVideoFormat = 0;
-    
-    Log(LOG_I, @"[Connection] Static state reset completed");
-}
+// Empty stub — referenced by StreamFrameViewController.m (iOS target)
+void ResetConnectionStaticState(void) {}
 
 int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
 {
@@ -433,22 +410,80 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
 
 -(void) terminate
 {
+    [self terminateWithCompletion:nil];
+}
+
+-(void) terminateWithCompletion:(void (^)(void))completion
+{
     // Interrupt any action blocking LiStartConnection(). This is
     // thread-safe and done outside initLock on purpose, since we
-    // won't be able to acquire it if LiStartConnection is in
-    // progress.
+    // won't be able to acquire it if LiStartConnection is in progress.
     LiInterruptConnection();
     
     // We dispatch this async to get out because this can be invoked
     // on a thread inside common and we don't want to deadlock. It also avoids
     // blocking on the caller's thread waiting to acquire initLock.
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        [initLock lock];
-        LiStopConnection();
+        // Timeout for acquiring the lock (another connection might be stopping)
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
+        BOOL acquired = [initLock lockBeforeDate:deadline];
         
-        ResetConnectionStaticState();
+        if (!acquired) {
+            Log(LOG_E, @"[Connection] terminateWithCompletion: initLock acquisition timed out after 10s.");
+            // Fire completion so UI recovers, but don't try to stop — lock holder will unlock when done
+            if (completion) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion();
+                });
+            }
+            return;
+        }
         
+        // Run LiStopConnection() on a separate thread with a timeout.
+        // LiStopConnection() can hang permanently during audio stream shutdown,
+        // which blocks the completion callback and prevents new connections.
+        dispatch_semaphore_t stopSem = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            LiStopConnection();
+            dispatch_semaphore_signal(stopSem);
+        });
+        
+        long result = dispatch_semaphore_wait(stopSem, dispatch_time(DISPATCH_TIME_NOW, 10LL * NSEC_PER_SEC));
+        if (result != 0) {
+            Log(LOG_E, @"[Connection] LiStopConnection() timed out after 10s — forcing unlock so next connection can proceed.");
+            
+            // Try one more interrupt to kick the stuck stop out of its hang
+            LiInterruptConnection();
+            
+            // Unlock initLock so the next LiStartConnection() can proceed.
+            // LiStopConnection() is likely stuck waiting on a dead audio thread
+            // and not actively modifying shared connection state. The risk of a
+            // race with the new LiStartConnection() is small compared to the
+            // certainty of the next connection failing if we keep the lock held.
+            [initLock unlock];
+            
+            if (completion) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    completion();
+                });
+            }
+            
+            // Log when the hung stop eventually finishes (informational only)
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+                dispatch_semaphore_wait(stopSem, DISPATCH_TIME_FOREVER);
+                Log(LOG_I, @"[Connection] LiStopConnection() finally completed after timeout (lock already released).");
+            });
+            return;
+        }
+        
+        // Normal path: LiStopConnection() completed within timeout
         [initLock unlock];
+        
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion();
+            });
+        }
     });
 }
 
@@ -566,7 +601,16 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
 
 -(void) main
 {
-    [initLock lock];
+    // Acquire initLock with a timeout to prevent permanent hang if
+    // a previous LiStopConnection() is stuck during cleanup.
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
+    if (![initLock lockBeforeDate:deadline]) {
+        Log(LOG_E, @"[Connection] initLock timed out after 10s — previous connection cleanup may be hung.");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_callbacks stageFailed:@"Connection cleanup timed out" withError:-1 portTestFlags:0];
+        });
+        return;
+    }
     LiStartConnection(&_serverInfo,
                       &_streamConfig,
                       &_clCallbacks,

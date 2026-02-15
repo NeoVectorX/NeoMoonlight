@@ -20,6 +20,9 @@ import Combine
     @Published var videoShown: Bool = false
     @Published var showAlert = false
     
+    // Reference to ControllerSupport for rumble forwarding
+    weak var controllerSupport: ControllerSupport?
+    
     // Implement the protocol methods
     func connectionStarted() {
         print("Connection started")
@@ -30,8 +33,13 @@ import Combine
         errorMessage = "Connection terminated with error code: \(errorCode)"
         showAlert = true
 
-        print("[RKCallbacks] Posting RKStreamDidTeardown from connectionTerminated")
-        NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
+        // Post a separate notification so the ViewModel can trigger shouldCloseStream
+        // for unexpected disconnects. We do NOT post RKStreamDidTeardown here because
+        // that would set streamState to .idle before LiStopConnection() finishes.
+        // The view's performCompleteTeardown will post RKStreamDidTeardown after
+        // LiStopConnection() fully completes via stopStreamWithCompletion.
+        print("[RKCallbacks] connectionTerminated - posting ConnectionLost for view cleanup")
+        NotificationCenter.default.post(name: Notification.Name("ConnectionLost"), object: nil)
     }
     
     func stageStarting(_ stageName: UnsafePointer<CChar>!) {
@@ -55,8 +63,8 @@ import Combine
             errorMessage = "Stage \(stageStr) failed with error \(errorCode)"
             showAlert = true
 
-            print("[RKCallbacks] Posting RKStreamDidTeardown from stageFailed")
-            NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
+            print("[RKCallbacks] Posting StreamStartFailed from stageFailed")
+            NotificationCenter.default.post(name: Notification.Name("StreamStartFailed"), object: nil)
         }
     }
     
@@ -65,12 +73,15 @@ import Combine
         errorMessage = message
         showAlert = true
 
-        print("[RKCallbacks] Posting RKStreamDidTeardown from launchFailed")
-        NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
+        print("[RKCallbacks] Posting StreamStartFailed from launchFailed")
+        NotificationCenter.default.post(name: Notification.Name("StreamStartFailed"), object: nil)
     }
     
     func rumble(_ controllerNumber: UInt16, lowFreqMotor: UInt16, highFreqMotor: UInt16) {
         print("Rumble controller \(controllerNumber), LowFreq: \(lowFreqMotor), HighFreq: \(highFreqMotor)")
+        
+        // Forward rumble to ControllerSupport which will handle haptics
+        controllerSupport?.rumble(controllerNumber, lowFreqMotor: lowFreqMotor, highFreqMotor: highFreqMotor)
     }
     
     func connectionStatusUpdate(_ status: Int32) {
@@ -85,6 +96,9 @@ import Combine
     
     func rumbleTriggers(_ controllerNumber: UInt16, leftTrigger: UInt16, rightTrigger: UInt16) {
         print("Rumble triggers for controller \(controllerNumber): Left \(leftTrigger), Right \(rightTrigger)")
+        
+        // Forward trigger rumble to ControllerSupport
+        controllerSupport?.rumbleTriggers(controllerNumber, leftTrigger: leftTrigger, rightTrigger: rightTrigger)
     }
     
     func setMotionEventState(_ controllerNumber: UInt16, motionType: UInt8, reportRateHz: UInt16) {

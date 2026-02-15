@@ -13,12 +13,12 @@
 
 @implementation HapticContext {
     GCControllerPlayerIndex _playerIndex;
-    CHHapticEngine* _hapticEngine API_AVAILABLE(ios(13.0), tvos(14.0));
-    id<CHHapticPatternPlayer> _hapticPlayer API_AVAILABLE(ios(13.0), tvos(14.0));
+    CHHapticEngine* _hapticEngine API_AVAILABLE(ios(13.0), tvos(14.0), visionos(1.0));
+    id<CHHapticPatternPlayer> _hapticPlayer API_AVAILABLE(ios(13.0), tvos(14.0), visionos(1.0));
     BOOL _playing;
 }
 
--(void)cleanup API_AVAILABLE(ios(14.0), tvos(14.0)) {
+-(void)cleanup API_AVAILABLE(ios(14.0), tvos(14.0), visionos(1.0)) {
     if (_hapticPlayer != nil) {
         [_hapticPlayer cancelAndReturnError:nil];
         _hapticPlayer = nil;
@@ -29,7 +29,7 @@
     }
 }
 
--(void)setMotorAmplitude:(unsigned short)amplitude API_AVAILABLE(ios(14.0), tvos(14.0)) {
+-(void)setMotorAmplitude:(unsigned short)amplitude API_AVAILABLE(ios(14.0), tvos(14.0), visionos(1.0)) {
     NSError* error;
 
     // Check if the haptic engine died
@@ -83,26 +83,57 @@
     }
 }
 
--(id) initWithGamepad:(GCController*)gamepad locality:(GCHapticsLocality)locality API_AVAILABLE(ios(14.0), tvos(14.0)) {
+-(id) initWithGamepad:(GCController*)gamepad locality:(GCHapticsLocality)locality API_AVAILABLE(ios(14.0), tvos(14.0), visionos(1.0)) {
+    // 1. DIAGNOSTIC LOGGING
+    Log(LOG_I, @"[NeoMoonlight] Initializing Haptics for Player %ld...", (long)gamepad.playerIndex);
+    
     if (gamepad.haptics == nil) {
-        Log(LOG_W, @"Controller %d does not support haptics", gamepad.playerIndex);
+        Log(LOG_W, @"[NeoMoonlight] FAILURE: Controller %ld haptics is NIL.", (long)gamepad.playerIndex);
         return nil;
     }
     
-    if (![[gamepad.haptics supportedLocalities] containsObject:locality]) {
-        Log(LOG_W, @"Controller %d does not support haptic locality: %@", gamepad.playerIndex, locality);
-        return nil;
-    }
-    
+    // Log what the OS actually thinks this controller can do
+    Log(LOG_I, @"[NeoMoonlight] Supported Localities: %@", [gamepad.haptics supportedLocalities]);
+
     _playerIndex = gamepad.playerIndex;
-    _hapticEngine = [gamepad.haptics createEngineWithLocality:locality];
-    
+    GCHapticsLocality targetLocality = locality;
+
+    // 2. THE BYPASS LOGIC
+    // If the requested locality (e.g., LeftHandle) is NOT supported, try 'All' instead of quitting.
+    if (![[gamepad.haptics supportedLocalities] containsObject:locality]) {
+        Log(LOG_W, @"[NeoMoonlight] Requested locality %@ missing. Attempting fallback to 'All'...", locality);
+        targetLocality = GCHapticsLocalityAll;
+        
+        // Double check if 'All' is supported, or just force it blindly (Apple sometimes hides capabilities)
+        if (![[gamepad.haptics supportedLocalities] containsObject:GCHapticsLocalityAll]) {
+             Log(LOG_W, @"[NeoMoonlight] Even 'All' is not listed. Forcing engine creation anyway as 'Default'...");
+             targetLocality = GCHapticsLocalityDefault;
+        }
+    }
+
+    // 3. CREATE ENGINE
+    // We use the determined targetLocality (Original -> All -> Default)
+    @try {
+        _hapticEngine = [gamepad.haptics createEngineWithLocality:targetLocality];
+    }
+    @catch (NSException *exception) {
+        Log(LOG_E, @"[NeoMoonlight] CRASH creating engine: %@", exception);
+        return nil;
+    }
+
+    if (_hapticEngine == nil) {
+         Log(LOG_W, @"[NeoMoonlight] createEngineWithLocality returned nil.");
+         return nil;
+    }
+
     NSError* error;
     [_hapticEngine startAndReturnError:&error];
     if (error != nil) {
-        Log(LOG_W, @"Controller %d: Haptic engine failed to start: %@", gamepad.playerIndex, error);
+        Log(LOG_W, @"[NeoMoonlight] Haptic engine failed to start: %@", error);
         return nil;
     }
+    
+    Log(LOG_I, @"[NeoMoonlight] SUCCESS: Haptic Engine Started for Player %ld", (long)_playerIndex);
     
     __weak typeof(self) weakSelf = self;
     _hapticEngine.stoppedHandler = ^(CHHapticEngineStoppedReason stoppedReason) {
@@ -111,7 +142,7 @@
             return;
         }
         
-        Log(LOG_W, @"Controller %d: Haptic engine stopped: %p", me->_playerIndex, stoppedReason);
+        Log(LOG_W, @"Controller %ld: Haptic engine stopped: %ld", (long)me->_playerIndex, (long)stoppedReason);
         me->_hapticPlayer = nil;
         me->_hapticEngine = nil;
         me->_playing = NO;
@@ -122,7 +153,7 @@
             return;
         }
         
-        Log(LOG_W, @"Controller %d: Haptic engine reset", me->_playerIndex);
+        Log(LOG_W, @"Controller %ld: Haptic engine reset", (long)me->_playerIndex);
         me->_hapticPlayer = nil;
         me->_playing = NO;
         [me->_hapticEngine startAndReturnError:nil];
@@ -132,7 +163,7 @@
 }
 
 +(HapticContext*) createContextForHighFreqMotor:(GCController*)gamepad {
-    if (@available(iOS 14.0, tvOS 14.0, *)) {
+    if (@available(iOS 14.0, tvOS 14.0, visionOS 1.0, *)) {
         return [[HapticContext alloc] initWithGamepad:gamepad locality:GCHapticsLocalityRightHandle];
     }
     else {
@@ -141,7 +172,7 @@
 }
 
 +(HapticContext*) createContextForLowFreqMotor:(GCController*)gamepad {
-    if (@available(iOS 14.0, tvOS 14.0, *)) {
+    if (@available(iOS 14.0, tvOS 14.0, visionOS 1.0, *)) {
         return [[HapticContext alloc] initWithGamepad:gamepad locality:GCHapticsLocalityLeftHandle];
     }
     else {
@@ -150,7 +181,7 @@
 }
 
 +(HapticContext*) createContextForLeftTrigger:(GCController*)gamepad {
-    if (@available(iOS 14.0, tvOS 14.0, *)) {
+    if (@available(iOS 14.0, tvOS 14.0, visionOS 1.0, *)) {
         return [[HapticContext alloc] initWithGamepad:gamepad locality:GCHapticsLocalityLeftTrigger];
     }
     else {
@@ -159,7 +190,7 @@
 }
 
 +(HapticContext*) createContextForRightTrigger:(GCController*)gamepad {
-    if (@available(iOS 14.0, tvOS 14.0, *)) {
+    if (@available(iOS 14.0, tvOS 14.0, visionOS 1.0, *)) {
         return [[HapticContext alloc] initWithGamepad:gamepad locality:GCHapticsLocalityRightTrigger];
     }
     else {

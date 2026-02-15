@@ -12,6 +12,7 @@ import SwiftUI
 struct ComputerView: View {
     @EnvironmentObject private var viewModel: MainViewModel
     @Environment(\.isEmbeddedInCurved) private var isEmbeddedInCurved
+    @Environment(\.dismiss) private var dismiss
 
     // Stick with @Binding to ensure changes propagate back up if needed
     // (e.g., when pairing succeeds, the parent view should see the updated host).
@@ -247,7 +248,25 @@ struct ComputerView: View {
 
         case .unpaired:
             // Host is Online but Unpaired -> Show Pairing UI
-            VStack(spacing: 24) {
+            VStack(spacing: 0) {
+                // X button to dismiss
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.leading, 16)
+                .padding(.top, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                
+                VStack(spacing: 24) {
+                
                 ZStack {
                     Circle()
                         .fill(
@@ -281,6 +300,7 @@ struct ComputerView: View {
                     .font(.body)
                     .multilineTextAlignment(.center)
                     .foregroundColor(.white.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 32)
                     .padding(.bottom, 8)
 
@@ -327,8 +347,10 @@ struct ComputerView: View {
                     .shadow(color: babyBlue.opacity(0.4), radius: 16, x: 0, y: 8)
                 }
                 .buttonStyle(ScaleButtonStyle())
+                }
             }
-            .padding(24)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
             .background(
                 RoundedRectangle(cornerRadius: 20)
                     .fill(.ultraThinMaterial)
@@ -400,7 +422,24 @@ struct ComputerView: View {
 
     /// View displayed when the host is offline.
     private var offlineView: some View {
-        VStack(spacing: 15) {
+        VStack(spacing: 0) {
+            // X button to dismiss
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                Spacer()
+            }
+            .padding(.leading, 16)
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            VStack(spacing: 15) {
             Label("Offline", systemImage: "desktopcomputer.trianglebadge.exclamationmark")
                 .font(.title2)
                 .foregroundColor(.red) // Clear offline indicator
@@ -441,8 +480,9 @@ struct ComputerView: View {
             .disabled(host.mac == nil || host.mac == "00:00:00:00:00:00")
             // Visually indicate disabled state
             .opacity((host.mac == nil || host.mac == "00:00:00:00:00:00") ? 0.5 : 1.0)
+            }
         }
-        .padding(.vertical) // Add some vertical padding to the offline view
+        .padding(.bottom) // Add some vertical padding to the offline view
     }
 }
 

@@ -31,9 +31,15 @@ public class TemporarySettings: NSObject {
     @objc public var enableHdr = false
     @objc public var btMouseSupport = false
     @objc public var absoluteTouchMode = false
+    @objc public var curvedDefaultControlMode = 2  // 0: Screen Adjust, 1: Controller, 2: Gaze (default)
+    @objc public var curvedGazeUseTouchMode = false  // false: Eye tracking (gaze), true: Hand drag (touch/trackpad)
+    @objc public var gazeCursorOffsetX: Int = 0  // -15 to +15 pixels horizontal calibration
+    @objc public var gazeCursorOffsetY: Int = 0  // -15 to +15 pixels vertical calibration
     @objc public var statsOverlay = false
     @objc public var dimPassthrough = true
     @objc public var hideSystemCursor = false
+    @objc public var showMicButton = false
+    @objc public var hideHandsIn360Environment = false
 
     // --- HDR / Color Settings ---
     @objc public var brightness: Float = 2.2
@@ -57,6 +63,8 @@ public class TemporarySettings: NSObject {
         self.realitykitRendererCurvature = 0.0
         self.dimPassthrough = false
         self.hideSystemCursor = false
+        self.showMicButton = false
+        self.hideHandsIn360Environment = false
         
         // HDR Defaults
         self.brightness = 2.2
@@ -79,7 +87,19 @@ public class TemporarySettings: NSObject {
         self.audioConfig = settings.audioConfig?.int32Value ?? 0
         self.preferredCodec = PreferredCodec(rawValue: Int(settings.preferredCodec)) ?? PreferredCodec.auto
         self.onscreenControls = OnScreenControlsLevel(rawValue: settings.onscreenControls?.intValue ?? 0) ?? OnScreenControlsLevel.off
-        self.renderer = if let ren = settings.renderer?.uint8Value { Renderer(rawValue: UInt8(ren)) ?? .classicMetal } else { .classicMetal }
+        
+        if let ren = settings.renderer?.uint8Value {
+            let rawValue = UInt8(ren)
+            // Old values: classic = 0, classicMetal = 1
+            if rawValue == 0 || rawValue == 1 {
+                self.renderer = .classicMetal
+            } else {
+                self.renderer = Renderer(rawValue: rawValue) ?? .classicMetal
+            }
+        } else {
+            self.renderer = .classicMetal
+        }
+        
         self.uniqueId = settings.uniqueId ?? ""
 
         self.useFramePacing = settings.useFramePacing
@@ -96,6 +116,10 @@ public class TemporarySettings: NSObject {
         self.realitykitRendererCurvature = settings.realitykitRendererCurvature?.floatValue ?? 0
         self.dimPassthrough = settings.dimPassthrough?.boolValue ?? false
         self.hideSystemCursor = settings.hideSystemCursor?.boolValue ?? false
+        // TODO: Uncomment after adding showMicButton to Core Data model
+        // self.showMicButton = settings.showMicButton?.boolValue ?? false
+        self.showMicButton = false
+        self.hideHandsIn360Environment = settings.hideHandsIn360Environment?.boolValue ?? false
         
         // HDR / COLOR DEFAULTS (not stored in database, local only)
         self.brightness = 2.2
@@ -109,7 +133,7 @@ public class TemporarySettings: NSObject {
     @objc public func save() {
         // save settings to parent
         let dataManager = DataManager()
-        dataManager.saveSettings(withBitrate: Int(bitrate), framerate: Int(framerate), height: Int(height), width: Int(width), audioConfig: Int(audioConfig), onscreenControls: Int(onscreenControls.rawValue), optimizeGames: optimizeGames, multiController: multiController, swapABXYButtons: swapABXYButtons, audioOnPC: playAudioOnPC, preferredCodec: UInt32(preferredCodec.rawValue), renderer: renderer.rawValue, useFramePacing: useFramePacing, enableHdr: enableHdr, btMouseSupport: btMouseSupport, absoluteTouchMode: absoluteTouchMode, statsOverlay: statsOverlay, realitykitRendererAnimateOpening: realitykitRendererAnimateOpening, realitykitRendererCurvature: NSNumber(value: realitykitRendererCurvature), dimPassthrough: dimPassthrough, hideSystemCursor: hideSystemCursor)
+        dataManager.saveSettings(withBitrate: Int(bitrate), framerate: Int(framerate), height: Int(height), width: Int(width), audioConfig: Int(audioConfig), onscreenControls: Int(onscreenControls.rawValue), optimizeGames: optimizeGames, multiController: multiController, swapABXYButtons: swapABXYButtons, audioOnPC: playAudioOnPC, preferredCodec: UInt32(preferredCodec.rawValue), renderer: renderer.rawValue, useFramePacing: useFramePacing, enableHdr: enableHdr, btMouseSupport: btMouseSupport, absoluteTouchMode: absoluteTouchMode, statsOverlay: statsOverlay, realitykitRendererAnimateOpening: realitykitRendererAnimateOpening, realitykitRendererCurvature: NSNumber(value: realitykitRendererCurvature), dimPassthrough: dimPassthrough, hideSystemCursor: hideSystemCursor, showMicButton: showMicButton, hideHandsIn360Environment: hideHandsIn360Environment)
     }
 }
 
@@ -129,40 +153,24 @@ public class TemporarySettings: NSObject {
         }
     
     public static var caseDisplayRepresentations: [Renderer : DisplayRepresentation] = [
-        .classic: .init(stringLiteral: "Standard Display"),
-        .classicMetal: .init(stringLiteral: "Enhanced HDR (2D)"),
-        .realitykitClassic3D: .init(stringLiteral: "3D Side-by-Side"),
+        .classicMetal: .init(stringLiteral: "Flat Display"),
         .curvedDisplay: .init(stringLiteral: "Curved Display"),
-        .realitykit: .init(stringLiteral: "Immersive Curved (Legacy)"),
-        .hdrTest: .init(stringLiteral: "HDR Test (2D)"),
     ]
     
-    case classic
-    case classicMetal
-    case realitykit
-    case realitykitClassic3D
-    case curvedDisplay
-    case hdrTest
+    case classicMetal = 0
+    case curvedDisplay = 2
 
     var windowId: String {
         switch self {
-        case .classic: return "classicStreamingWindow"
-        case .classicMetal: return "classicStreamingWindow"
-        case .realitykit: return "realitykitStreamingWindow"
-        case .realitykitClassic3D: return "realitykitClassic3DWindow"
+        case .classicMetal: return "flatDisplayWindow"
         case .curvedDisplay: return "curvedDisplayImmersiveSpace"
-        case .hdrTest: return "hdrTestWindow"
         }
     }
     
     var description: String {
         switch self {
-        case .classic: return "Standard Display"
-        case .classicMetal: return "Enhanced HDR (2D)"
-        case .realitykit: return "Immersive Curved (Legacy)"
-        case .realitykitClassic3D: return "3D Side-by-Side"
+        case .classicMetal: return "Flat Display"
         case .curvedDisplay: return "Curved Display"
-        case .hdrTest: return "HDR Test (2D)"
         }
     }
 }

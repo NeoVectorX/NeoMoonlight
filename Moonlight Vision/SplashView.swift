@@ -1,9 +1,9 @@
 //
 //  SplashView.swift
-//  Moonlight Vision
+//  Neo Moonlight
 //
-//  Created by NeoVectorX
-//  Copyright © 2025 Moonlight Game Streaming Project. All rights reserved.
+//  Created by NeoVectorX 2026
+//
 //
 
 import SwiftUI

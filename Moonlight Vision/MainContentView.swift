@@ -418,6 +418,7 @@ struct ComputersTabView: View {
     @Binding var showDeletionTriggeredMessage: Bool
     
     @State private var selectedHostForDetail: TemporaryHost?
+    @State private var showCoopFlow = false
     @State private var headerIconPulseScale: CGFloat = 1.0
     @State private var headerIconGlowRotation: Double = 0.0
     @Environment(\.openWindow) private var openWindow
@@ -430,12 +431,10 @@ struct ComputersTabView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                header
-                
                 ScrollView {
                     VStack(spacing: 20) {
                         if viewModel.hostsWithPairState.isEmpty {
-                            EmptyStateCard().padding(.top, 40)
+                            EmptyStateCard().padding(.top, 16)
                         } else {
                             ForEach(viewModel.hostsWithPairState, id: \.id) { host in
                                 ComputerCard3D(
@@ -456,34 +455,35 @@ struct ComputersTabView: View {
                             }
                         }
                         
-                        Spacer().frame(height: 180)
+                        // Standalone Co-op Card (always visible)
+                        StandaloneCoopCard(onTap: {
+                            showCoopFlow = true
+                        })
+                        .padding(.top, 32)
+                        
+                        Spacer().frame(height: 240)
                     }
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 24)
+                    .padding(.top, 40)
                 }
             }
             
-            VStack {
+            // Management cards and version text at bottom (fixed position)
+            VStack(spacing: 8) {
                 Spacer()
-                DiscoveryToggleCard(isRefreshingDiscovery: $isRefreshingDiscovery) {
-                    isRefreshingDiscovery.toggle()
-                    if isRefreshingDiscovery { viewModel.beginRefresh() }
-                    else { viewModel.stopRefresh() }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 56)
-            }
-            
-            VStack {
-                Spacer()
-                Text("KEPLER EDITION V11.1")
+                
+                header
+                    .padding(.horizontal, 24)
+                
+                Text("PLATO EDITION V12.0")
                     .font(.custom("Fredoka-Medium", size: 14))
                     .kerning(2.0)
                     .foregroundColor(Color(red: 0.482, green: 0.502, blue: 0.863))
                     .frame(maxWidth: .infinity)
-                    .padding(.bottom, 25)
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
         }
         .sheet(item: $selectedHostForDetail) { host in
              if canShowModal, let index = viewModel.hosts.firstIndex(where: { $0.id == host.id }) {
@@ -492,6 +492,12 @@ struct ComputersTabView: View {
                      set: { viewModel.hosts[index] = $0 }
                  )
                 ComputerView(host: binding)
+                    .environmentObject(viewModel)
+            }
+        }
+        .sheet(isPresented: $showCoopFlow) {
+            if canShowModal {
+                CoopModeSelectionView(isPresented: $showCoopFlow)
                     .environmentObject(viewModel)
             }
         }
@@ -570,64 +576,129 @@ struct ComputersTabView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 20) {
-                // My Computers Icon
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [brandBlue.opacity(0.3), brandBlue.opacity(0.15)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+        HStack(spacing: 16) {
+            // My Computers Section (Left)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    // My Computers Icon
+                    ZStack {
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [brandBlue.opacity(0.3), brandBlue.opacity(0.15)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
-                        .frame(width: 64, height: 64)
+                            .frame(width: 52, height: 52)
+                        
+                        Image(systemName: "desktopcomputer.and.macbook")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+                    }
+                    .frame(width: 52, height: 52)
                     
-                    Image(systemName: "desktopcomputer.and.macbook")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.9)], startPoint: .top, endPoint: .bottom))
-                }
-                .frame(width: 64, height: 64)
-                
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("My Computers")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    HStack(spacing: 8) {
-                        Circle().fill(brandBlue).frame(width: 8, height: 8)
-                        Text("\(viewModel.hostsWithPairState.count) computer\(viewModel.hostsWithPairState.count == 1 ? "" : "s")")
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.7))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("My Computers")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                        
+                        HStack(spacing: 6) {
+                            Circle().fill(brandBlue).frame(width: 7, height: 7)
+                            Text("\(viewModel.hostsWithPairState.count) computer\(viewModel.hostsWithPairState.count == 1 ? "" : "s")")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
                 }
-                
-                Spacer()
                 
                 Button {
                     addingHost = true
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                         Text("Add PC")
                             .fontWeight(.semibold)
+                            .font(.system(size: 14))
                     }
                     .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
                     .background(buttonBackground(color: Color(red: 0.85, green: 0.6, blue: 0.95)))
-                    .shadow(color: Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.4), radius: 16, x: 0, y: 8)
+                    .shadow(color: Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.4), radius: 12, x: 0, y: 6)
                 }
                 .buttonStyle(ScaleButtonStyle())
             }
+            .padding(20)
+            .frame(maxWidth: .infinity)
+            .background(cardBackground)
+            .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
+            
+            // Network Discovery Section (Right)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    // Network Discovery Icon
+                    ZStack {
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [brandBlue.opacity(0.3), brandBlue.opacity(0.15)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .frame(width: 52, height: 52)
+                        
+                        Image(systemName: isRefreshingDiscovery ? "antenna.radiowaves.left.and.right" : "network")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+                    }
+                    .frame(width: 52, height: 52)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Network Discovery")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                        
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(isRefreshingDiscovery ? .green : .gray)
+                                .frame(width: 7, height: 7)
+                                .shadow(color: isRefreshingDiscovery ? .green.opacity(0.8) : .gray.opacity(0.8), radius: 4, x: 0, y: 2)
+                            
+                            Text(isRefreshingDiscovery ? "Scanning..." : "Tap to scan")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                    }
+                }
+                
+                Button {
+                    isRefreshingDiscovery.toggle()
+                    if isRefreshingDiscovery { viewModel.beginRefresh() }
+                    else { viewModel.stopRefresh() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isRefreshingDiscovery ? "stop.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text(isRefreshingDiscovery ? "Stop" : "Start")
+                            .fontWeight(.semibold)
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(buttonBackground(color: brandBlue))
+                    .shadow(color: brandBlue.opacity(0.4), radius: 12, x: 0, y: 6)
+                }
+                .buttonStyle(ScaleButtonStyle())
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity)
+            .background(cardBackground)
+            .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
         }
-        .padding(28)
-        .background(cardBackground)
-        .shadow(color: .black.opacity(0.15), radius: 30, x: 0, y: 15)
-        .padding(.horizontal, 24)
-        .padding(.top, 16)
     }
     
     private func buttonBackground(color: Color) -> some View {
@@ -1042,7 +1113,7 @@ struct EmptyStateCard: View {
                     .blur(radius: 20)
                 
                 Image(systemName: "desktopcomputer")
-                    .font(.system(size: 48, weight: .light))
+                    .font(.system(size: 36, weight: .light))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [brandBlue, brandBlue.opacity(0.6)],
@@ -1052,19 +1123,20 @@ struct EmptyStateCard: View {
                     )
             }
             
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Text("No Computers Found")
-                    .font(.title3)
+                    .font(.headline)
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
                 
                 Text("Add your gaming PC to get started")
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundColor(.white.opacity(0.6))
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(48)
+        .padding(.vertical, 32)
+        .padding(.horizontal, 40)
         .background(
             RoundedRectangle(cornerRadius: 20)
                 .fill(.ultraThinMaterial)
@@ -1169,6 +1241,134 @@ struct DiscoveryToggleCard: View {
             }
         )
         .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+    }
+}
+
+// MARK: - Standalone Co-op Card
+struct StandaloneCoopCard: View {
+    let onTap: () -> Void
+    
+    let brandPink = Color(red: 1.0, green: 0.6, blue: 0.8)
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 16) {
+                // Icon
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [brandPink.opacity(0.3), brandPink.opacity(0.15)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 64, height: 64)
+                    
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundColor(brandPink)
+                }
+                
+                // Text
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Co-op Play")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(brandPink)
+                            .frame(width: 10, height: 10)
+                            .shadow(color: brandPink.opacity(0.8), radius: 4, x: 0, y: 2)
+                        
+                        Text("Play together via SharePlay")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                }
+                
+                Spacer()
+                
+                // Co-op Button (styled like the original)
+                HStack(spacing: 8) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("Connect")
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(.white)
+                .opacity(0)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .overlay(
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                        Text("Co-op")
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.white)
+                )
+                .background(
+                    ZStack {
+                        // Shadow layer
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(brandPink.opacity(0.3))
+                            .offset(y: 4)
+                            .blur(radius: 6)
+                        
+                        // Main button with gradient and stroke
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(
+                                LinearGradient(
+                                    colors: [brandPink, brandPink.opacity(0.8)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .strokeBorder(
+                                        LinearGradient(
+                                            colors: [.white.opacity(0.4), .white.opacity(0.1)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        lineWidth: 1.5
+                                    )
+                            )
+                    }
+                )
+                .shadow(color: brandPink.opacity(0.4), radius: 16, x: 0, y: 8)
+            }
+            .padding(20)
+            .background(
+                ZStack {
+                    // Shadow layer
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                        .offset(y: 6)
+                        .blur(radius: 12)
+                    
+                    // Main background with gradient border
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20)
+                                .strokeBorder(
+                                    LinearGradient(
+                                        colors: [.white.opacity(0.15), .white.opacity(0.05)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 1
+                                )
+                        )
+                }
+            )
+        }
+        .buttonStyle(ScaleButtonStyle())
     }
 }
 

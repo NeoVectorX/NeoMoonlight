@@ -19,6 +19,7 @@ struct AppsView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var nowLoading: String?
+    @State private var nowLoadingTimeout: DispatchWorkItem?
     
     @State private var firstFrameObserver: NSObjectProtocol?
     @State private var firstFrameFallback: DispatchWorkItem?
@@ -138,6 +139,23 @@ struct AppsView: View {
         if nowLoading != nil { return }
         nowLoading = app.id ?? app.name
         
+        // CRITICAL FIX: Safety timeout to prevent nowLoading from getting stuck
+        // This prevents the "Launch locks up" bug where user can't tap any app
+        nowLoadingTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak viewModel] in
+            if self.nowLoading != nil {
+                print("[AppsView] ⚠️ Safety timeout: Clearing stuck nowLoading after 5s")
+                self.nowLoading = nil
+                // Also reset any potentially stuck state
+                if viewModel?.streamState == .stopping {
+                    print("[AppsView] ⚠️ Force resetting stuck streamState")
+                    viewModel?.streamState = .idle
+                }
+            }
+        }
+        nowLoadingTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: timeout)
+        
         // Stop discovery before starting stream to prevent interference
         viewModel.stopRefresh()
 
@@ -192,10 +210,14 @@ struct AppsView: View {
     }
     
     private func openAppStream(app: TemporaryApp) {
+        // CRITICAL FIX: Defensively clear any stale state before starting
+        viewModel.prepareForNewStream()
+        
         if let config = viewModel.stream(app: app) {
             var renderer = viewModel.streamSettings.renderer
 
-            // Before opening a new stream, ensure any existing streaming window (including the middle screen) is closed
+            // Before opening a new stream, ensure any existing streaming window is closed
+            dismissWindow(id: "flatDisplayWindow")
             dismissWindow(id: "classicStreamingWindow")
 
             if renderer == .curvedDisplay {
@@ -205,36 +227,34 @@ struct AppsView: View {
                         print("[AppsView] Opening curved display immersive space...")
                         let result = try await openImmersiveSpace(id: renderer.windowId, value: config)
                         print("[AppsView] Immersive space result: \(result)")
-                        nowLoading = nil
-                    }
-                }
-            } else if renderer == .realitykit {
-                Task {
-                    await dismissImmersiveSpace()
-                    await MainActor.run {
-                        openWindow(id: renderer.windowId, value: config)
-                        dismissWindow(id: "mainView")
-                        nowLoading = nil
+                        self.clearNowLoading()
                     }
                 }
             } else {
-                // Classic UIKit renderer
+                // Flat Display renderer (classicMetal)
                 Task {
                     await dismissImmersiveSpace()
                     await MainActor.run {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                            pushWindow(id: renderer.windowId, value: config)
+                            openWindow(id: renderer.windowId, value: config)
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                             dismissWindow(id: "mainView")
                         }
-                        nowLoading = nil
+                        self.clearNowLoading()
                     }
                 }
             }
         } else {
-            nowLoading = nil
+            clearNowLoading()
         }
+    }
+    
+    /// Clears nowLoading and cancels the safety timeout
+    private func clearNowLoading() {
+        nowLoadingTimeout?.cancel()
+        nowLoadingTimeout = nil
+        nowLoading = nil
     }
 
     private func clearFirstFrameObservers() {
@@ -249,7 +269,7 @@ struct AppsView: View {
     private func handleDisconnect() {
         print("[AppsView] Disconnect button tapped. Requesting disconnect from ViewModel.")
         viewModel.userDidRequestDisconnect()
-        nowLoading = nil
+        clearNowLoading()
     }
     
     private func handleQuit(app: TemporaryApp) {
@@ -538,12 +558,14 @@ private func waitForTeardownThen(_ block: @escaping () -> Void) {
     var fired = false
     var obs1: NSObjectProtocol?
     var obs2: NSObjectProtocol?
+    var obs3: NSObjectProtocol?
 
     func cleanupAndFire() {
         if fired { return }
         fired = true
         if let o = obs1 { center.removeObserver(o) }
         if let o = obs2 { center.removeObserver(o) }
+        if let o = obs3 { center.removeObserver(o) }
         block()
     }
 
@@ -554,6 +576,11 @@ private func waitForTeardownThen(_ block: @escaping () -> Void) {
 
     obs2 = center.addObserver(forName: Notification.Name("RKStreamDidTeardown"), object: nil, queue: .main) { _ in
         print("[AppsView] Received RKStreamDidTeardown")
+        cleanupAndFire()
+    }
+
+    obs3 = center.addObserver(forName: Notification.Name("StreamStartFailed"), object: nil, queue: .main) { _ in
+        print("[AppsView] Received StreamStartFailed")
         cleanupAndFire()
     }
 

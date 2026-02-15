@@ -74,11 +74,12 @@ struct MoonlightVisionApp: SwiftUI.App {
                 streamConfig: streamConfig,
                 needsHdr: appDelegate.mainViewModel.streamSettings.enableHdr
             )
+            // CRITICAL: Same as flatDisplayWindow — force fresh view on each session
+            .id(streamConfig.wrappedValue?.sessionUUID ?? "none")
             .environmentObject(appDelegate.mainViewModel)
             .environment(\.isEmbeddedInCurved, true)
             .onDisappear {
                 // Do not mutate streamConfig during swap teardown; coordinator handles lifecycle.
-                // Previously cleared streamConfig.wrappedValue here, which could race with swap.
             }
             .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
                 if isSwapping { return }
@@ -86,12 +87,21 @@ struct MoonlightVisionApp: SwiftUI.App {
             }
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed, .full)
-        .immersiveContentBrightness(.automatic)
         .upperLimbVisibility(.automatic)
         .immersiveEnvironmentBehavior(.coexist)
 
-        WindowGroup(id: "realitykitStreamingWindow", for: StreamConfiguration.self) { streamConfig in
-            RealityKitStreamView(streamConfig: streamConfig, needsHdr: appDelegate.mainViewModel.streamSettings.enableHdr)
+        // Flat Display - RealityKit in WindowGroup
+        WindowGroup(id: "flatDisplayWindow", for: StreamConfiguration.self) { streamConfig in
+            FlatDisplayStreamView(
+                streamConfig: streamConfig,
+                needsHdr: appDelegate.mainViewModel.streamSettings.enableHdr
+            )
+            // CRITICAL: Force SwiftUI to destroy the old view and create a fresh one
+            // whenever a new stream session starts. Without this, SwiftUI may reuse
+            // the previous FlatDisplayStreamView instance with stale @State variables
+            // (hasPerformedTeardown=true, windowDecommissioned=true, streamMan=old ref)
+            // which causes a crash/black screen on co-op rejoin.
+            .id(streamConfig.wrappedValue?.sessionUUID ?? "none")
             .environmentObject(appDelegate.mainViewModel)
             .onDisappear {
                 // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
@@ -101,51 +111,19 @@ struct MoonlightVisionApp: SwiftUI.App {
                 AudioHelpers.fixAudioForSurroundForCurrentWindow()
             }
         }
-        .windowStyle(.volumetric)
-        .defaultSize(width: 2, height: 2, depth: 2, in: .meters)
-
-        WindowGroup(id: "realitykitClassic3DWindow", for: StreamConfiguration.self) { streamConfig in
-                RealityKitClassic3DView(streamConfig: streamConfig, needsHdr: appDelegate.mainViewModel.streamSettings.enableHdr)
-                .environmentObject(appDelegate.mainViewModel)
-                .onDisappear {
-                    // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
-                }
-                .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
-                    if isSwapping { return }
-                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
-                }
-        }
-        .windowStyle(.volumetric)
-        .defaultSize(width: 2, height: 2, depth: 2, in: .meters)
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
         
-        WindowGroup(id: "hdrTestWindow", for: StreamConfiguration.self) { streamConfig in
-            HDRTestStreamView(streamConfig: streamConfig)
-                .environmentObject(appDelegate.mainViewModel)
-                .onDisappear {
-                    // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
-                }
-                .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
-                    if isSwapping { return }
-                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
-                }
+        // Kickstarter Window - Forces visionOS to recalculate Shared Space visibility
+        // This enables external apps (Spotify, Discord, etc.) to appear in Curved Display mode
+        WindowGroup(id: "Kickstarter") {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .opacity(0.001) // Invisible but rendered
+                .allowsHitTesting(false) // Let clicks pass through
         }
         .windowStyle(.plain)
-        .defaultSize(width: 1920, height: 1080)
-        .windowResizability(.contentSize)
-
-        WindowGroup(id: "classicStreamingWindow", for: StreamConfiguration.self) { streamConfig in
-            UIKitStreamView(streamConfig: streamConfig)
-            .environmentObject(appDelegate.mainViewModel)
-            .onDisappear {
-                // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
-            }
-            .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
-                if isSwapping { return }
-                AudioHelpers.fixAudioForSurroundForCurrentWindow()
-            }
-        }
-        .windowStyle(.plain)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 0.1, height: 0.1, depth: 0.0, in: .meters)
     }
 }
 

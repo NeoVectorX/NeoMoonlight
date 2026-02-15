@@ -212,6 +212,15 @@ struct UserGuideView: View {
                                     "Smoothest Video: Consistent frame display timing. Best for visually demanding games where stutter-free streaming is the priority"
                                 ]
                             )
+
+                            SpecialSettingCard(
+                                icon: "mic.fill",
+                                title: "Mic Streamer Compatibility Mode",
+                                description: "Adds a mute button control in Curved Display immersive mode by integrating with Mic Streamer.",
+                                details: [
+                                    "Run Mic Streamer, start streaming the mic. Toggle Mic Streamer Compatibility Mode On and enjoy mic control while in Curved Display immersive mode."
+                                ]
+                            )
                         }
                     }
                     
@@ -247,6 +256,19 @@ struct UserGuideView: View {
                                     "Home Button: Tap the house icon to access the main menu overlay",
                                     "Mode Swap: Use the 'Display Mode' option in settings to switch instantly",
                                     "No Reconnection: Your stream continues uninterrupted during the transition"
+                                ]
+                            )
+                            
+                            // Controller Mode
+                            SpecialSettingCard(
+                                icon: "gamecontroller.fill",
+                                title: "Controller Mode (Curved Display Only)",
+                                description: "Switch input handling to use physical game controllers in Curved Display mode.",
+                                details: [
+                                    "Three Input Modes: Toggle between Gaze Control, Screen Adjust, and Controller Mode",
+                                    "Controller Mode: When enabled, Bluetooth controllers connected to Vision Pro will function",
+                                    "Keyboard: Ensure the keyboard is disabled for controllers to properly function and avoid input conflicts",
+                                    "Not Needed in Standard Display: Physical controllers work automatically in Standard Display mode without toggling"
                                 ]
                             )
                             
@@ -287,8 +309,8 @@ struct UserGuideView: View {
                                 VStack(alignment: .leading, spacing: 8) {
                                     InStreamFeature(
                                         icon: "paintpalette",
-                                        title: "Preset Color Grading",
-                                        description: "Cycle through Cinematic, Vivid, and Realistic visual presets"
+                                        title: "Preset Color Filters",
+                                        description: "Cycle through Cinematic, Vivid, and Realistic visual filters"
                                     )
                                     InStreamFeature(
                                         icon: "moon.fill",
@@ -370,13 +392,13 @@ struct UserGuideView: View {
                                     )
                                     InStreamFeature(
                                         icon: "moon.fill",
-                                        title: "Advanced Dimming",
-                                        description: "Multiple dimming modes including reactive ambient lighting"
+                                        title: "Advanced Lighting",
+                                        description: "Multiple lighting modes including reactive ambient lighting"
                                     )
                                     InStreamFeature(
                                         icon: "paintpalette",
-                                        title: "Preset Color Grading",
-                                        description: "Cycle through Cinematic, Vivid, and Realistic visual presets"
+                                        title: "Preset Color Filters",
+                                        description: "Cycle through Cinematic, Vivid, and Realistic visual filters"
                                     )
                                 }
                             }
@@ -455,6 +477,13 @@ struct UserGuideView: View {
                                 iconColor: .purple,
                                 tip: "Controller Connection",
                                 detail: "Connect your controller via Bluetooth directly to the Apple Vision Pro for the lowest latency input."
+                            )
+                            
+                            PerformanceTip(
+                                icon: "exclamationmark.triangle.fill",
+                                iconColor: .red,
+                                tip: "Controller Not Working in Curved Display?",
+                                detail: "Enable Controller Mode in the control bar and ensure the keyboard is disabled. Standard Display mode doesn't require this toggle."
                             )
                             
                             PerformanceTip(

@@ -10,6 +10,11 @@ import Foundation
 
 @objcMembers
 class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
+    /// Unique ID for each stream session. Used as SwiftUI .id() to force
+    /// a fresh FlatDisplayStreamView instance, preventing stale @State
+    /// from a previous session (zombie view reuse).
+    var sessionUUID: String = UUID().uuidString
+    
     var host: String!
     var httpsPort: UInt16
     var appVersion: String
@@ -33,6 +38,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
     var multiController: Bool
     var useFramePacing: Bool
     var serverCert: Data!
+    var controllerSlotOffset: Int32  // For co-op: offset added to controller index when sending input
     
     // Default initializer (required for decoding)
     init(
@@ -58,7 +64,8 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         supportedVideoFormats: Int32,
         multiController: Bool,
         useFramePacing: Bool,
-        serverCert: Data
+        serverCert: Data,
+        controllerSlotOffset: Int32 = 0
     ) {
         self.host = host
         self.httpsPort = httpsPort
@@ -83,6 +90,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         self.multiController = multiController
         self.useFramePacing = useFramePacing
         self.serverCert = serverCert
+        self.controllerSlotOffset = controllerSlotOffset
     }
     
     // Convenience initializer for empty/default values
@@ -110,6 +118,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         self.multiController = false
         self.useFramePacing = false
         self.serverCert = Data()
+        self.controllerSlotOffset = 0
     }
     
     // NSCopying implementation
@@ -137,7 +146,8 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
             supportedVideoFormats: self.supportedVideoFormats,
             multiController: self.multiController,
             useFramePacing: self.useFramePacing,
-            serverCert: self.serverCert
+            serverCert: self.serverCert,
+            controllerSlotOffset: self.controllerSlotOffset
         )
     }
 }

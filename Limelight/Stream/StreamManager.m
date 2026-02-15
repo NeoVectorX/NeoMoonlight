@@ -126,19 +126,10 @@
         return;
     }
     
-    [_connection terminate];
-    
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        while ([self isExecuting] || ![self isFinished]) {
-            [NSThread sleepForTimeInterval:0.05];
-        }
-        
-        if (completion) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion();
-            });
-        }
-    });
+    // Use terminateWithCompletion to get called back AFTER LiStopConnection()
+    // has fully finished and released initLock. This prevents the next connection
+    // from hitting an initLock timeout.
+    [_connection terminateWithCompletion:completion];
 }
 
 - (BOOL) launchApp:(HttpManager*)hMan receiveSessionUrl:(NSString**)sessionUrl {

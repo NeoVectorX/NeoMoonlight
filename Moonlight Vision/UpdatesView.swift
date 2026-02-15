@@ -2,7 +2,7 @@
 //  UpdatesView.swift
 //  Moonlight
 //
-//  Created by camy on 2/2/25.
+//  
 //  Copyright © 2025 Moonlight Game Streaming Project. All rights reserved.
 //
 
@@ -27,34 +27,136 @@ struct UpdatesView: View {
                         .foregroundColor(.white.opacity(0.7))
                         .padding(.horizontal, 24)
                     
+                    // Version 12.0
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Neo Moonlight Version 11.1 December 2025")
+                        Text("Neo Moonlight Version 12.0 - PLATO EDITION (February 2026)")
                             .font(.headline)
                             .foregroundColor(.white)
                         
-                        ChangelogItem(text: "Complete UI/UX overhaul")
-                        ChangelogItem(text: "Added a Moonlight user guide")
-                        ChangelogItem(text: "Added multiple dimming options")
-                        ChangelogItem(text: "Added 360° environments")
-                        ChangelogItem(text: "Added curvature presets to match popular gaming monitor industry standards")
-                        ChangelogItem(text: "Icons automatically hide for better immersion")
-                        ChangelogItem(text: "Added statistics overlay to Immersive mode")
-                        ChangelogItem(text: "Added preset color grading options")
-                        ChangelogItem(text: "Added a tilt feature to Curved Display mode")
-                        ChangelogItem(text: "Increased options for framerate and bitrate")
-                        ChangelogItem(text: "Added a disconnect button in the main menu while streaming")
-                        ChangelogItem(text: "Updated Renderers to a more user-friendly naming structure")
-                        ChangelogItem(text: "Implemented Apple's new low-latency streaming entitlement for enhanced streaming performance")
-                        ChangelogItem(text: "Added new toggle for switching between spatial audio and stereo modes for optimized gaming audio")
-                        ChangelogItem(text: "Added AV1 Codec support for M5 Owners")
-                        ChangelogItem(text: "Rounded UI corners slightly to better match visionOS aesthetic design")
-                        ChangelogItem(text: "Set aspect ratio to automatically configure when streaming")
-                        ChangelogItem(text: "Added toggle to hide system cursor to remove duplicate mouse cursors")
+                        ChangelogItem(text: "Experimental: Couch Co-op via SharePlay - Play couch co-op games with your friend. This is an extremely experimental feature, so please bear with any bugs or issues you may encounter. IMPORTANT: read co-op instructions in the user guide first")
+                        ChangelogItem(text: "Added Gaze / Touch control to curved display mode, this was uber challenging to make work across all curvatures, resolutions, sizes, etc.")
+                        ChangelogItem(text: "Added Gaze Control cursor adjustment in settings. If the gaze control cursor is slightly off for you, use this to make minor adjustments")
+                        ChangelogItem(text: "Added Gaze / Touch Control to Flat Display Mode.")
+                        ChangelogItem(text: "Added keyboard support to Flat Display mode")
+                        ChangelogItem(text: "Added 'Reactive V1, V2 and Starfield' lighting presets that dynamically adjust based on screen content")
+                        ChangelogItem(text: "Added 5 new 360° environments")
+                        ChangelogItem(text: "Added 3D SBS mode to Flat Display mode")
+                        ChangelogItem(text: "Added co-op mode button and reorganized main menu layout for improved accessibility and workflow")
+                        ChangelogItem(text: "Added Gaze Control / Screen Adjust / Controller Mode toggle for curved display to easily switch between gaze/touch control, screen adjustment, and controller input. This was added to avoid conflict with screen interaction and the new gaze control. Controller mode must be enabled for gamepads connected directly to the Vision Pro Bluetooth to function")
+                        ChangelogItem(text: "Added option to choose default control mode in settings")
+                        ChangelogItem(text: "Added option to choose preferred cursor control method in settings (Gaze/Touch)")
+                        ChangelogItem(text: "Changed Renderer name to Display Mode in settings")
+                        ChangelogItem(text: "Added co-op mode external IP address help guide")
+                        ChangelogItem(text: "Fixed PS5 controller rumble")
+                        ChangelogItem(text: "Added custom resolution selection in dropdown")
+                        ChangelogItem(text: "Added more screen resolutions and categorized them by aspect ratio")
+                        ChangelogItem(text: "Added keyboard support to curved display mode. This requires the user to click an input bar below the screen to appear. Curved display keyboard solution had to be different due to the limitation of immersive mode and the lack of visibility of external elements")
+                        ChangelogItem(text: "Updated user guide with co-op connection info")
+                        ChangelogItem(text: "Minor UI panel fixes and adjustments")
+                        ChangelogItem(text: "Fixed cursor jitter in curved display mode")
+                        ChangelogItem(text: "Fixed memory leak")
                     }
                     .padding(24)
                     .background(
                         ZStack {
                             // Depth shadow
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(Color.black.opacity(0.3))
+                                .offset(y: 6)
+                                .blur(radius: 12)
+                            
+                            // Main card
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 20)
+                                        .strokeBorder(
+                                            LinearGradient(
+                                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ),
+                                            lineWidth: 1
+                                        )
+                                )
+                        }
+                    )
+                    .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+                    .padding(.horizontal, 24)
+                }
+                
+                // Support the Developer Section
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Support Me on Ko-fi")
+                        .font(.headline)
+                        .foregroundColor(.white.opacity(0.7))
+                        .padding(.horizontal, 24)
+                    
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack(spacing: 12) {
+                                Image("kofi")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 50, height: 50)
+                                    .cornerRadius(8)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Enjoying the app?")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                }
+                            }
+                            
+                            Text("Neo Moonlight is simply my vision of Moonlight on the Vision Pro. If this app has improved your experience and you'd like to leave a tip, it would be greatly appreciated.")
+                                .font(.body)
+                                .foregroundColor(.white.opacity(0.85))
+                                .fixedSize(horizontal: false, vertical: true)
+                            
+                            Link(destination: URL(string: "https://ko-fi.com/neovectorx")!) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "heart.fill")
+                                        .font(.system(size: 16))
+                                    Text("Support on Ko-fi")
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [
+                                                    Color(red: 0.7, green: 0.3, blue: 0.9),
+                                                    Color(red: 0.85, green: 0.6, blue: 0.95)
+                                                ],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(
+                                            LinearGradient(
+                                                colors: [.white.opacity(0.4), .white.opacity(0.1)],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            ),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .shadow(color: Color(red: 0.7, green: 0.3, blue: 0.9).opacity(0.4), radius: 12, x: 0, y: 6)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 4)
+                        }
+                    }
+                    .padding(24)
+                    .background(
+                        ZStack {
                             RoundedRectangle(cornerRadius: 20)
                                 .fill(Color.black.opacity(0.3))
                                 .offset(y: 6)
@@ -112,7 +214,7 @@ struct UpdatesView: View {
                             Link("Moonlight visionOS Port", destination: URL(string: "https://github.com/RikuKunMS2/moonlight-ios-vision/tree/vision-testflight")!)
                                 .font(.body)
                             
-                            Text("This is a modified fork with enhanced visionOS gaming features and UI changes.")
+                            Text("This is a modified fork of the original XrOS port by RikuKunMS2.")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.6))
                                 .padding(.top, 4)
@@ -148,6 +250,12 @@ struct UpdatesView: View {
                             Text("• JFuellem - Controller crash fixes")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
+                            Text("• linggan-ua - Black screen recovery fixes")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                            Text("• Max T (ALVR Project) - AV1 Parser")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
                         }
                         
                         VStack(alignment: .leading, spacing: 8) {
@@ -161,14 +269,24 @@ struct UpdatesView: View {
                         }
                         
                         VStack(alignment: .leading, spacing: 8) {
+                            Text("Special Thanks")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                            Text("• Samantha - Thank you for the countless hours of testing and dealing with me devoting nearly all of my time coding this app the past few months. 💜")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Testers")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
-                            Text("• skynet01 - Beta testing and feedback")
+                            Text("• skynet01 - Beta testing, suggestions, and feedback")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
-                            Text("• Delt31 - Beta testing and feedback")
+                            Text("• Delt31 - Beta testing, suggestions, and feedback")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.7))
                         }
@@ -181,114 +299,6 @@ struct UpdatesView: View {
                         Link("View all contributors on GitHub", destination: URL(string: "https://github.com/moonlight-stream/moonlight-ios/graphs/contributors")!)
                             .font(.body)
                             .padding(.top, 4)
-                    }
-                    .padding(24)
-                    .background(
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color.black.opacity(0.3))
-                                .offset(y: 6)
-                                .blur(radius: 12)
-                            
-                            // Main card - matching ComputerView blue background
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.95))
-                                .overlay(
-                                    LinearGradient(
-                                        colors: [
-                                            Color(red: 0.5, green: 0.7, blue: 1.0).opacity(0.14),
-                                            Color(red: 0.28, green: 0.46, blue: 0.88).opacity(0.10),
-                                            Color(red: 0.5, green: 0.7, blue: 1.0).opacity(0.06)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .strokeBorder(
-                                            LinearGradient(
-                                                colors: [.white.opacity(0.15), .white.opacity(0.05)],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            ),
-                                            lineWidth: 1
-                                        )
-                                )
-                        }
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
-                    .padding(.horizontal, 24)
-                }
-                
-                // Support the Developer Section
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Support the Developer")
-                        .font(.headline)
-                        .foregroundColor(.white.opacity(0.7))
-                        .padding(.horizontal, 24)
-                    
-                    VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 12) {
-                                Image("kofi")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 50, height: 50)
-                                    .cornerRadius(8)
-                                
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Support Neo Moonlight")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.white)
-                                }
-                            }
-                            
-                            Text("I'm a one-person team trying to enhance the Moonlight gaming experience as much as possible. If you enjoy the app and would like to support me, any contribution is greatly appreciated!")
-                                .font(.body)
-                                .foregroundColor(.white.opacity(0.85))
-                                .fixedSize(horizontal: false, vertical: true)
-                            
-                            Link(destination: URL(string: "https://ko-fi.com/neovectorx")!) {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "heart.fill")
-                                        .font(.system(size: 16))
-                                    Text("Support on Ko-fi")
-                                        .font(.system(size: 16, weight: .semibold))
-                                }
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color(red: 0.7, green: 0.3, blue: 0.9),
-                                                    Color(red: 0.85, green: 0.6, blue: 0.95)
-                                                ],
-                                                startPoint: .leading,
-                                                endPoint: .trailing
-                                            )
-                                        )
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(
-                                            LinearGradient(
-                                                colors: [.white.opacity(0.4), .white.opacity(0.1)],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            ),
-                                            lineWidth: 1
-                                        )
-                                )
-                                .shadow(color: Color(red: 0.7, green: 0.3, blue: 0.9).opacity(0.4), radius: 12, x: 0, y: 6)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.top, 4)
-                        }
                     }
                     .padding(24)
                     .background(

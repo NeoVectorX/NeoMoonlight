@@ -147,11 +147,11 @@ struct _RealityKitClassic3DView: View {
 
     private func rkPresetName(_ v: Int32) -> String {
         switch v {
-        case 0: return "Default"
-        case 1: return "Cinematic"
-        case 2: return "Vivid"
-        case 3: return "Realistic"
-        default: return "Default"
+        case 0: return "FILTER: Default"
+        case 1: return "FILTER: Cinematic"
+        case 2: return "FILTER: Vi\u{200A}vid"  // Hair space between I and V
+        case 3: return "FILTER: Realistic"
+        default: return "FILTER: Default"
         }
     }
 
@@ -346,12 +346,13 @@ struct _RealityKitClassic3DView: View {
                         hdrSettingsProvider: nil,
                         enhancementsProvider: {
                             let p = self.viewModel.streamSettings.uikitPreset
+                            let warmth: Float = self.viewModel.streamSettings.enableHdr ? 0.03 : 0.0
                             switch p {
-                            case 0: return (1.0, 1.0)     // Default
-                            case 1: return (1.15, 1.0)    // Cinematic
-                            case 2: return (1.25, 1.0)    // Vivid
-                            case 3: return (0.90, 1.05)   // Realistic
-                            default: return (1.0, 1.0)
+                            case 0: return (1.0, 1.0, warmth)     // Default
+                            case 1: return (1.15, 1.0, warmth)    // Cinematic
+                            case 2: return (1.25, 1.0, warmth)    // Vivid
+                            case 3: return (0.90, 1.05, warmth)   // Realistic
+                            default: return (1.0, 1.0, warmth)
                             }
                         }
                     ) { texture, correctedResultion in
@@ -546,11 +547,11 @@ struct _RealityKitStreamView: View {
 
     private func rkPresetName(_ v: Int32) -> String {
         switch v {
-        case 0: return "Default"
-        case 1: return "Cinematic"
-        case 2: return "Vivid"
-        case 3: return "Realistic"
-        default: return "Default"
+        case 0: return "FILTER: Default"
+        case 1: return "FILTER: Cinematic"
+        case 2: return "FILTER: Vi\u{200A}vid"  // Hair space between I and V
+        case 3: return "FILTER: Realistic"
+        default: return "FILTER: Default"
         }
     }
 

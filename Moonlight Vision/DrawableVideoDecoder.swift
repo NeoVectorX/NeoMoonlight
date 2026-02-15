@@ -34,8 +34,16 @@ struct HDRParams {
 private struct ColorEnhancementUniforms {
     var saturation: Float
     var contrast: Float
+    var warmth: Float
     var padding1: Float
-    var padding2: Float
+}
+
+private struct ShaderFullHDRParams {
+    var boost: Float
+    var contrast: Float
+    var saturation: Float
+    var brightness: Float
+    var mode: Int32
 }
 
 let kCVImageBufferYCbCrMatrix_ITU_R_2020 = "ITU_R_2020" as CFString
@@ -104,7 +112,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
     private var hdrEnabled: Bool
     private var hdrMetadata: SS_HDR_METADATA = SS_HDR_METADATA()
 
-    private var enhancementsProvider: (() -> (Float, Float))? = nil
+    private var enhancementsProvider: (() -> (Float, Float, Float))? = nil
 
     private var copyPipelineState: MTLRenderPipelineState?
     private var copyPipelineFormat: MTLPixelFormat?
@@ -124,7 +132,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         useFramePacing: Bool,
         enableHDR: Bool = false,
         hdrSettingsProvider: (() -> HDRParams)? = nil,
-        enhancementsProvider: (() -> (Float, Float))? = nil,
+        enhancementsProvider: (() -> (Float, Float, Float))? = nil,
         callbackToRender: @MainActor @escaping (TextureResource.DrawableQueue, (Int, Int)?) -> Void
     ) {
         metalFormat = enableHDR ? .rgba16Float : .bgra8Unorm_srgb
@@ -370,11 +378,22 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             renderEncoder.setFragmentBuffer(pb, offset: 0, index: 0)
         }
 
-        let satCon = enhancementsProvider?() ?? (1.0, 1.0)
-        var enh = ColorEnhancementUniforms(saturation: satCon.0, contrast: satCon.1, padding1: 0, padding2: 0)
-        if let eb = mtlDevice.makeBuffer(bytes: &enh, length: MemoryLayout<ColorEnhancementUniforms>.size, options: .storageModeShared) {
-            renderEncoder.setFragmentBuffer(eb, offset: 0, index: 2)
-        }
+        var full = hdrSettingsProvider?() ?? HDRParams(
+            boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 1
+        )
+        var fullParams = ShaderFullHDRParams(
+            boost: full.boost,
+            contrast: full.contrast,
+            saturation: full.saturation,
+            brightness: full.brightness,
+            mode: full.mode
+        )
+        renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
+
+        // Existing enhancements (buffer 2)
+        let satConWarm = enhancementsProvider?() ?? (1.0, 1.0, 0.0)
+        var enh = ColorEnhancementUniforms(saturation: satConWarm.0, contrast: satConWarm.1, warmth: satConWarm.2, padding1: 0)
+        renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniforms>.size, index: 2)
 
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
@@ -873,7 +892,12 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
         // replacing the 3/4 nalu headers with a 4 byte length, so add an extra byte on top of the original length for each 3-byte nalu header
         let blockBufferLength = buffer.count + naluIndices.filter(\.threeByteHeader).count
-        let blockBuffer = try! CMBlockBuffer(length: blockBufferLength, flags: .assureMemoryNow)
+        
+        // Safe allocation with graceful frame dropping on OOM
+        guard let blockBuffer = try? CMBlockBuffer(length: blockBufferLength, flags: .assureMemoryNow) else {
+            print("⚠️ Failed to allocate CMBlockBuffer (\(blockBufferLength) bytes) - dropping frame due to memory pressure")
+            return nil
+        }
 
         var contiguousBuffer: CMBlockBuffer!
         if !CMBlockBufferIsRangeContiguous(blockBuffer, atOffset: 0, length: 0) {
@@ -919,7 +943,13 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         var offset = 0
 
         let umrbp = UnsafeMutableRawBufferPointer(start: buffer.baseAddress, count: buffer.count)
-        let bb = try! CMBlockBuffer(buffer: umrbp, deallocator: { _, _ in buffer.deallocate() }, flags: .assureMemoryNow)
+        
+        // Safe allocation with graceful frame dropping on OOM
+        guard let bb = try? CMBlockBuffer(buffer: umrbp, deallocator: { _, _ in buffer.deallocate() }, flags: .assureMemoryNow) else {
+            print("⚠️ Failed to create CMBlockBuffer from buffer (\(buffer.count) bytes) - dropping frame due to memory pressure")
+            buffer.deallocate()
+            return nil
+        }
 
         let pointer = UnsafeMutablePointer<UInt8>(OpaquePointer(buffer.baseAddress!))!
         for index in naluIndices {
@@ -930,10 +960,6 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             offset += 4
 
             offset += index.payloadSize
-        }
-
-        if bb == nil {
-            buffer.deallocate()
         }
 
         return bb
