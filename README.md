@@ -1,4 +1,4 @@
-![banner](https://github.com/NeoVectorX/NeoMoonlight/blob/vision-testflight/neomoonlight-banner1.jpg)
+![banner](https://github.com/NeoVectorX/NeoMoonlight/blob/main/NeoMoonlight-Banner3.png)
 
 # Neo Moonlight (Vision Pro XrOS Fork)
 
