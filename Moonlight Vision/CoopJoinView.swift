@@ -17,7 +17,7 @@ struct CoopJoinView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.dismiss) private var dismiss
     
-    @StateObject private var coordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coordinator = CoopSessionCoordinator.shared
     
     @Binding var isPresented: Bool
     @Binding var parentIsPresented: Bool  // To dismiss the entire co-op flow
@@ -518,7 +518,10 @@ struct CoopJoinView: View {
         debugLog("[CoopJoin] Dismissing old windows...")
         dismissWindow(id: "flatDisplayWindow")
         dismissWindow(id: "classicStreamingWindow")
-        await dismissImmersiveSpace()
+        if viewModel.isImmersiveSpaceOpen {
+            await dismissImmersiveSpace()
+            viewModel.isImmersiveSpaceOpen = false
+        }
         
         // Wait 500ms for OS to fully tear down old window and release resources
         debugLog("[CoopJoin] Waiting 500ms for old window cleanup...")
@@ -528,6 +531,7 @@ struct CoopJoinView: View {
         // Now open the new window with the new config
         if renderer == .curvedDisplay {
             let result = try? await openImmersiveSpace(id: renderer.windowId, value: config)
+            viewModel.isImmersiveSpaceOpen = true
             debugLog("[CoopJoin] Immersive space result: \(String(describing: result))")
         } else {
             openWindow(id: renderer.windowId, value: config)

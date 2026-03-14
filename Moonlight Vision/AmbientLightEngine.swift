@@ -15,6 +15,7 @@ actor AmbientLightEngine {
     // 0.15s = ~6.6 updates per second. Fast enough for "reactive" feel, slow enough to save M2/R1 power.
     private let updateInterval: TimeInterval = 0.15 
     private var isProcessing = false
+    private var lastSentColor: SIMD3<Float>?
 
     init?() {
         guard let dev = MTLCreateSystemDefaultDevice(),
@@ -74,18 +75,38 @@ actor AmbientLightEngine {
             // Read result directly from shared memory
             let pointer = self.resultBuffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: 1)
             let c = pointer.pointee
+            let newColor = SIMD3<Float>(c.x, c.y, c.z)
             
-            // Send to main thread for UI update
-            Task { @MainActor in
-                NotificationCenter.default.post(
-                    name: .ambientAverageColorUpdated,
-                    object: nil,
-                    userInfo: ["r": c.x, "g": c.y, "b": c.z]
-                )
+            Task {
+                let lastColor = await self.lastSentColor
+                
+                // Delta check: only send if the color changed significantly
+                let threshold: Float = 0.02 // 2% change threshold across RGB channels
+                let shouldSend: Bool
+                
+                if let last = lastColor {
+                    let diff = abs(newColor.x - last.x) + abs(newColor.y - last.y) + abs(newColor.z - last.z)
+                    shouldSend = diff > threshold
+                } else {
+                    shouldSend = true
+                }
+                
+                if shouldSend {
+                    await self.updateLastSentColor(newColor)
+                    
+                    // Send to main thread for UI update
+                    await MainActor.run {
+                        NotificationCenter.default.post(
+                            name: .ambientAverageColorUpdated,
+                            object: nil,
+                            userInfo: ["r": newColor.x, "g": newColor.y, "b": newColor.z]
+                        )
+                    }
+                }
+                
+                // Unlock for the next frame
+                await self.unlock()
             }
-            
-            // Unlock for the next frame
-            Task { await self.unlock() }
         }
         
         commandBuffer.commit()
@@ -93,6 +114,10 @@ actor AmbientLightEngine {
     
     private func unlock() {
         isProcessing = false
+    }
+    
+    private func updateLastSentColor(_ color: SIMD3<Float>) {
+        lastSentColor = color
     }
 }
 

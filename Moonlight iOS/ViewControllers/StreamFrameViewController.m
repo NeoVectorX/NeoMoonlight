@@ -56,6 +56,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     BOOL _userIsInteracting;
     CGSize _keyboardSize;
     BOOL _stopStreamCalled;
+    BOOL _viewOnlyMode;  // visionOS: view is set up but stream is managed externally
     
     id<AnyVideoDecoderRenderer, MetalPresetControllable> _metalRenderer;
     
@@ -74,11 +75,9 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 
     Log(LOG_I, @"StreamFrameViewController: stopStream() called from SwiftUI.");
 
-    // Stop the stream manager (safe if already stopped)
-    if (_streamMan) {
-        [_streamMan stopStream];
-        _streamMan = nil;
-    }
+    // Grab a local reference and clear the instance variable
+    StreamManager *sm = _streamMan;
+    _streamMan = nil;
 
     // Clean up Metal renderer completely (if active) - with exception handling
     if (_metalRenderer) {
@@ -143,24 +142,145 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     // Reset display mode back to default
     [self updatePreferredDisplayMode:NO];
 
-    // UI feedback and teardown signal
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self->_spinner startAnimating];
-        [self->_stageLabel setText:@"Disconnected"];
-        [self->_stageLabel sizeToFit];
-        self->_stageLabel.hidden = NO;
-        self->_tipLabel.hidden = NO;
+    // Create a block for the final UI feedback and teardown signal
+    dispatch_block_t postTeardown = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_VISION
+            [self->_spinner startAnimating];
+            [self->_stageLabel setText:@"Disconnected"];
+            [self->_stageLabel sizeToFit];
+            self->_stageLabel.hidden = NO;
+            self->_tipLabel.hidden = NO;
+#endif
 
-        // Notify Swift that teardown is finished so reconnect can proceed safely
-        [[NSNotificationCenter defaultCenter] postNotificationName:StreamDidTeardownNotification object:self];
-    });
+            // Notify Swift that teardown is finished so reconnect can proceed safely
+            [[NSNotificationCenter defaultCenter] postNotificationName:StreamDidTeardownNotification object:self];
+        });
+    };
 
+    // Wait for the stream to fully stop before posting the teardown notification
+    if (sm) {
+        [sm stopStreamWithCompletion:postTeardown];
+    } else {
+        postTeardown();
+    }
+
+#if !TARGET_OS_VISION
     // Ensure config is cleared so a stale config isn't reused accidentally
+    // On visionOS, we preserve config for restartStream() to use
     self.streamConfig = nil;
+#endif
     
     Log(LOG_I, @"StreamFrameViewController: stopStream() completed");
 }
+
+- (void)restartStream {
+    Log(LOG_I, @"StreamFrameViewController: restartStream() called");
+    
+    // If stream is still running, stop it first (but keep config)
+    if (_streamMan) {
+        [_streamMan stopStreamWithCompletion:nil];
+        _streamMan = nil;
+    }
+    
+    // Reset the stop flag so we can stop again later
+    _stopStreamCalled = NO;
+    
+    // Guard: need a valid config to restart
+    if (!self.streamConfig) {
+        Log(LOG_E, @"restartStream() failed: no streamConfig");
+        return;
+    }
+    
+    // Recreate controller support
+    if (_controllerSupport) {
+        [_controllerSupport cleanup];
+    }
+    _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
+    
+    // Recreate the stream manager (same as viewDidLoad)
+    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                      rendererProvider:^id<AnyVideoDecoderRenderer> __strong {
+        return [[VideoDecoderRenderer alloc] initWithView:self->_streamView
+                                                callbacks:self
+                                        streamAspectRatio:(float)self.streamConfig.width / (float)self.streamConfig.height
+                                          useFramePacing:self.streamConfig.useFramePacing];
+    }
+                                   connectionCallbacks:self];
+    
+    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
+    [opQueue addOperation:_streamMan];
+    
+    Log(LOG_I, @"StreamFrameViewController: restartStream() - stream restarted");
+}
 // --- END CHANGE ---
+
+#pragma mark - visionOS External Stream Control
+
+- (void)setViewOnlyMode:(BOOL)viewOnly {
+    _viewOnlyMode = viewOnly;
+    Log(LOG_I, @"StreamFrameViewController: viewOnlyMode set to %@", viewOnly ? @"YES" : @"NO");
+}
+
+- (BOOL)isStreamActive {
+    return _streamMan != nil;
+}
+
+- (void)startStreamExternal {
+    Log(LOG_I, @"StreamFrameViewController: startStreamExternal() called");
+    
+    if (_streamMan) {
+        Log(LOG_W, @"startStreamExternal: stream already active, ignoring");
+        return;
+    }
+    
+    if (!self.streamConfig) {
+        Log(LOG_E, @"startStreamExternal: no streamConfig");
+        return;
+    }
+    
+    // Reset stop flag
+    _stopStreamCalled = NO;
+    
+    // Ensure controller support exists
+    if (!_controllerSupport) {
+        _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
+    }
+    
+    // Create and start the stream manager
+    _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
+                                      rendererProvider:^id<AnyVideoDecoderRenderer> __strong {
+        return [[VideoDecoderRenderer alloc] initWithView:self->_streamView
+                                                callbacks:self
+                                        streamAspectRatio:(float)self.streamConfig.width / (float)self.streamConfig.height
+                                          useFramePacing:self.streamConfig.useFramePacing];
+    }
+                                   connectionCallbacks:self];
+    
+    NSOperationQueue* opQueue = [[NSOperationQueue alloc] init];
+    [opQueue addOperation:_streamMan];
+    
+    Log(LOG_I, @"StreamFrameViewController: startStreamExternal() - stream started");
+}
+
+- (void)stopStreamExternal {
+    Log(LOG_I, @"StreamFrameViewController: stopStreamExternal() called");
+    
+    if (!_streamMan) {
+        Log(LOG_I, @"stopStreamExternal: no stream to stop");
+        return;
+    }
+    
+    StreamManager* sm = _streamMan;
+    _streamMan = nil;
+    
+    [sm stopStreamWithCompletion:^{
+        Log(LOG_I, @"StreamFrameViewController: stopStreamExternal() — LiStopConnection completed");
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:StreamDidTeardownNotification object:nil];
+        });
+    }];
+}
 
 - (void)viewDidAppear:(BOOL)animated
 {
@@ -194,6 +314,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     
     _settings = [[[DataManager alloc] init] getSettings];
 
+#if !TARGET_OS_VISION
     _spinner = [[UIActivityIndicatorView alloc] init];
     [self.view addSubview:_spinner];
     [_spinner setUserInteractionEnabled:NO];
@@ -218,6 +339,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     _stageLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [_stageLabel.topAnchor constraintEqualToAnchor:_spinner.bottomAnchor constant:20.0].active = YES;
     [_stageLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor].active = YES;
+#endif
 
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
     _inactivityTimer = nil;
@@ -253,6 +375,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     [self.view addGestureRecognizer:_exitSwipeRecognizer];
 #endif
     
+#if !TARGET_OS_VISION
     _tipLabel = [[UILabel alloc] init];
     [self.view addSubview:_tipLabel];
     [_tipLabel setUserInteractionEnabled:NO];
@@ -269,6 +392,17 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     _tipLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [_tipLabel.topAnchor constraintEqualToAnchor:_stageLabel.bottomAnchor constant:20.0].active = YES;
     [_tipLabel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor].active = YES;
+#endif
+
+#if TARGET_OS_VISION
+    // visionOS: If view-only mode, skip stream creation - Swift will manage it
+    if (_viewOnlyMode) {
+        Log(LOG_I, @"StreamFrameViewController: view-only mode - skipping stream creation");
+        // Still add the stream view to the hierarchy
+        [self.view addSubview:_streamView];
+        return;
+    }
+#endif
 
     _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
                                       rendererProvider:^id<AnyVideoDecoderRenderer> __strong {
@@ -442,6 +576,17 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     });
 }
 
+- (NSString*)getStatsOverlayText {
+    return [_streamMan getStatsOverlayText];
+}
+
+- (BOOL)toggleKeyboard {
+    if (_streamView) {
+        return [_streamView toggleKeyboard];
+    }
+    return NO;
+}
+
 - (void)updateOverlayText:(NSString*)text {
     if (_overlayView == nil) {
         _overlayView = [[UITextView alloc] init];
@@ -582,15 +727,18 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 - (void) connectionStarted {
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_VISION
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;
         self->_tipLabel.hidden = YES;
+#endif
         
         [self->_streamView showOnScreenControls];
         
         [self->_controllerSupport connectionEstablished];
         
+#if !TARGET_OS_VISION
         if (self->_settings.statsOverlay) {
             self->_statsUpdateTimer = [NSTimer scheduledTimerWithTimeInterval:1.0f
                                                                        target:self
@@ -598,6 +746,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
                                                                      userInfo:nil
                                                                       repeats:YES];
         }
+#endif
         
         if (self->_connectedCallback) {
             self->_connectedCallback();
@@ -701,6 +850,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 
 - (void) stageStarting:(const char*)stageName {
     Log(LOG_I, @"Starting %s", stageName);
+#if !TARGET_OS_VISION
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString* lowerCase = [NSString stringWithFormat:@"%s in progress...", stageName];
         NSString* titleCase = [[[lowerCase substringToIndex:1] uppercaseString] stringByAppendingString:[lowerCase substringFromIndex:1]];
@@ -708,6 +858,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
         [self->_stageLabel sizeToFit];
         self->_stageLabel.center = CGPointMake(self.view.frame.size.width / 2, self->_stageLabel.center.y);
     });
+#endif
 }
 
 - (void) stageComplete:(const char*)stageName {
@@ -755,24 +906,26 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 - (void) launchFailed:(NSString*)message {
     Log(LOG_I, @"Launch failed: %@", message);
 
-    [UIApplication sharedApplication].idleTimerDisabled = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [UIApplication sharedApplication].idleTimerDisabled = NO;
 
 #if TARGET_OS_VISION
-    // Avoid alert presentation on visionOS; return to main and notify Swift
-    if (self->_disconnectedCallback) {
-        self->_disconnectedCallback();
-    }
-    [self returnToMainFrame];
-#else
-    UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Connection Error"
-                                                                   message:message
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [Utils addHelpOptionToDialog:alert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
+        // Avoid alert presentation on visionOS; return to main and notify Swift
+        if (self->_disconnectedCallback) {
+            self->_disconnectedCallback();
+        }
         [self returnToMainFrame];
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
+#else
+        UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Connection Error"
+                                                                       message:message
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [Utils addHelpOptionToDialog:alert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
+            [self returnToMainFrame];
+        }]];
+        [self presentViewController:alert animated:YES completion:nil];
 #endif
+    });
 }
 
 - (void)rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor {
@@ -862,7 +1015,9 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 }
 
 - (void) videoContentShown {
+#if !TARGET_OS_VISION
     [_spinner stopAnimating];
+#endif
     [self.view setBackgroundColor:[UIColor blackColor]];
 
     // Notify Swift the first frame has been shown so window management can proceed safely

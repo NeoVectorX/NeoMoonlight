@@ -3,6 +3,7 @@ import SwiftUI
 struct CenterPresetPopup: View {
     var text: String
     var icon: String
+    var width: CGFloat = 713
     
     var body: some View {
         let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
@@ -35,7 +36,7 @@ struct CenterPresetPopup: View {
                 .minimumScaleFactor(0.85)
             Spacer()
         }
-        .frame(width: 713, height: 132)
+        .frame(width: width, height: 132)
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
         .background(

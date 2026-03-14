@@ -21,29 +21,31 @@ final class ThreadSafeHDRSettings: @unchecked Sendable {
     }
 }
 
-// MARK: - Frame Mailbox (Thread-Safe Handoff)
-
-final class FrameMailbox: @unchecked Sendable {
-   
-    private let lock = OSAllocatedUnfairLock<TextureResource.DrawableQueue?>(initialState: nil)
-    
-    // Decoder calls this to drop off a frame (Background Thread)
-    func deposit(_ drawable: TextureResource.DrawableQueue) {
-        lock.withLock { $0 = drawable }
-    }
-    
- 
-    func collect() -> TextureResource.DrawableQueue? {
-        lock.withLock {
-            let d = $0
-            $0 = nil // Empty the box so we don't draw the same frame twice
-            return d
-        }
-    }
-}
-
 class HeadPositionStorage {
     var positionInScreenSpace: SIMD3<Float> = .zero
+    var lastHeadWorldPos: SIMD3<Float> = .zero
+    var lastDragTime: CFTimeInterval = 0
+    var lastGeneratedCurve: Float?
+    var lastGeneratedAspect: Float?
+    var statsScaleInitialized: Bool = false
+    
+    // Entity references (set during RealityView make/update, stored here to avoid @State warnings)
+    var headAnchor: AnchorEntity?
+    var controlsEntity: Entity?
+    var menuEntity: Entity?
+    var dimmerDome: ModelEntity?
+    var dimmerDomePurple: ModelEntity?
+    var environmentDome: ModelEntity?
+    
+    // Initialization tracking
+    var hasInitializedPosition: Bool = false
+    var menuScaleInitialized: Bool = false
+    var inputScaleInitialized: Bool = false
+    var tutorialScaleInitialized: Bool = false
+    
+    // Optimization tracking (to avoid redundant updates during RealityView update closure)
+    var lastAppliedDimLevel: Int = -1
+    var lastEnvironmentSphereLevelApplied: Int = 0
 }
 
 struct InputCaptureView: UIViewRepresentable {
@@ -75,18 +77,6 @@ struct InputCaptureView: UIViewRepresentable {
         uiView.headStorage = headStorage
         uiView.allowTouchPassthrough = !showKeyboard && !isControllerMode
         uiView.showVirtualKeyboard = showKeyboard
-        
-        // ALWAYS aggressively reclaim first responder (needed for controller input)
-        if !uiView.isFirstResponder {
-            _ = uiView.becomeFirstResponder()
-            
-            // Double-check and force if needed
-            if !uiView.isFirstResponder {
-                DispatchQueue.main.async {
-                    _ = uiView.becomeFirstResponder()
-                }
-            }
-        }
     }
 }
 
@@ -602,12 +592,30 @@ struct CurvedDisplayStreamView: View {
                     .ignoresSafeArea()
                     .onAppear {
                         debugLog("👻 Ghost view detected (UUID \(config.sessionUUID) != active \(viewModel.activeSessionToken)). Suppressing.")
+                        recoverFromStaleWindow()
                     }
             }
         } else {
             // During window transition (dismiss -> wait -> open), config may be nil.
             // Show black screen to prevent zombie view from initializing.
-            Color.black.ignoresSafeArea()
+            Color.black
+                .ignoresSafeArea()
+                .onAppear {
+                    recoverFromStaleWindow()
+                }
+        }
+    }
+    
+    private func recoverFromStaleWindow() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if !viewModel.activelyStreaming && viewModel.streamState == .idle {
+                print("[CurvedDisplay] Stale window detected - dismissing and opening mainView")
+                openWindow(id: "mainView")
+                Task {
+                    await dismissImmersiveSpace()
+                    viewModel.isImmersiveSpaceOpen = false
+                }
+            }
         }
     }
 }
@@ -628,7 +636,7 @@ struct _CurvedDisplayStreamView: View {
     @State private var streamMan: StreamManager?
     @State private var controllerSupport: ControllerSupport?
     @ObservedObject var connectionCallbacks: ObservableConnectionManager = .init()
-    @StateObject private var coopCoordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coopCoordinator = CoopSessionCoordinator.shared
     
     @State private var texture: TextureResource
     @State private var screen: ModelEntity = ModelEntity()
@@ -638,15 +646,17 @@ struct _CurvedDisplayStreamView: View {
     @State private var curveAnimationMultiplier: Float = 1.0
     @State private var animationTimer: Timer?
     
-    @State private var curvaturePreset: CurvaturePreset = .curved
-    @State private var tiltAngle: Float = 0.0
+    @State private var curvaturePreset: CurvaturePreset = CurvaturePreset(rawValue: UserDefaults.standard.integer(forKey: "curved.curvaturePreset")) ?? .curved
+    @AppStorage("curved.curvaturePreset") private var savedCurvaturePreset: Int = CurvaturePreset.curved.rawValue
+    @State private var tiltAngle: Float = Float(UserDefaults.standard.double(forKey: "curved.tiltAngle"))
+    @AppStorage("curved.tiltAngle") private var savedTiltAngle: Double = 0.0
     @State private var tiltDirection: Int = 1
     
     @State private var screenPosition: SIMD3<Float> = SIMD3<Float>(0, 1.1, -1.0)
     @State private var screenScale: Float = 1.8
     @State private var isLocked: Bool = false
     @State private var startDragPosition: SIMD3<Float>? = nil
-    @State private var hasInitializedPosition = false
+    // hasInitializedPosition moved to headStorage to avoid "Modifying state during view update"
     
     @State private var safeHDRSettings = ThreadSafeHDRSettings(
         params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 0)
@@ -655,12 +665,24 @@ struct _CurvedDisplayStreamView: View {
 
     @State private var showVirtualKeyboard = false
     @State private var hideControls: Bool = false
+    @State private var controlsExpanded: Bool = false
+    /// Drives the stagger animation; when expanded view appears we go false→true so icons animate in. On collapse we go true→false then hide after delay.
+    @State private var expandedContentRevealed: Bool = false
+    
+    // Star distance preset persistence
+    @AppStorage("starfield.distancePreset") private var starDistancePresetRawValue: Int = StarDistancePreset.close.rawValue
+    @AppStorage("removeRoundedCorners") private var removeRoundedCorners: Bool = false
+    @AppStorage("darkControlsMode") private var darkControlsMode: Bool = false
+    
+    private var starDistancePreset: StarDistancePreset {
+        get { StarDistancePreset(rawValue: starDistancePresetRawValue) ?? .close }
+    }
     
     // Particle Manager for Nebula preset
     @State private var particleManager = ParticleManager()
     
-    // Frame Mailbox for stutter-free, dizziness-free video display
-    private let frameMailbox = FrameMailbox()
+    // Reference to the video decoder for controlling reactive dimming
+    @State private var videoDecoder: DrawableVideoDecoder?
     
     // Keyboard Override State
     @State private var keyboardInput: String = ""
@@ -668,24 +690,27 @@ struct _CurvedDisplayStreamView: View {
     @FocusState private var isKeyboardFocused: Bool
     
     @State private var hideTimer: Timer?
-    @State private var controlsEntity: Entity?
+    // controlsEntity moved to headStorage to avoid "Modifying state during view update"
     @State private var shouldClose = false
     @State private var hasPerformedTeardown = false
     @State private var needsResume = false
     @State private var spatialAudioMode: Bool = true
+    @State private var soundStageSize: SoundStageSize = .medium
     @State private var statsOverlayText: String = ""
     @State private var statsTimer: Timer?
     @State private var showScaleHUD: Bool = false
     @State private var showModeLabel: Bool = false
     @State private var modeLabelTimer: Timer?
     @State private var controlsHighlighted: Bool = false
+    /// Incremented on each control tap so sensoryFeedback fires (avoids quiet spatialized system sound in curved mode).
+    @State private var controlTapFeedbackTrigger: Int = 0
     @State private var immersiveSpaceSceneID: String?
     @State private var theaterEnvironmentEnabled = false
     @State private var showMenuPanel = false
-    @State private var menuEntity: Entity?
-    @State private var menuScaleInitialized = false
+    // menuEntity moved to headStorage to avoid "Modifying state during view update"
+    // menuScaleInitialized moved to headStorage to avoid "Modifying state during view update"
     @State private var menuBaseWidth: Float = 0
-    @State private var inputScaleInitialized = false
+    // inputScaleInitialized moved to headStorage to avoid "Modifying state during view update"
     @State private var inputBaseWidth: Float = 0
     @State private var swapInProgress = false
     @State private var menuPanelInstanceID = UUID()
@@ -696,18 +721,19 @@ struct _CurvedDisplayStreamView: View {
     @State private var showEnvironmentPicker = false
     @State private var showDimmingPicker = false
     @State private var inputMode: InputMode = .gazeControl // Three-mode input toggle (default: gaze control)
+    @State private var isHandGazeInputDisabled = false // Long press on control mode button to disable hand/gaze input
     @State private var gazeController = GazeInputController()
 
-    private let headStorage = HeadPositionStorage()
+    @State private var headStorage = HeadPositionStorage()
     
     @State private var renderGateOpen: Bool = true
     
     // Stats attachment sizing in meters (fixed width target)
-    @State private var statsScaleInitialized = false
+    // Note: statsScaleInitialized moved to headStorage to avoid "Modifying state during view update"
     @State private var statsBaseWidth: Float = 0
-    private let statsCardWidthMeters: Float = 0.55
+    private let statsCardWidthMeters: Float = 0.12
     
-    @State private var tutorialScaleInitialized = false
+    // tutorialScaleInitialized moved to headStorage to avoid "Modifying state during view update"
     @State private var tutorialBaseWidth: Float = 0
     private let tutorialCardWidthMeters: Float = 1.110
     
@@ -717,8 +743,8 @@ struct _CurvedDisplayStreamView: View {
     @State private var scaleHUDFadeTimer: Timer?
     @State private var environmentFadeTimer: Timer?
     
-    @State private var dimmerDome: ModelEntity?
-    @State private var dimmerDomePurple: ModelEntity?
+    // dimmerDome moved to headStorage to avoid "Modifying state during view update"
+    // dimmerDomePurple moved to headStorage to avoid "Modifying state during view update"
     @State private var purpleGradientTextureColors: TextureResource?
     @State private var purpleGradientTexturePurpleBlack: TextureResource?
     @State private var eclipseGradientTexture: TextureResource?
@@ -732,7 +758,20 @@ struct _CurvedDisplayStreamView: View {
     @State private var moonlightCyclePhase: CGFloat = 0.0
     private let dimAlphas: [CGFloat] = [0.0, 0.82]
     @State private var dimLevel: Int = 0
-    @State private var lastAppliedDimLevel: Int = -1
+    
+    // Preset brightness values (user-adjustable via long-press)
+    // Keys are dimLevels: 1=Night, 5=Midnight, 6=Twilight, 7=Dawn, 8=Sunrise, 9=Woodland, 14=Desert
+    @State private var presetBrightness: [Int: Double] = [:]
+    private let defaultPresetBrightness: [Int: Double] = [
+        1: 0.82,   // Night
+        5: 0.95,   // Midnight
+        6: 0.90,   // Twilight
+        7: 0.90,   // Dawn
+        8: 0.90,   // Sunrise
+        9: 0.90,   // Woodland
+        14: 0.90   // Desert
+    ]
+    // lastAppliedDimLevel moved to headStorage to avoid "Modifying state during view update"
     @State private var environmentSphereLevel: Int = 0
     @State private var environmentUSDZLevel: Int = 0
     @State private var moonlightMaterial: UnlitMaterial?
@@ -743,7 +782,7 @@ struct _CurvedDisplayStreamView: View {
     private let moonlightColorDeltaThresholdLowPower: Float = 0.03
     private let moonlightAlphaLowPower: CGFloat = 0.78
     
-    @State private var lastEnvironmentSphereLevelApplied: Int = 0
+    // lastEnvironmentSphereLevelApplied moved to headStorage to avoid "Modifying state during view update"
     
     @State private var modeBannerText: String = ""
     @State private var modeBannerIcon: String = "slider.horizontal.3"
@@ -752,6 +791,7 @@ struct _CurvedDisplayStreamView: View {
     @State private var presetOverlayText: String = ""
     @State private var presetOverlayIcon: String = "camera.filters"
     @State private var presetOverlayTimer: Timer?
+    @State private var starDistanceCycleTimer: Timer?
     @State private var presetCooldownUntil: Date? = nil
     
     // Co-op invite button state
@@ -771,7 +811,7 @@ struct _CurvedDisplayStreamView: View {
     
     @State private var isMenuOpen1: Bool = false
     
-    @State private var environmentDome: ModelEntity?
+    // environmentDome moved to headStorage to avoid "Modifying state during view update"
     @State private var usdzAboveTheClouds: Entity?
     @State private var usdzAnime: Entity?
     @State private var usdzJustSky: Entity?
@@ -802,7 +842,7 @@ struct _CurvedDisplayStreamView: View {
     @State private var guestAggressiveIDRTimer: Timer?
     
     var allowedScaleMax: Float { 8.0 }
-    var cornerRadiusFraction: Float { 0.018 }
+    var cornerRadiusFraction: Float { removeRoundedCorners ? 0.0 : 0.018 }
     var swapCardWidthMeters: Float { 0.55 }
     
     var screenAspect: Float {
@@ -823,8 +863,8 @@ struct _CurvedDisplayStreamView: View {
     
     @State private var correctedResolution: (Int, Int)? = nil
     
-    @State private var lastGeneratedCurve: Float?
-    @State private var lastGeneratedAspect: Float?
+    // Note: lastGeneratedCurve and lastGeneratedAspect moved to headStorage
+    // to avoid "Modifying state during view update" warnings
     
     var body: some View {
         let baseView = mainContent
@@ -841,7 +881,7 @@ struct _CurvedDisplayStreamView: View {
             .onDisappear(perform: teardownScene)
             .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
                 if shouldClose && !hasPerformedTeardown {
-                    triggerCloseSequence()
+                    DispatchQueue.main.async { triggerCloseSequence() }
                 }
             }
             .onChange(of: scenePhase) { oldValue, newValue in
@@ -849,6 +889,7 @@ struct _CurvedDisplayStreamView: View {
                     if viewModel.activelyStreaming, streamMan != nil {
                         print("Suspending stream due to background")
                         needsResume = true
+                        viewModel.isSuspendingForBackground = true
                         streamMan?.stopStream()
                         streamMan = nil
                         controllerSupport?.cleanup()
@@ -857,8 +898,10 @@ struct _CurvedDisplayStreamView: View {
                 } else if newValue == .active {
                     if needsResume {
                         print("Resuming stream from background")
+                        viewModel.isSuspendingForBackground = false
                         needsResume = false
                         self.renderGateOpen = true
+                        self.hasPerformedTeardown = false
                         controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
                         connectionCallbacks.controllerSupport = controllerSupport
                         startStreamIfNeeded()
@@ -874,6 +917,7 @@ struct _CurvedDisplayStreamView: View {
                         if streamMan == nil {
                             print("[CurvedDisplay] Stream died while inactive - restarting")
                             self.renderGateOpen = true
+                            self.hasPerformedTeardown = false
                             controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
                             connectionCallbacks.controllerSupport = controllerSupport
                             startStreamIfNeeded()
@@ -931,7 +975,12 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
         
-        let stateChangesApplied = lifecycleApplied
+        let dimChangesApplied = lifecycleApplied
+            .onChange(of: dimLevel) { oldValue, newValue in
+                // Tell the decoder whether it needs to run the ambient light engine
+                let isReactive = (newValue == 2 || newValue == 10 || newValue == 12)
+                videoDecoder?.isReactiveDimmingEnabled = isReactive
+            }
             .onChange(of: viewModel.streamSettings.statsOverlay) { oldValue, newValue in 
                 handleStatsOverlay(oldValue: oldValue, newValue: newValue)
             }
@@ -940,6 +989,8 @@ struct _CurvedDisplayStreamView: View {
                 handleActiveStreaming(oldValue: oldValue, newValue: newValue)
             }
             .onChange(of: videoMode) { _, _ in updateScreenMaterial() }
+        
+        let stateChangesApplied = dimChangesApplied
             .onChange(of: showMenuPanel) { _, _ in updateScreenInteractivity() }
             .onChange(of: showSwapConfirm) { _, _ in updateScreenInteractivity() }
             .onChange(of: show3DConfirm) { _, _ in updateScreenInteractivity() }
@@ -1020,14 +1071,6 @@ struct _CurvedDisplayStreamView: View {
             setupDimmerDomes(content: content)
             setupEnvironment360(content: content)
             setupRealityView(content: content, attachments: attachments)
-            
-           
-            _ = content.subscribe(to: SceneEvents.Update.self) { _ in
-                if let newFrame = frameMailbox.collect() {
-                    texture.replace(withDrawables: newFrame)
-                }
-            }
-            
         } update: { content, attachments in
             updateDimmerDomes(content: content)
             updateEnvironment360(content: content)
@@ -1044,8 +1087,12 @@ struct _CurvedDisplayStreamView: View {
             Attachment(id: "tutorial") { tutorialAttachment }
             Attachment(id: "presetPopup") {
                 if showInlinePresetOverlay {
-                    CenterPresetPopup(text: presetOverlayText, icon: presetOverlayIcon)
-                        .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
+                    CenterPresetPopup(
+                        text: presetOverlayText,
+                        icon: presetOverlayIcon,
+                        width: presetOverlayText.contains("Input Disabled") || presetOverlayText.contains("Input Enabled") ? 713 : 713
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
                 } else {
                     Color.clear.frame(width: 1, height: 1)
                 }
@@ -1150,11 +1197,7 @@ struct _CurvedDisplayStreamView: View {
                 controlsHighlighted = true
             }
             startHighlightTimer()
-            if self.spatialAudioMode {
-                AudioHelpers.fixAudioForSurroundForCurrentWindow()
-            } else {
-                AudioHelpers.fixAudioForDirectStereo()
-            }
+            fixAudioForCurrentMode()
         }
     }
 
@@ -1317,6 +1360,7 @@ struct _CurvedDisplayStreamView: View {
     @ViewBuilder
     private var disconnectConfirmAttachment: some View {
         if showDisconnectConfirm {
+            let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
             let brandRed = Color(red: 0.9, green: 0.3, blue: 0.3)
             
             VStack(spacing: 24) {
@@ -1324,13 +1368,13 @@ struct _CurvedDisplayStreamView: View {
                     Circle()
                         .fill(
                             LinearGradient(
-                                colors: [brandRed, brandRed.opacity(0.8)],
+                                colors: [brandNavy, brandNavy.opacity(0.8)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
                         .frame(width: 64, height: 64)
-                        .shadow(color: brandRed.opacity(0.4), radius: 12, x: 0, y: 8)
+                        .shadow(color: brandRed.opacity(0.5), radius: 18, x: 0, y: 10)
                     Image(systemName: "rectangle.portrait.and.arrow.right")
                         .font(.system(size: 28, weight: .bold))
                         .foregroundStyle(.white)
@@ -1350,12 +1394,9 @@ struct _CurvedDisplayStreamView: View {
                 VStack(spacing: 12) {
                     Button {
                         showDisconnectConfirm = false
-                        Task { @MainActor in
-                            // userDidRequestDisconnect handles quit request + co-op cleanup + endSession
-                            viewModel.userDidRequestDisconnect()
-                            openWindow(id: "mainView")
-                            await dismissImmersiveSpace()
-                        }
+                        // userDidRequestDisconnect sets shouldCloseStream, which triggers
+                        // triggerCloseSequence() — that handles openWindow + dismissImmersiveSpace
+                        viewModel.userDidRequestDisconnect()
                     } label: {
                         HStack(spacing: 10) {
                             Text("Leave Session")
@@ -1378,14 +1419,14 @@ struct _CurvedDisplayStreamView: View {
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
                                 .stroke(
                                     LinearGradient(
-                                        colors: [.white.opacity(0.35), .white.opacity(0.1)],
+                                        colors: [.white.opacity(0.4), .white.opacity(0.1)],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     ),
-                                    lineWidth: 1
+                                    lineWidth: 1.5
                                 )
                         )
-                        .shadow(color: brandRed.opacity(0.35), radius: 18, x: 0, y: 10)
+                        .shadow(color: brandRed.opacity(0.5), radius: 18, x: 0, y: 10)
                     }
                     .buttonStyle(.plain)
 
@@ -1394,17 +1435,17 @@ struct _CurvedDisplayStreamView: View {
                     } label: {
                         Text("Cancel")
                             .font(.system(size: 17, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(.white.opacity(0.75))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(.ultraThinMaterial)
+                                    .fill(brandNavy.opacity(0.6))
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                                             .stroke(
                                                 LinearGradient(
-                                                    colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                                                    colors: [.white.opacity(0.15), .white.opacity(0.05)],
                                                     startPoint: .topLeading,
                                                     endPoint: .bottomTrailing
                                                 ),
@@ -1419,12 +1460,12 @@ struct _CurvedDisplayStreamView: View {
             .padding(28)
             .background(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(brandNavy.opacity(0.92))
                     .overlay(
                         RoundedRectangle(cornerRadius: 24, style: .continuous)
                             .stroke(
                                 LinearGradient(
-                                    colors: [.white.opacity(0.25), .white.opacity(0.06)],
+                                    colors: [.white.opacity(0.2), .white.opacity(0.05)],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 ),
@@ -1567,6 +1608,7 @@ struct _CurvedDisplayStreamView: View {
             Task { @MainActor in
                 viewModel.userDidRequestDisconnect()
                 await dismissImmersiveSpace()
+                viewModel.isImmersiveSpaceOpen = false
             }
             return
         }
@@ -1578,6 +1620,7 @@ struct _CurvedDisplayStreamView: View {
         
         hasPerformedTeardown = false
         renderGateOpen = true
+        viewModel.isStreamViewAlive = true
         
         dismissWindow(id: "mainView")
         dismissWindow(id: "dummy")
@@ -1593,12 +1636,23 @@ struct _CurvedDisplayStreamView: View {
         dimLevel = 0
         viewModel.streamSettings.dimPassthrough = false
         
+        // Tell the decoder whether it needs to run the ambient light engine
+        videoDecoder?.isReactiveDimmingEnabled = false
+        
         self.targetScale = self.screenScale
         
         // Initialize input mode from user preference
         let defaultMode = UserDefaults.standard.integer(forKey: "curved.defaultControlMode")
         inputMode = InputMode(rawValue: defaultMode) ?? .gazeControl
         print("[CurvedDisplay] Initialized input mode from settings: \(inputMode.displayName)")
+        
+        // Load saved preset brightness values from UserDefaults
+        for dimLevelKey in defaultPresetBrightness.keys {
+            let savedValue = UserDefaults.standard.double(forKey: "preset.brightness.\(dimLevelKey)")
+            if savedValue > 0 {
+                presetBrightness[dimLevelKey] = savedValue
+            }
+        }
         
         // Initialize gaze controller with stream config
         gazeController.streamConfig = streamConfig
@@ -1655,6 +1709,7 @@ struct _CurvedDisplayStreamView: View {
         statsTimer = nil
         stopMoonlightCycle()
         stopReactiveLerp()
+        viewModel.isStreamViewAlive = false
         
         if !hasPerformedTeardown {
             performCompleteTeardown()
@@ -1673,6 +1728,10 @@ struct _CurvedDisplayStreamView: View {
             showMenuPanel = false
         }
         if newValue {
+            // FIX: Defer state modification to prevent "Modifying state during view update" warnings
+            DispatchQueue.main.async {
+                self.renderGateOpen = true
+            }
             ensureStreamStartedIfNeeded()
             dismissWindow(id: "mainView")
             let hasSeen = UserDefaults.standard.bool(forKey: tutorialSeenKey)
@@ -1712,10 +1771,11 @@ struct _CurvedDisplayStreamView: View {
                     var proposed = startDragPosition! + simd_float3(translation.x, translation.y, translation.z)
                     proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
                     screenPosition = proposed
-                    lastDragTime = CACurrentMediaTime()
+                    headStorage.lastDragTime = CACurrentMediaTime()
                     
                 case .gazeControl:
                     // --- GAZE CONTROL LOGIC ---
+                    guard !isHandGazeInputDisabled else { return }
                     // Check if using Touch mode (hand drag) or Gaze mode (eye tracking)
                     if viewModel.streamSettings.curvedGazeUseTouchMode {
                         // TOUCH MODE: Relative mouse movement (trackpad style)
@@ -1784,8 +1844,10 @@ struct _CurvedDisplayStreamView: View {
 
                 scaleHUDFadeTimer?.invalidate()
                 scaleHUDFadeTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        showScaleHUD = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            self.showScaleHUD = false
+                        }
                     }
                 }
             }
@@ -1793,8 +1855,10 @@ struct _CurvedDisplayStreamView: View {
                 gestureInitialScale = nil
                 scaleHUDFadeTimer?.invalidate()
                 scaleHUDFadeTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        showScaleHUD = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            self.showScaleHUD = false
+                        }
                     }
                 }
                 controlsHighlighted = false
@@ -1901,9 +1965,8 @@ struct _CurvedDisplayStreamView: View {
         )
     }
 
-    @State private var headAnchor: AnchorEntity?
-    @State private var lastHeadWorldPos: SIMD3<Float> = .zero
-    @State private var lastDragTime: CFTimeInterval = 0
+    // headAnchor, lastHeadWorldPos, and lastDragTime moved to headStorage
+    // to avoid "Modifying state during view update" warnings
 
     private let allowedLateralMax: Float = 3.0
     
@@ -1969,6 +2032,7 @@ struct _CurvedDisplayStreamView: View {
                 ),
                 extraSkyboxNames: extraSkyboxNames
             )
+            .transition(.identity)
         } else {
             Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
         }
@@ -1986,7 +2050,7 @@ struct _CurvedDisplayStreamView: View {
                         UserDefaults.standard.set(val, forKey: "ambient.dimming.level")
                         
                         // Don't enable dimmer if environment is active - let environment binding handle it after fade
-                        if environmentDome?.isEnabled != true {
+                        if headStorage.environmentDome?.isEnabled != true {
                             updateDimmerDomesState()
                         }
                         
@@ -2028,8 +2092,50 @@ struct _CurvedDisplayStreamView: View {
                         newsetLevel = newValue
                         updateNewsetState()
                     }
-                )
+                ),
+                presetBrightness: Binding(
+                    get: { presetBrightness },
+                    set: { newValue in
+                        presetBrightness = newValue
+                        updateDimmerDomesState()
+                    }
+                ),
+                defaultPresetBrightness: defaultPresetBrightness,
+                onStarfieldLongPress: {
+                    Task { @MainActor in
+                        starDistanceCycleTimer?.invalidate()
+                        func advanceStarDistance() {
+                            let nextPreset = starDistancePreset.next()
+                            starDistancePresetRawValue = nextPreset.rawValue
+                            MainActor.assumeIsolated {
+                                particleManager.updateDistancePreset(nextPreset)
+                            }
+                            presetOverlayText = "STAR DISTANCE: \(nextPreset.displayName.uppercased())"
+                            presetOverlayIcon = "moon.stars.fill"
+                            showInlinePresetOverlay = true
+                            presetOverlayTimer?.invalidate()
+                            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                                DispatchQueue.main.async {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        self.showInlinePresetOverlay = false
+                                    }
+                                }
+                            }
+                        }
+                        advanceStarDistance()
+                        starDistanceCycleTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: true) { _ in
+                            Task { @MainActor in
+                                advanceStarDistance()
+                            }
+                        }
+                    }
+                },
+                onStarfieldLongPressEnd: {
+                    starDistanceCycleTimer?.invalidate()
+                    starDistanceCycleTimer = nil
+                }
             )
+            .transition(.identity)
         } else {
             Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
         }
@@ -2068,20 +2174,17 @@ struct _CurvedDisplayStreamView: View {
     private var statsAttachment: some View {
         VStack(spacing: 6) {
             Text(statsOverlayText.isEmpty ? "Collecting stats..." : statsOverlayText)
-                .font(.system(size: 8, design: .monospaced))
+                .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(10)
-                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 16)
-        .frame(width: 480)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.black.opacity(0.5))
+                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
         )
-        .opacity(viewModel.streamSettings.statsOverlay ? 1 : 0)
+        .opacity(viewModel.streamSettings.statsOverlay && headStorage.statsScaleInitialized ? 1 : 0)
         .allowsHitTesting(false)
     }
 
@@ -2100,9 +2203,480 @@ struct _CurvedDisplayStreamView: View {
 
     // MARK: - Controls
     
+    /// Accordion method: icons stay in HStack; width/scale/opacity animate with staggered delays.
+    private let collapsedMenuLeftCount: Int = 8
+    private let collapsedMenuRightStart: Int = 8
+    private let collapsedMenuExpandStep: Double = 0.05
+    private let collapsedMenuCollapseStep: Double = 0.04
+    /// Wait for accordion collapse to finish before fading single icon (maxDist*0.04 + spring settle).
+    private let collapsedMenuHideDelay: Double = 0.8
+    
+    /// Pass-through for original bar (when dynamic menu is off). No animation; keeps curvedControlsBarContent compiling.
+    @ViewBuilder
+    private func staggeredControl<Content: View>(index: Int, @ViewBuilder content: () -> Content) -> some View {
+        content()
+    }
+    
     var topControlsBar: some View {
+        Group {
+            if viewModel.streamSettings.useCollapsedControlsMenu {
+                curvedDynamicControlsBar
+                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.05))))
+                .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
+                .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
+                .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
+                .allowsHitTesting(true)
+            } else {
+                curvedOriginalControlsBar
+            }
+        }
+    }
+    
+    /// Center button: tap to expand the dynamic menu.
+    private var curvedCenterButton: some View {
+        Button {
+            if hideControls {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    hideControls = false
+                    controlsHighlighted = true
+                }
+                startHighlightTimer()
+            }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                controlsExpanded = true
+            }
+            startHideTimer()
+            controlTapFeedbackTrigger += 1
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 24.07))
+                .frame(width: 50, height: 50)
+        }
+        .buttonStyle(.plain)
+    }
+    
+    /// Dynamic bar: collapsed = center only (no pill); expanded = full bar with pill. Both branches animate opacity/scale for smooth expand and collapse.
+    private var curvedDynamicControlsBar: some View {
+        ZStack {
+            curvedCenterButton
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .opacity(controlsExpanded ? 0 : 1)
+                .scaleEffect(controlsExpanded ? 0.88 : 1)
+                .allowsHitTesting(!controlsExpanded)
+            curvedControlsBarContent
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background {
+                    Capsule()
+                        .fill(.ultraThinMaterial)
+                        .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.0)))
+                }
+                .opacity(controlsExpanded ? 1 : 0)
+                .scaleEffect(controlsExpanded ? 1 : 0.88)
+                .allowsHitTesting(controlsExpanded)
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: controlsExpanded)
+    }
+    
+    private var curvedIconHome: some View {
+        LongPressControlBtn(
+            label: "Home",
+            systemImage: "house.fill",
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                if isMenuOpen {
+                    dismissWindow(id: "mainView")
+                    isMenuOpen = false
+                } else {
+                    pushWindow(id: "mainView")
+                    isMenuOpen = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { positionMenuWindow() }
+                }
+                guard viewModel.activelyStreaming && !showMenuPanel else { return }
+                if hideControls {
+                    withAnimation(.easeInOut(duration: 0.3)) { hideControls = false; controlsHighlighted = true }
+                    startHighlightTimer()
+                    fixAudioForCurrentMode()
+                }
+                fixAudioForCurrentMode()
+            },
+            longPressAction: { handleWindowClose() },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    private var curvedIconSpatialAudio: some View {
+        LongPressControlBtn(
+            label: spatialAudioMode ? "Spatial Audio" : "Direct Audio",
+            systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones",
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                spatialAudioMode.toggle()
+                fixAudioForCurrentMode()
+                presetOverlayText = spatialAudioMode ? "Audio: Spatial" : "Audio: Stereo"
+                presetOverlayIcon = spatialAudioMode ? "person.spatialaudio.fill" : "headphones"
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
+                }
+            },
+            longPressAction: {
+                guard spatialAudioMode else { return }
+                soundStageSize = soundStageSize.next()
+                fixAudioForCurrentMode()
+                presetOverlayText = "Sound Stage: \(soundStageSize.rawValue)"
+                presetOverlayIcon = "person.spatialaudio.fill"
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    private var curvedIconCurvature: some View {
+        LongPressControlBtn(
+            label: curvaturePreset.displayName,
+            systemImage: curvaturePreset.icon,
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                curvaturePreset = curvaturePreset.next()
+                savedCurvaturePreset = curvaturePreset.rawValue
+                presetOverlayText = curvatureText(for: curvaturePreset.displayName)
+                presetOverlayIcon = curvaturePreset.icon
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
+                }
+                startHideTimer()
+            },
+            longPressAction: {
+                curvaturePreset = .curved
+                savedCurvaturePreset = CurvaturePreset.curved.rawValue
+                presetOverlayText = curvatureText(for: curvaturePreset.displayName)
+                presetOverlayIcon = curvaturePreset.icon
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    @ViewBuilder
+    private var curvedIconTilt: some View {
+        LongPressControlBtn(
+            label: "\(Int(tiltAngle))°",
+            systemImage: "bed.double.fill",
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                cycleTiltAngle()
+                presetOverlayText = "TILT: \(Int(tiltAngle))°"
+                presetOverlayIcon = "bed.double.fill"
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
+                }
+                startHideTimer()
+            },
+            longPressAction: {
+                tiltAngle = 0.0
+                savedTiltAngle = 0.0
+                presetOverlayText = "TILT: \(Int(tiltAngle))°"
+                presetOverlayIcon = "bed.double.fill"
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    @ViewBuilder
+    private var curvedIconStarDistance: some View {
+        if dimLevel == 12 {
+            LongPressControlBtn(
+                label: starDistancePreset.displayName,
+                systemImage: "moon.stars.fill",
+                controlsHighlighted: $controlsHighlighted,
+                hideControls: $hideControls,
+                startHighlightTimer: startHighlightTimer,
+                startHideTimer: startHideTimer,
+                primaryAction: {
+                    let nextPreset = starDistancePreset.next()
+                    starDistancePresetRawValue = nextPreset.rawValue
+                    particleManager.updateDistancePreset(nextPreset)
+                    presetOverlayText = "STAR DISTANCE: \(nextPreset.displayName.uppercased())"
+                    presetOverlayIcon = "moon.stars.fill"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                    }
+                    startHideTimer()
+                },
+                longPressAction: {
+                    starDistancePresetRawValue = StarDistancePreset.close.rawValue
+                    particleManager.updateDistancePreset(.close)
+                    presetOverlayText = "STAR DISTANCE: CLOSE"
+                    presetOverlayIcon = "moon.stars.fill"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                    }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
+            )
+        }
+    }
+    
+    private var curvedIconDim: some View {
+        LongPressControlBtn(
+            label: dimButtonTitle,
+            systemImage: dimButtonIcon,
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                showDimmingPicker.toggle()
+                if showDimmingPicker {
+                    showEnvironmentPicker = false
+                    stopMoonlightCycle()
+                    stopReactiveLerp()
+                }
+            },
+            longPressAction: {
+                dimLevel = 0
+                videoDecoder?.isReactiveDimmingEnabled = false
+                viewModel.streamSettings.dimPassthrough = false
+                updateDimmerDomesState()
+                stopMoonlightCycle()
+                stopReactiveLerp()
+                showDimPresetOverlay()
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    private var curvedIconPreset: some View {
+        makeControlButton(label: "Preset", systemImage: "camera.filters", action: {
+            guard canChangePreset() else { return }
+            let allowed: [Int32] = [0, 1, 2, 3]
+            let cur = viewModel.streamSettings.uikitPreset
+            let idx = allowed.firstIndex(of: cur) ?? 0
+            let next = allowed[(idx + 1) % allowed.count]
+            viewModel.streamSettings.uikitPreset = next
+            applyCurvedUIKitPreset(next)
+            presetCooldownUntil = Date().addingTimeInterval(0.3)
+            presetOverlayText = presetName(for: next)
+            presetOverlayIcon = "camera.filters"
+            showInlinePresetOverlay = true
+            presetOverlayTimer?.invalidate()
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
+            }
+            startHideTimer()
+        }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+    }
+    
+    private var curvedIcon3D: some View {
+        makeControlButton(label: videoMode == .standard2D ? "Standard Display" : "3D", systemImage: "view.3d", action: {
+            if videoMode == .standard2D { show3DConfirm = true }
+            else { videoMode = .standard2D; updateScreenMaterial() }
+        }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+    }
+    
+    private var curvedIconEnvironment: some View {
+        LongPressControlBtn(
+            label: environmentSphereButtonTitle,
+            systemImage: "photo",
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                showEnvironmentPicker.toggle()
+                if showEnvironmentPicker {
+                    showDimmingPicker = false
+                    stopMoonlightCycle()
+                    stopReactiveLerp()
+                }
+                startHideTimer()
+            },
+            longPressAction: {
+                environmentSphereLevel = 0
+                newsetLevel = 0
+                showEnvironmentPicker = false
+                updateEnvironmentState()
+                updateNewsetState()
+                withAnimation(.easeInOut(duration: 0.25)) { viewModel.streamSettings.dimPassthrough = false }
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    private var curvedIconStats: some View {
+        makeControlButton(label: viewModel.streamSettings.statsOverlay ? "Hide Stats" : "Show Stats", systemImage: "wifi", action: {
+            viewModel.streamSettings.statsOverlay.toggle()
+        }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+    }
+    
+    @ViewBuilder
+    private var curvedIconTaskManager: some View {
+        if viewModel.streamSettings.showTaskManagerButton {
+            makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle", action: {
+                sendTaskManager()
+                startHighlightTimer()
+            }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+        }
+    }
+    
+    private var curvedIconKeyboard: some View {
+        makeControlButton(
+            label: showVirtualKeyboard ? "Hide Keyboard" : "Show Keyboard",
+            systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard",
+            action: {
+                if inputMode == .controller && !showVirtualKeyboard {
+                    gazeController.cleanup()
+                    inputMode = .screenMove
+                    updateScreenInteractivity()
+                    presetOverlayText = "Switched to Screen Adjust Mode"
+                    presetOverlayIcon = "arrow.up.and.down.and.arrow.left.and.right"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { _ in
+                        DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
+                    }
+                }
+                showVirtualKeyboard.toggle()
+                if showVirtualKeyboard {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { isKeyboardFocused = true }
+                } else { isKeyboardFocused = false }
+                startHighlightTimer()
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    @ViewBuilder
+    private var curvedIconBattery: some View {
+        if viewModel.streamSettings.showControllerBattery {
+            BatteryIndicatorView(
+                controlsHighlighted: $controlsHighlighted,
+                hideControls: $hideControls,
+                startHighlightTimer: startHighlightTimer,
+                startHideTimer: startHideTimer
+            )
+        }
+    }
+    
+    private var curvedIconInputMode: some View {
+        LongPressControlBtn(
+            label: {
+                if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode { return "Touch Control Mode" }
+                return inputMode.displayName
+            }(),
+            systemImage: {
+                if isHandGazeInputDisabled { return "lock.fill" }
+                if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode { return "hand.point.up.left.fill" }
+                return inputMode.icon
+            }(),
+            controlsHighlighted: $controlsHighlighted,
+            hideControls: $hideControls,
+            startHighlightTimer: startHighlightTimer,
+            startHideTimer: startHideTimer,
+            primaryAction: {
+                gazeController.cleanup()
+                inputMode = inputMode.next()
+                if inputMode == .controller {
+                    showVirtualKeyboard = false
+                    isKeyboardFocused = false
+                }
+                if inputMode == .gazeControl { gazeController.streamConfig = streamConfig }
+                presetOverlayText = inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode ? "Touch Control Mode" : inputMode.displayName
+                presetOverlayIcon = inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode ? "hand.point.up.left.fill" : inputMode.icon
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            },
+            longPressAction: {
+                isHandGazeInputDisabled.toggle()
+                presetOverlayText = isHandGazeInputDisabled ? "Screen Input Disabled" : "Screen Input Enabled"
+                presetOverlayIcon = isHandGazeInputDisabled ? "lock.fill" : (inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode ? "hand.point.up.left.fill" : inputMode.icon)
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            },
+            onTapFeedback: { controlTapFeedbackTrigger += 1 }
+        )
+    }
+    
+    @ViewBuilder
+    private var curvedIconCoopIndicator: some View {
+        if viewModel.isCoopSession {
+            HStack(spacing: 6) {
+                Image(systemName: "person.2.fill").font(.system(size: 16, weight: .semibold))
+                Text("2P").font(.system(size: 14, weight: .bold))
+                Text("(\(CoopSessionCoordinator.shared.participants.count)/2)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.3)))
+        }
+    }
+    
+    @ViewBuilder
+    private var curvedIconCoopInvite: some View {
+        if viewModel.isCoopSession {
+            let coordinator = CoopSessionCoordinator.shared
+            if coordinator.isHosting && coordinator.participants.count < 2 {
+                coopInviteButton
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var curvedIconCoopDisconnect: some View {
+        if viewModel.isCoopSession {
+            coopDisconnectButton
+        }
+    }
+    
+    private var curvedControlsBarContent: some View {
         HStack(spacing: 16) {
             // 1. Home
+            staggeredControl(index: 0) {
             LongPressControlBtn(
                 label: "Home",
                 systemImage: "house.fill",
@@ -2130,25 +2704,20 @@ struct _CurvedDisplayStreamView: View {
                         controlsHighlighted = true
                     }
                     startHighlightTimer()
-                    if self.spatialAudioMode {
-                        AudioHelpers.fixAudioForSurroundForCurrentWindow()
-                    } else {
-                        AudioHelpers.fixAudioForDirectStereo()
-                    }
+                    fixAudioForCurrentMode()
                 }
                 
-                if self.spatialAudioMode {
-                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
-                } else {
-                    AudioHelpers.fixAudioForDirectStereo()
-                }
+                fixAudioForCurrentMode()
                 },
                 longPressAction: {
                     handleWindowClose()
-                }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
 
             // 2. Spatial Audio
+            staggeredControl(index: 1) {
             LongPressControlBtn(
                 label: spatialAudioMode ? "Spatial Audio" : "Direct Audio",
                 systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones",
@@ -2165,17 +2734,36 @@ struct _CurvedDisplayStreamView: View {
                 
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            self.showInlinePresetOverlay = false
+                        }
                     }
                 }
                 },
                 longPressAction: {
+                    // Only cycle sound stage when spatial audio is enabled
+                    guard spatialAudioMode else { return }
+                    
+                    soundStageSize = soundStageSize.next()
                     fixAudioForCurrentMode()
-                }
+                    presetOverlayText = "Sound Stage: \(soundStageSize.rawValue)"
+                    presetOverlayIcon = "person.spatialaudio.fill"
+                    showInlinePresetOverlay = true
+                    
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showInlinePresetOverlay = false
+                        }
+                    }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
 
             // 3. Curvature
+            staggeredControl(index: 2) {
             LongPressControlBtn(
                 label: curvaturePreset.displayName,
                 systemImage: curvaturePreset.icon,
@@ -2185,20 +2773,24 @@ struct _CurvedDisplayStreamView: View {
                 startHideTimer: startHideTimer,
                 primaryAction: {
                 curvaturePreset = curvaturePreset.next()
+                savedCurvaturePreset = curvaturePreset.rawValue
                 presetOverlayText = curvatureText(for: curvaturePreset.displayName)
                 presetOverlayIcon = curvaturePreset.icon
                 showInlinePresetOverlay = true
                 
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            self.showInlinePresetOverlay = false
+                        }
                     }
                 }
                     startHideTimer()
                 },
                 longPressAction: {
                     curvaturePreset = .curved
+                    savedCurvaturePreset = CurvaturePreset.curved.rawValue
                     presetOverlayText = curvatureText(for: curvaturePreset.displayName)
                     presetOverlayIcon = curvaturePreset.icon
                     showInlinePresetOverlay = true
@@ -2209,10 +2801,13 @@ struct _CurvedDisplayStreamView: View {
                             showInlinePresetOverlay = false
                         }
                     }
-                }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
 
             // 4. Tilt
+            staggeredControl(index: 3) {
             LongPressControlBtn(
                 label: "\(Int(tiltAngle))°",
                 systemImage: "bed.double.fill",
@@ -2228,14 +2823,17 @@ struct _CurvedDisplayStreamView: View {
                 
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            self.showInlinePresetOverlay = false
+                        }
                     }
                 }
                     startHideTimer()
                 },
                 longPressAction: {
                     tiltAngle = 0.0
+                    savedTiltAngle = 0.0
                     presetOverlayText = "TILT: \(Int(tiltAngle))°"
                     presetOverlayIcon = "bed.double.fill"
                     showInlinePresetOverlay = true
@@ -2246,10 +2844,58 @@ struct _CurvedDisplayStreamView: View {
                             showInlinePresetOverlay = false
                         }
                     }
-                }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
+            
+            // 5. Star Distance (only visible in Starfield mode)
+            if dimLevel == 12 {
+                staggeredControl(index: 4) {
+                LongPressControlBtn(
+                    label: starDistancePreset.displayName,
+                    systemImage: "moon.stars.fill",
+                    controlsHighlighted: $controlsHighlighted,
+                    hideControls: $hideControls,
+                    startHighlightTimer: startHighlightTimer,
+                    startHideTimer: startHideTimer,
+                    primaryAction: {
+                        let nextPreset = starDistancePreset.next()
+                        starDistancePresetRawValue = nextPreset.rawValue
+                        particleManager.updateDistancePreset(nextPreset)
+                        presetOverlayText = "STAR DISTANCE: \(nextPreset.displayName.uppercased())"
+                        presetOverlayIcon = "moon.stars.fill"
+                        showInlinePresetOverlay = true
+                        
+                        presetOverlayTimer?.invalidate()
+                        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                showInlinePresetOverlay = false
+                            }
+                        }
+                        startHideTimer()
+                    },
+                    longPressAction: {
+                        starDistancePresetRawValue = StarDistancePreset.close.rawValue
+                        particleManager.updateDistancePreset(.close)
+                        presetOverlayText = "STAR DISTANCE: CLOSE"
+                        presetOverlayIcon = "moon.stars.fill"
+                        showInlinePresetOverlay = true
+                        
+                        presetOverlayTimer?.invalidate()
+                        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                showInlinePresetOverlay = false
+                            }
+                        }
+                    },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
+                )
+                }
+            }
 
             // 5. Dim
+            staggeredControl(index: 5) {
             LongPressControlBtn(
                 label: dimButtonTitle,
                 systemImage: dimButtonIcon,
@@ -2270,16 +2916,23 @@ struct _CurvedDisplayStreamView: View {
                 longPressAction: {
                     // Long press: reset to Off
                     dimLevel = 0
+                    
+                    // Tell the decoder whether it needs to run the ambient light engine
+                    videoDecoder?.isReactiveDimmingEnabled = false
+                    
                     viewModel.streamSettings.dimPassthrough = false
                     updateDimmerDomesState()
                     stopMoonlightCycle()
                     stopReactiveLerp()
                     showDimPresetOverlay()
-                }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
 
             // 6. Preset
-            makeControlButton(label: "Preset", systemImage: "camera.filters") {
+            staggeredControl(index: 6) {
+            makeControlButton(label: "Preset", systemImage: "camera.filters", action: {
                 guard canChangePreset() else {
                     print("[CurvedDisplay] Preset change on cooldown, ignoring")
                     return
@@ -2300,24 +2953,30 @@ struct _CurvedDisplayStreamView: View {
                 
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            self.showInlinePresetOverlay = false
+                        }
                     }
                 }
                 startHideTimer()
+            }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
 
             // 7. 3D
-            makeControlButton(label: videoMode == .standard2D ? "Standard Display" : "3D", systemImage: "view.3d") {
+            staggeredControl(index: 7) {
+            makeControlButton(label: videoMode == .standard2D ? "Standard Display" : "3D", systemImage: "view.3d", action: {
                 if videoMode == .standard2D {
                     show3DConfirm = true
                 } else {
                     videoMode = .standard2D
                     updateScreenMaterial()
                 }
+            }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
 
             // 8. Sphere Environment (Picker)
+            staggeredControl(index: 8) {
             LongPressControlBtn(
                 label: environmentSphereButtonTitle,
                 systemImage: "photo",
@@ -2348,19 +3007,34 @@ struct _CurvedDisplayStreamView: View {
                     updateEnvironmentState()
                     updateNewsetState()
                     withAnimation(.easeInOut(duration: 0.25)) { viewModel.streamSettings.dimPassthrough = false }
-                }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
             )
+            }
 
             // 9. Stats
-            makeControlButton(label: viewModel.streamSettings.statsOverlay ? "Hide Stats" : "Show Stats", systemImage: "wifi") {
+            staggeredControl(index: 9) {
+            makeControlButton(label: viewModel.streamSettings.statsOverlay ? "Hide Stats" : "Show Stats", systemImage: "wifi", action: {
                 viewModel.streamSettings.statsOverlay.toggle()
+            }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+            }
+            
+            // 9.5. Task Manager Button (if enabled)
+            if viewModel.streamSettings.showTaskManagerButton {
+                staggeredControl(index: 10) {
+                makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle", action: {
+                    sendTaskManager()
+                    startHighlightTimer()
+                }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
+                }
             }
             
             // 10. Keyboard Toggle
+            staggeredControl(index: 11) {
             makeControlButton(
                 label: showVirtualKeyboard ? "Hide Keyboard" : "Show Keyboard",
-                systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard"
-            ) {
+                systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard",
+                action: {
                 // If opening keyboard while in controller mode, automatically switch to screen adjust mode
                 if inputMode == .controller && !showVirtualKeyboard {
                     print("[Keyboard] Auto-switching from Controller Mode to Screen Adjust Mode for keyboard")
@@ -2374,8 +3048,10 @@ struct _CurvedDisplayStreamView: View {
                     
                     presetOverlayTimer?.invalidate()
                     presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { _ in
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            showInlinePresetOverlay = false
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                self.showInlinePresetOverlay = false
+                            }
                         }
                     }
                 }
@@ -2393,10 +3069,26 @@ struct _CurvedDisplayStreamView: View {
                 
                 print("[Keyboard] Toggle pressed, showVirtualKeyboard is now: \(showVirtualKeyboard)")
                 startHighlightTimer()
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
+            )
+            }
+            
+            if viewModel.streamSettings.showControllerBattery {
+                staggeredControl(index: 12) {
+                BatteryIndicatorView(
+                    controlsHighlighted: $controlsHighlighted,
+                    hideControls: $hideControls,
+                    startHighlightTimer: startHighlightTimer,
+                    startHideTimer: startHideTimer
+                )
+                }
             }
             
             // 11. Input Mode Toggle (Screen Adjust / Controller / Gaze Control)
-            makeControlButton(
+            // Long press to disable/enable hand & gaze input
+            staggeredControl(index: 13) {
+            LongPressControlBtn(
                 label: {
                     // Use Touch label if in Gaze Control mode and Touch mode is enabled
                     if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
@@ -2405,67 +3097,95 @@ struct _CurvedDisplayStreamView: View {
                     return inputMode.displayName
                 }(),
                 systemImage: {
+                    if isHandGazeInputDisabled {
+                        return "lock.fill"
+                    }
                     // Use Touch icon if in Gaze Control mode and Touch mode is enabled
                     if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
                         return "hand.point.up.left.fill"
                     }
                     return inputMode.icon
-                }()
-            ) {
-                gazeController.cleanup()  // Reset gaze state on mode change
-                inputMode = inputMode.next()
-                print("[InputMode] Changed to: \(inputMode) (\(inputMode.displayName))")
-                
-                // CRITICAL FIX: When switching to Controller mode, ensure keyboard is closed
-                // and first responder is properly reclaimed for controller input
-                if inputMode == .controller {
-                    showVirtualKeyboard = false
-                    isKeyboardFocused = false
-                    print("[InputMode] Switched to Controller mode - keyboard closed, first responder will be reclaimed")
+                }(),
+                controlsHighlighted: $controlsHighlighted,
+                hideControls: $hideControls,
+                startHighlightTimer: startHighlightTimer,
+                startHideTimer: startHideTimer,
+                primaryAction: {
+                    gazeController.cleanup()  // Reset gaze state on mode change
+                    inputMode = inputMode.next()
+                    print("[InputMode] Changed to: \(inputMode) (\(inputMode.displayName))")
                     
-                    // Force first responder reclaim after a brief delay to ensure TextField releases it
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        // The InputCaptureUIView timer will reclaim first responder
-                        print("[InputMode] Controller mode delay complete - first responder should be active")
+                    // CRITICAL FIX: When switching to Controller mode, ensure keyboard is closed
+                    // and first responder is properly reclaimed for controller input
+                    if inputMode == .controller {
+                        showVirtualKeyboard = false
+                        isKeyboardFocused = false
+                        print("[InputMode] Switched to Controller mode - keyboard closed, first responder will be reclaimed")
+                        
+                        // Force first responder reclaim after a brief delay to ensure TextField releases it
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            // The InputCaptureUIView timer will reclaim first responder
+                            print("[InputMode] Controller mode delay complete - first responder should be active")
+                        }
                     }
-                }
-                
-                // Update gaze controller with current stream config
-                if inputMode == .gazeControl {
-                    gazeController.streamConfig = streamConfig
-                }
-                
-                presetOverlayText = {
-                    // Use Touch label if in Gaze Control mode and Touch mode is enabled
-                    if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
-                        return "Touch Control Mode"
+                    
+                    // Update gaze controller with current stream config
+                    if inputMode == .gazeControl {
+                        gazeController.streamConfig = streamConfig
                     }
-                    return inputMode.displayName
-                }()
-                presetOverlayIcon = {
-                    // Use Touch icon if in Gaze Control mode and Touch mode is enabled
-                    if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
-                        return "hand.point.up.left.fill"
-                    }
-                    return inputMode.icon
-                }()
-                showInlinePresetOverlay = true
+                    
+                    presetOverlayText = {
+                        // Use Touch label if in Gaze Control mode and Touch mode is enabled
+                        if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
+                            return "Touch Control Mode"
+                        }
+                        return inputMode.displayName
+                    }()
+                    presetOverlayIcon = {
+                        // Use Touch icon if in Gaze Control mode and Touch mode is enabled
+                        if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
+                            return "hand.point.up.left.fill"
+                        }
+                        return inputMode.icon
+                    }()
+                    showInlinePresetOverlay = true
 
-                // Update gaze controller with current stream config
-                gazeController.streamConfig = streamConfig
-                print("[InputMode] GazeController streamConfig set: \(streamConfig != nil)")
-                
-                presetOverlayTimer?.invalidate()
-                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+                    // Update gaze controller with current stream config
+                    gazeController.streamConfig = streamConfig
+                    print("[InputMode] GazeController streamConfig set: \(streamConfig != nil)")
+                    
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showInlinePresetOverlay = false
+                        }
                     }
-                }
-                startHighlightTimer()
+                },
+                longPressAction: {
+                    isHandGazeInputDisabled.toggle()
+                    presetOverlayText = isHandGazeInputDisabled ? "Screen Input Disabled" : "Screen Input Enabled"
+                    presetOverlayIcon = isHandGazeInputDisabled ? "lock.fill" : {
+                        if inputMode == .gazeControl && viewModel.streamSettings.curvedGazeUseTouchMode {
+                            return "hand.point.up.left.fill"
+                        }
+                        return inputMode.icon
+                    }()
+                    showInlinePresetOverlay = true
+                    
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            showInlinePresetOverlay = false
+                        }
+                    }
+                },
+                onTapFeedback: { controlTapFeedbackTrigger += 1 }
+            )
             }
             
             // 11. Co-op Indicator (if in co-op session)
             if viewModel.isCoopSession {
+                staggeredControl(index: 14) {
                 HStack(spacing: 6) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 16, weight: .semibold))
@@ -2479,44 +3199,58 @@ struct _CurvedDisplayStreamView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                 }
-                .foregroundColor(.white)
+                .foregroundColor(.white                )
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.3))
                 )
+                }
             }
             
             // 12. Co-op Invite Button (only when hosting and guest is missing)
             if viewModel.isCoopSession {
                 let coordinator = CoopSessionCoordinator.shared
                 if coordinator.isHosting && coordinator.participants.count < 2 {
+                    staggeredControl(index: 15) {
                     coopInviteButton
+                    }
                 }
             }
             
             // 13. Co-op Disconnect Button (always show when in co-op)
             if viewModel.isCoopSession {
+                staggeredControl(index: 16) {
                 coopDisconnectButton
+                }
             }
         }
+    }
+    
+    private var curvedExpandedControlsContent: some View {
+        curvedControlsBarContent
+    }
+    
+    private var curvedOriginalControlsBar: some View {
+        curvedControlsBarContent
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .background {
             Capsule()
                 .fill(.ultraThinMaterial)
                 // Dynamic background opacity: different values for black modes vs reactive
-                .opacity(!hideControls ? 0.7 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.0)))
+                .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.0)))
         }
         // Dynamic opacity floor: lower for black modes (Eclipse, Starfield), slightly higher for Reactive V2/V3
-        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : 0.5) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.05)))
+        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.05))))
         .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
         .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
+        .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
         .allowsHitTesting(true)
     }
     
-    private func makeControlButton(label: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func makeControlButton(label: String, systemImage: String, action: @escaping () -> Void, onTapFeedback: (() -> Void)? = nil) -> some View {
         Button {
             if !controlsHighlighted {
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -2529,6 +3263,7 @@ struct _CurvedDisplayStreamView: View {
             // Keep controlsHighlighted = true during action execution
             // This prevents state flicker that breaks drag gesture recognition
             hideControls = false
+            onTapFeedback?()
             action()
             startHideTimer()
         } label: {
@@ -2553,6 +3288,7 @@ struct _CurvedDisplayStreamView: View {
                 startHighlightTimer()
                 return
             }
+            controlTapFeedbackTrigger += 1
             
             // Create a fresh activity with a new session ID and broadcast it.
             // We can't just re-activate the existing activity because the guest
@@ -2592,7 +3328,9 @@ struct _CurvedDisplayStreamView: View {
     
     private var coopDisconnectButton: some View {
         Button {
+            print("[Leave] Button tapped - controlsHighlighted: \(controlsHighlighted)")
             if !controlsHighlighted {
+                print("[Leave] Controls not highlighted, highlighting now")
                 withAnimation(.easeInOut(duration: 0.3)) {
                     hideControls = false
                     controlsHighlighted = true
@@ -2600,8 +3338,11 @@ struct _CurvedDisplayStreamView: View {
                 startHighlightTimer()
                 return
             }
+            controlTapFeedbackTrigger += 1
             
+            print("[Leave] Setting showDisconnectConfirm = true")
             showDisconnectConfirm = true
+            print("[Leave] showDisconnectConfirm is now: \(showDisconnectConfirm)")
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -2619,6 +3360,23 @@ struct _CurvedDisplayStreamView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+    
+    private func sendTaskManager() {
+        DispatchQueue.global(qos: .userInteractive).async {
+            let MODIFIER_CTRL: Int8 = 0x02
+            let MODIFIER_SHIFT: Int8 = 0x01
+            let modifiers = MODIFIER_CTRL | MODIFIER_SHIFT
+            let ESC_KEY: Int16 = 0x1B
+            
+            // Send Ctrl+Shift+Esc to open Task Manager
+            // Note: We use Ctrl+Shift+Esc instead of Ctrl+Alt+Delete because Windows blocks
+            // Ctrl+Alt+Delete as a Secure Attention Sequence (SAS) that cannot be triggered remotely.
+            // The 0x8000 flag is required for proper key code handling in the Moonlight protocol.
+            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x03, modifiers)  // Key Down
+            usleep(50 * 1000)
+            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x04, modifiers)  // Key Up
+        }
     }
     
     private var dimButtonTitle: String {
@@ -2943,7 +3701,7 @@ struct _CurvedDisplayStreamView: View {
             mesh = try generateCurvedRoundedPlane(
                 width: CURVED_MAX_WIDTH_METERS,
                 aspectRatio: screenAspect,
-                resolution: (512, 512),
+                resolution: (256, 256),
                 curveMagnitude: curvaturePreset.value * curveAnimationMultiplier,
                 cornerRadiusFraction: cornerRadiusFraction
             )
@@ -2965,7 +3723,7 @@ struct _CurvedDisplayStreamView: View {
             collisionMesh = try generateCurvedRoundedPlane(
                 width: CURVED_MAX_WIDTH_METERS,
                 aspectRatio: screenAspect,
-                resolution: (256, 256),
+                resolution: (64, 64),
                 curveMagnitude: curvaturePreset.value * curveAnimationMultiplier,
                 cornerRadiusFraction: 0
             )
@@ -2999,17 +3757,20 @@ struct _CurvedDisplayStreamView: View {
 
         let head = AnchorEntity(.head)
         content.add(head)
-        self.headAnchor = head
+        headStorage.headAnchor = head
 
-        if !hasInitializedPosition {
+        if !headStorage.hasInitializedPosition {
             screen.position = SIMD3<Float>(0.0, 1.5, -5.0)
-            hasInitializedPosition = true
-            screenPosition = screen.position
-            screenScale = 4.0
+            headStorage.hasInitializedPosition = true
+            // Defer @State modifications to avoid "Modifying state during view update"
+            DispatchQueue.main.async {
+                self.screenPosition = self.screen.position
+                self.screenScale = 4.0
+            }
         }
         
         if let controls = attachments.entity(for: "controls") {
-            self.controlsEntity = controls
+            headStorage.controlsEntity = controls
             if controls.parent !== screen { screen.addChild(controls) }
             let screenHeight = CURVED_MAX_WIDTH_METERS * screenAspect
             // Restore controls to original 0.05 position
@@ -3032,7 +3793,7 @@ struct _CurvedDisplayStreamView: View {
 
         if let statsEnt = attachments.entity(for: "stats") {
             if statsEnt.parent !== screen { screen.addChild(statsEnt) }
-            if !statsScaleInitialized {
+            if !headStorage.statsScaleInitialized {
                 let bounds = statsEnt.visualBounds(relativeTo: screen)
                 if bounds.extents.x > 0 {
                     let currentScaleX = max(statsEnt.scale.x, 0.0001)
@@ -3040,6 +3801,7 @@ struct _CurvedDisplayStreamView: View {
                     let targetLocalWidth = statsCardWidthMeters
                     let scale = targetLocalWidth / unscaledWidth
                     statsEnt.scale = [scale, scale, scale]
+                    headStorage.statsScaleInitialized = true
                 }
             }
             let screenHeight = CURVED_MAX_WIDTH_METERS * screenAspect
@@ -3085,6 +3847,20 @@ struct _CurvedDisplayStreamView: View {
                 let desiredLocalWidth = swapCardWidthMeters
                 let scale = desiredLocalWidth / unscaledWidth
                 sbsEnt.scale = [scale, scale, scale]
+            }
+        }
+
+        if let disconnectEnt = attachments.entity(for: "disconnectConfirm") {
+            if disconnectEnt.parent !== screen { screen.addChild(disconnectEnt) }
+            disconnectEnt.position = [0.0 as Float, 0.0 as Float, Float(0.06)]
+
+            let bounds = disconnectEnt.visualBounds(relativeTo: screen)
+            if bounds.extents.x > 0 {
+                let currentScaleX = max(disconnectEnt.scale.x, 0.0001)
+                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                let desiredLocalWidth = swapCardWidthMeters
+                let scale = desiredLocalWidth / unscaledWidth
+                disconnectEnt.scale = [scale, scale, scale]
             }
         }
 
@@ -3191,7 +3967,7 @@ struct _CurvedDisplayStreamView: View {
         
         // OPTIMIZATION: Only regenerate mesh if curve or aspect ratio changed significantly
         let needsMeshUpdate: Bool
-        if let lastCurve = lastGeneratedCurve, let lastAspect = lastGeneratedAspect {
+        if let lastCurve = headStorage.lastGeneratedCurve, let lastAspect = headStorage.lastGeneratedAspect {
             needsMeshUpdate = abs(currentCurve - lastCurve) > 0.001 || abs(screenAspect - lastAspect) > 0.001
         } else {
             needsMeshUpdate = true
@@ -3201,7 +3977,7 @@ struct _CurvedDisplayStreamView: View {
             if let mesh = try? generateCurvedRoundedPlane(
                 width: CURVED_MAX_WIDTH_METERS,
                 aspectRatio: screenAspect,
-                resolution: (512, 512),
+                resolution: (256, 256),
                 curveMagnitude: currentCurve,
                 cornerRadiusFraction: cornerRadiusFraction
             ) {
@@ -3213,7 +3989,7 @@ struct _CurvedDisplayStreamView: View {
                 if let collisionMesh = try? generateCurvedRoundedPlane(
                     width: CURVED_MAX_WIDTH_METERS,
                     aspectRatio: screenAspect,
-                    resolution: (256, 256),
+                    resolution: (64, 64),
                     curveMagnitude: currentCurve,
                     cornerRadiusFraction: 0
                 ) {
@@ -3231,11 +4007,9 @@ struct _CurvedDisplayStreamView: View {
                         }
                     }
                     
-                    // Update trackers
-                    DispatchQueue.main.async {
-                        self.lastGeneratedCurve = currentCurve
-                        self.lastGeneratedAspect = self.screenAspect
-                    }
+                    // Update trackers (using headStorage to avoid @State modification during render)
+                    self.headStorage.lastGeneratedCurve = currentCurve
+                    self.headStorage.lastGeneratedAspect = self.screenAspect
                 }
             }
         }
@@ -3246,7 +4020,7 @@ struct _CurvedDisplayStreamView: View {
         let tiltRotation = simd_quatf(angle: tiltRadians, axis: SIMD3<Float>(1, 0, 0))
         screen.transform.rotation = tiltRotation
         
-        if let head = headAnchor {
+        if let head = headStorage.headAnchor {
             let p = head.position(relativeTo: nil)
             
             // UPDATE: Efficiently feed head position to the input system
@@ -3255,16 +4029,19 @@ struct _CurvedDisplayStreamView: View {
             let localHead = screen.convert(position: .zero, from: head)
             headStorage.positionInScreenSpace = localHead
             
-            let delta = simd_length(p - lastHeadWorldPos)
+            let delta = simd_length(p - headStorage.lastHeadWorldPos)
             let nearOrigin = simd_length(p) < 0.1
-            let wasFar = simd_length(lastHeadWorldPos) > 0.25
-            let notDraggingRecently = (CACurrentMediaTime() - lastDragTime) > 0.4
+            let wasFar = simd_length(headStorage.lastHeadWorldPos) > 0.25
+            let notDraggingRecently = (CACurrentMediaTime() - headStorage.lastDragTime) > 0.4
             if nearOrigin && wasFar && delta > 0.25 && notDraggingRecently {
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    recenterScreenToHead(head: head)
+                // Defer state modification to avoid "Modifying state during view update"
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        self.recenterScreenToHead(head: head)
+                    }
                 }
             }
-            lastHeadWorldPos = p
+            headStorage.lastHeadWorldPos = p
         }
         
         if let inputEnt = attachments.entity(for: "inputOverlay") {
@@ -3285,100 +4062,124 @@ struct _CurvedDisplayStreamView: View {
         if let pickerEnt = attachments.entity(for: "envPicker") {
             if pickerEnt.parent !== screen { screen.addChild(pickerEnt) }
             pickerEnt.position = [0.0 as Float, 0.0 as Float, Float(0.12)]
-            
-            let bounds = pickerEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(pickerEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.96
-                let scale = desiredLocalWidth / unscaledWidth
-                pickerEnt.scale = [scale, scale, scale]
+            if showEnvironmentPicker {
+                let bounds = pickerEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(pickerEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.96
+                    let scale = desiredLocalWidth / unscaledWidth
+                    pickerEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
         if let dimPickerEnt = attachments.entity(for: "dimPicker") {
             if dimPickerEnt.parent !== screen { screen.addChild(dimPickerEnt) }
             dimPickerEnt.position = [0.0 as Float, 0.0 as Float, Float(0.12)]
-            
-            let bounds = dimPickerEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(dimPickerEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.96
-                let scale = desiredLocalWidth / unscaledWidth
-                dimPickerEnt.scale = [scale, scale, scale]
+            if showDimmingPicker {
+                let bounds = dimPickerEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(dimPickerEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.96
+                    let scale = desiredLocalWidth / unscaledWidth
+                    dimPickerEnt.scale = [scale, scale, scale]
+                }
             }
         }
 
         if let statsEnt = attachments.entity(for: "stats") {
             if statsEnt.parent !== screen { screen.addChild(statsEnt) }
-            if !statsScaleInitialized {
-                let bounds = statsEnt.visualBounds(relativeTo: screen)
-                if bounds.extents.x > 0 {
-                    let currentScaleX = max(statsEnt.scale.x, 0.0001)
-                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                    let targetLocalWidth = statsCardWidthMeters
-                    let scale = targetLocalWidth / unscaledWidth
-                    statsEnt.scale = [scale, scale, scale]
-                }
-            }
             let screenHeight = CURVED_MAX_WIDTH_METERS * screenAspect
             statsEnt.position = [0.0 as Float, -(screenHeight / 2.0) - Float(0.03), Float(0.05)]
+            if viewModel.streamSettings.statsOverlay {
+                if !headStorage.statsScaleInitialized {
+                    let bounds = statsEnt.visualBounds(relativeTo: screen)
+                    if bounds.extents.x > 0 {
+                        let currentScaleX = max(statsEnt.scale.x, 0.0001)
+                        let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                        let targetLocalWidth = statsCardWidthMeters
+                        let scale = targetLocalWidth / unscaledWidth
+                        statsEnt.scale = [scale, scale, scale]
+                        headStorage.statsScaleInitialized = true
+                    }
+                }
+            }
         }
 
         if let tutorialEnt = attachments.entity(for: "tutorial") {
             if tutorialEnt.parent !== screen { screen.addChild(tutorialEnt) }
             tutorialEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            
-            let bounds = tutorialEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(tutorialEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let targetLocalWidth = tutorialCardWidthMeters
-                let scale = targetLocalWidth / unscaledWidth
-                tutorialEnt.scale = [scale, scale, scale]
+            if showCurvedTutorial {
+                let bounds = tutorialEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(tutorialEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let targetLocalWidth = tutorialCardWidthMeters
+                    let scale = targetLocalWidth / unscaledWidth
+                    tutorialEnt.scale = [scale, scale, scale]
+                }
             }
         }
 
         if let swapEnt = attachments.entity(for: "swapConfirm") {
             if swapEnt.parent !== screen { screen.addChild(swapEnt) }
             swapEnt.position = [0.0 as Float, 0.0 as Float, Float(0.06)]
-
-            let bounds = swapEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(swapEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth = swapCardWidthMeters
-                let scale = desiredLocalWidth / unscaledWidth
-                swapEnt.scale = [scale, scale, scale]
+            if showSwapConfirm {
+                let bounds = swapEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(swapEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth = swapCardWidthMeters
+                    let scale = desiredLocalWidth / unscaledWidth
+                    swapEnt.scale = [scale, scale, scale]
+                }
             }
         }
 
         if let sbsEnt = attachments.entity(for: "sbsConfirm") {
             if sbsEnt.parent !== screen { screen.addChild(sbsEnt) }
             sbsEnt.position = [0.0 as Float, 0.0 as Float, Float(0.06)]
+            if show3DConfirm {
+                let bounds = sbsEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(sbsEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth = swapCardWidthMeters
+                    let scale = desiredLocalWidth / unscaledWidth
+                    sbsEnt.scale = [scale, scale, scale]
+                }
+            }
+        }
 
-            let bounds = sbsEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(sbsEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth = swapCardWidthMeters
-                let scale = desiredLocalWidth / unscaledWidth
-                sbsEnt.scale = [scale, scale, scale]
+        if let disconnectEnt = attachments.entity(for: "disconnectConfirm") {
+            if disconnectEnt.parent !== screen { screen.addChild(disconnectEnt) }
+            disconnectEnt.position = [0.0 as Float, 0.0 as Float, Float(0.06)]
+            if showDisconnectConfirm {
+                let bounds = disconnectEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(disconnectEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth = swapCardWidthMeters
+                    let scale = desiredLocalWidth / unscaledWidth
+                    disconnectEnt.scale = [scale, scale, scale]
+                }
             }
         }
 
         if let popupEnt = attachments.entity(for: "presetPopup") {
             if popupEnt.parent !== screen { screen.addChild(popupEnt) }
             popupEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            
-            let bounds = popupEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(popupEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.35
-                let scale = desiredLocalWidth / unscaledWidth
-                popupEnt.scale = [scale, scale, scale]
+            if showInlinePresetOverlay {
+                let bounds = popupEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(popupEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.35
+                    let scale = desiredLocalWidth / unscaledWidth
+                    popupEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -3386,14 +4187,15 @@ struct _CurvedDisplayStreamView: View {
         if let joinEnt = attachments.entity(for: "coopJoinNotification") {
             if joinEnt.parent !== screen { screen.addChild(joinEnt) }
             joinEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            
-            let bounds = joinEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(joinEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.35
-                let scale = desiredLocalWidth / unscaledWidth
-                joinEnt.scale = [scale, scale, scale]
+            if coopCoordinator.friendJoinedNotification {
+                let bounds = joinEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(joinEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.35
+                    let scale = desiredLocalWidth / unscaledWidth
+                    joinEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -3401,14 +4203,15 @@ struct _CurvedDisplayStreamView: View {
         if let disconnectEnt = attachments.entity(for: "coopDisconnectNotification") {
             if disconnectEnt.parent !== screen { screen.addChild(disconnectEnt) }
             disconnectEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            
-            let bounds = disconnectEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(disconnectEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.35
-                let scale = desiredLocalWidth / unscaledWidth
-                disconnectEnt.scale = [scale, scale, scale]
+            if coopCoordinator.disconnectNotification {
+                let bounds = disconnectEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(disconnectEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.35
+                    let scale = desiredLocalWidth / unscaledWidth
+                    disconnectEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -3416,14 +4219,15 @@ struct _CurvedDisplayStreamView: View {
         if let connectingEnt = attachments.entity(for: "coopConnectingOverlay") {
             if connectingEnt.parent !== screen { screen.addChild(connectingEnt) }
             connectingEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            
-            let bounds = connectingEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(connectingEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.35
-                let scale = desiredLocalWidth / unscaledWidth
-                connectingEnt.scale = [scale, scale, scale]
+            if viewModel.isCoopSession && viewModel.assignedControllerSlot == 1 && viewModel.streamState == .starting {
+                let bounds = connectingEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(connectingEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.35
+                    let scale = desiredLocalWidth / unscaledWidth
+                    connectingEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -3435,14 +4239,15 @@ struct _CurvedDisplayStreamView: View {
             // Position below screen - if mic button is showing, keyboard goes above it
             let keyboardOffset: Float = viewModel.streamSettings.showMicButton ? 0.16 : 0.08
             keyboardEnt.position = [0.0 as Float, -(screenHeight / 2.0) - Float(keyboardOffset), Float(0.05)]
-            
-            let bounds = keyboardEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(keyboardEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.25
-                let scale = desiredLocalWidth / unscaledWidth
-                keyboardEnt.scale = [scale, scale, scale]
+            if showVirtualKeyboard {
+                let bounds = keyboardEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(keyboardEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.25
+                    let scale = desiredLocalWidth / unscaledWidth
+                    keyboardEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -3454,14 +4259,15 @@ struct _CurvedDisplayStreamView: View {
             // Position below keyboard if keyboard is showing, otherwise below screen
             let micOffset: Float = showVirtualKeyboard ? 0.24 : 0.08
             micEnt.position = [0.0 as Float, -(screenHeight / 2.0) - Float(micOffset), Float(0.05)]
-
-            let bounds = micEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(micEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.30
-                let scale = desiredLocalWidth / unscaledWidth
-                micEnt.scale = [scale, scale, scale]
+            if viewModel.streamSettings.showMicButton {
+                let bounds = micEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(micEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.30
+                    let scale = desiredLocalWidth / unscaledWidth
+                    micEnt.scale = [scale, scale, scale]
+                }
             }
         }
     }
@@ -3478,7 +4284,7 @@ struct _CurvedDisplayStreamView: View {
             needsResume = false
             return
         }
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard !self.hasPerformedTeardown, self.viewModel.activelyStreaming, self.streamMan == nil else {
                 print("[CurvedDisplay] Aborting stream start - Teardown: \(self.hasPerformedTeardown), Streaming: \(self.viewModel.activelyStreaming), Exists: \(self.streamMan != nil)")
@@ -3508,7 +4314,7 @@ struct _CurvedDisplayStreamView: View {
             self.streamMan = StreamManager(
                 config: self.streamConfig,
                 rendererProvider: {
-                    DrawableVideoDecoder(
+                    let decoder = DrawableVideoDecoder(
                         texture: localTexture,
                         callbacks: self.connectionCallbacks,
                         aspectRatio: self.screenAspect,
@@ -3521,40 +4327,41 @@ struct _CurvedDisplayStreamView: View {
                         },
                         callbackToRender: { textureQueue, correctedResolution in
                             guard self.renderGateOpen else { return }
-                            
-                            // 1. Drop frame in mailbox (Zero latency, No blocking)
-                            self.frameMailbox.deposit(textureQueue)
-                            
-                            // 2. Dispatch UI metadata to Main Thread
+
+                            // Push frame and UI metadata directly to Main Thread (Bypasses RealityKit traffic jam)
                             DispatchQueue.main.async {
-                                if let correctedResolution { 
-                                    self.correctedResolution = correctedResolution 
+                                // DIRECT PUSH: Instantly paint the new frame to the curved screen
+                                self.texture.replace(withDrawables: textureQueue)
+
+                                if let correctedResolution {
+                                    self.correctedResolution = correctedResolution
                                 }
-                                
+
                                 // First Frame Logic
                                 if !self.firstFrameReceived {
                                     self.firstFrameReceived = true
                                     self.idrWatchdogTimer1?.invalidate(); self.idrWatchdogTimer1 = nil
                                     self.idrWatchdogTimer2?.invalidate(); self.idrWatchdogTimer2 = nil
                                     self.guestAggressiveIDRTimer?.invalidate(); self.guestAggressiveIDRTimer = nil
-                                    
+
                                     self.postFirstFrameRebindTimer?.invalidate()
                                     self.postFirstFrameRebindTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { _ in
                                         self.rebindScreenMaterial()
                                     }
-                                    
+
                                     self.controllerSupport?.connectionEstablished()
                                     self.startHideTimer()
-                                    
-                                    // FORCE UPDATE: Manually check mailbox once for the very first frame
-                                    // to ensure the user sees an image immediately.
-                                    if let firstFrame = self.frameMailbox.collect() {
-                                        self.texture.replace(withDrawables: firstFrame)
-                                    }
                                 }
                             }
                         }
                     )
+                    
+                    // Store the decoder reference for controlling reactive dimming
+                    DispatchQueue.main.async {
+                        self.videoDecoder = decoder
+                    }
+                    
+                    return decoder
                 },
                 connectionCallbacks: self.connectionCallbacks
             )
@@ -3619,7 +4426,19 @@ struct _CurvedDisplayStreamView: View {
         viewModel.shouldCloseStream = false
 
         Task {
+            // Only open main window if menu isn't already showing it
+            // (avoids duplicate window when disconnecting via in-stream menu)
+            if !isMenuOpen {
+                openWindow(id: "mainView")
+                
+                // Allow the OS time to build the window during the heavy teardown,
+                // then force it to the correct height and size.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.positionMenuWindow()
+                }
+            }
             await dismissImmersiveSpace()
+            viewModel.isImmersiveSpaceOpen = false
         }
     }
     
@@ -3630,6 +4449,7 @@ struct _CurvedDisplayStreamView: View {
         if tiltAngle > 60.0 {
             tiltAngle = 0.0
         }
+        savedTiltAngle = Double(tiltAngle)
     }
     
     private func performCompleteTeardown() {
@@ -3655,42 +4475,22 @@ struct _CurvedDisplayStreamView: View {
         controllerSupport?.cleanup()
         controllerSupport = nil
         
-        // CRITICAL: Use stopStreamWithCompletion so we wait for LiStopConnection()
-        // to fully finish before declaring teardown complete. Without this, a new
-        // connection can start while the old one is still stopping, causing initLock
-        // timeout and black screen.
         if let sm = streamMan {
-            print("[CurvedDisplay] Stopping StreamManager (waiting for completion)...")
+            print("[CurvedDisplay] Stopping StreamManager (waiting for LiStopConnection completion)...")
             streamMan = nil  // Clear reference now to prevent double-stop
             
-            // Safety flag to ensure TEARDOWN COMPLETE fires exactly once, even if
-            // both the completion callback and the safety timeout race.
-            var teardownPosted = false
-            let postTeardown = {
-                guard !teardownPosted else { return }
-                teardownPosted = true
-                print("[CurvedDisplay] StreamManager stopped, clearing references")
-                print("[CurvedDisplay] 🔴 TEARDOWN COMPLETE")
-                NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
-            }
+            // Tell the serializer a stop is beginning — no new connection can start until
+            // notifyStopComplete() is called inside the real completion block below.
+            ConnectionSerializer.shared.notifyStopBegun()
             
             sm.stopStream(completion: {
                 DispatchQueue.main.async {
-                    postTeardown()
+                    print("[CurvedDisplay] 🔴 TEARDOWN COMPLETE — LiStopConnection finished")
+                    // Ungate the serializer — new connections may now proceed.
+                    ConnectionSerializer.shared.notifyStopComplete()
+                    NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
                 }
             })
-            
-            // Safety timeout: if stopStream completion doesn't fire within 5s
-            // (e.g., ENet control stream is stuck), forcibly post teardown so the
-            // UI state machine isn't stuck in .stopping forever. Connection.m has
-            // its own internal 10s+10s timeouts for initLock/LiStopConnection, so
-            // the underlying stop will eventually complete on its own.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                if !teardownPosted {
-                    print("[CurvedDisplay] ⚠️ StreamManager stop timed out after 5s - forcing teardown complete")
-                    postTeardown()
-                }
-            }
         } else {
             print("[CurvedDisplay] 🔴 TEARDOWN COMPLETE (no stream to stop)")
             NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
@@ -3706,7 +4506,7 @@ struct _CurvedDisplayStreamView: View {
     private func startEnvironmentFade(targetOpacity: Float, completion: (() -> Void)? = nil) {
         environmentFadeTimer?.invalidate()
         
-        guard let dome = environmentDome else {
+        guard let dome = headStorage.environmentDome else {
             completion?()
             return
         }
@@ -3757,12 +4557,12 @@ struct _CurvedDisplayStreamView: View {
     }
 
     private func updateEnvironmentState() {
-        guard let dome = environmentDome else { return }
+        guard let dome = headStorage.environmentDome else { return }
         
         if environmentSphereLevel == 0 {
             startEnvironmentFade(targetOpacity: 0.0) {
                 dome.isEnabled = false
-                self.lastEnvironmentSphereLevelApplied = 0
+                self.headStorage.lastEnvironmentSphereLevelApplied = 0
             }
             return
         }
@@ -3772,7 +4572,7 @@ struct _CurvedDisplayStreamView: View {
             startEnvironmentFade(targetOpacity: 0.0) {
                 if let tex = self.currentSkyboxTexture() {
                     self.applySkyboxTexture(tex)
-                    self.lastEnvironmentSphereLevelApplied = self.environmentSphereLevel
+                    self.headStorage.lastEnvironmentSphereLevelApplied = self.environmentSphereLevel
                     self.startEnvironmentFade(targetOpacity: 1.0)
                 }
             }
@@ -3786,13 +4586,13 @@ struct _CurvedDisplayStreamView: View {
         
         if let tex = currentSkyboxTexture() {
             applySkyboxTexture(tex)
-            lastEnvironmentSphereLevelApplied = environmentSphereLevel
+            headStorage.lastEnvironmentSphereLevelApplied = environmentSphereLevel
             startEnvironmentFade(targetOpacity: 1.0)
         }
     }
     
     private func updateNewsetState() {
-        guard let dome = environmentDome else { return }
+        guard let dome = headStorage.environmentDome else { return }
         
         if newsetLevel == 0 {
             startEnvironmentFade(targetOpacity: 0.0) {
@@ -3861,7 +4661,7 @@ struct _CurvedDisplayStreamView: View {
     }
     
     private func applySkyboxTexture(_ texture: TextureResource) {
-        guard let dome = environmentDome else { return }
+        guard let dome = headStorage.environmentDome else { return }
         var mat = UnlitMaterial(texture: texture)
         // Keep the skybox material opaque when fully visible.
         // OpacityComponent drives the fade and will automatically take the entity through a transparent path while fading.
@@ -4067,14 +4867,16 @@ struct _CurvedDisplayStreamView: View {
                 unlitMat.color.tint = .white
                 unlitMat.blending = .opaque
             } else {
-                // All other gradients are semi-transparent
+                // All other gradients use user-adjustable brightness
+                // Use user-adjustable brightness from presetBrightness, falling back to defaults
                 let tintAlpha: CGFloat = {
-                    switch dimLevel {
-                    case 5: return 0.95
-                    case 6, 7, 8, 9, 14: return 0.90
-                    default: return 0.5
+                    if let userBrightness = presetBrightness[dimLevel] {
+                        return CGFloat(userBrightness)
                     }
+                    return defaultPresetBrightness[dimLevel] ?? 0.5
                 }()
+                
+                // Always use transparent blending for smooth brightness cycling
                 unlitMat.color.tint = UIColor.white.withAlphaComponent(tintAlpha)
                 unlitMat.blending = .transparent(opacity: 1.0)
             }
@@ -4096,8 +4898,8 @@ struct _CurvedDisplayStreamView: View {
     }
 
     private func updateDimmerDomesState() {
-        dimmerDome?.isEnabled = (dimLevel == 1)
-        dimmerDomePurple?.isEnabled = (dimLevel >= 2 && dimLevel <= 14)
+        headStorage.dimmerDome?.isEnabled = (dimLevel == 1)
+        headStorage.dimmerDomePurple?.isEnabled = (dimLevel >= 2 && dimLevel <= 14)
         
         // Enable particles for Starfield (dimLevel 12) only
         // Add 0.5s warmup delay to prevent initial blink
@@ -4113,14 +4915,18 @@ struct _CurvedDisplayStreamView: View {
     }
 
     private func updateDimmerDomes(content: RealityViewContent) {
-        // Only update materials if dimLevel changed OR in Reactive mode (needs continuous updates)
+        // Only update materials if dimLevel changed, in Reactive mode (needs continuous updates), 
+        // or if the preset uses adjustable brightness (Night, Midnight, Twilight, Dawn, Sunrise, Woodland, Desert)
         let isReactiveMode = (dimLevel == 2 || dimLevel == 10 || dimLevel == 12)
+        let isAdjustablePreset = [1, 5, 6, 7, 8, 9, 14].contains(dimLevel)
         
-        if dimLevel != lastAppliedDimLevel || isReactiveMode {
-            lastAppliedDimLevel = dimLevel
+        if dimLevel != headStorage.lastAppliedDimLevel || isReactiveMode || isAdjustablePreset {
+            headStorage.lastAppliedDimLevel = dimLevel
             
-            if let dome = dimmerDome {
-                let targetAlpha: Float = viewModel.streamSettings.dimPassthrough ? Float(dimAlphas[1]) : Float(dimAlphas[0])
+            if let dome = headStorage.dimmerDome {
+                // Use user-adjustable brightness for Night mode, falling back to default
+                let nightBrightness = presetBrightness[1] ?? defaultPresetBrightness[1] ?? 0.82
+                let targetAlpha: Float = viewModel.streamSettings.dimPassthrough ? Float(nightBrightness) : Float(dimAlphas[0])
                 if let comp = dome.components[OpacityComponent.self], abs(comp.opacity - targetAlpha) > 0.001 {
                     dome.components.set(OpacityComponent(opacity: targetAlpha))
                 } else if dome.components[OpacityComponent.self] == nil {
@@ -4135,7 +4941,7 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
 
-            if let purple = self.dimmerDomePurple {
+            if let purple = self.headStorage.dimmerDomePurple {
                 let (mat, _) = getDimmerMaterial()
                 purple.model?.materials = [mat]
             }
@@ -4153,19 +4959,22 @@ struct _CurvedDisplayStreamView: View {
         dome.components.set(OpacityComponent(opacity: 0.0))
         dome.components.set(InputTargetComponent(allowedInputTypes: []))
         content.add(dome)
-        self.dimmerDome = dome
+        self.headStorage.dimmerDome = dome
 
         let purpleDome = ModelEntity(mesh: .generateSphere(radius: 60.0))
         purpleDome.scale.x = -1.0
         purpleDome.position = .zero
         purpleDome.components.set(InputTargetComponent(allowedInputTypes: []))
         content.add(purpleDome)
-        self.dimmerDomePurple = purpleDome
+        self.headStorage.dimmerDomePurple = purpleDome
 
         updateDimmerDomesState()
         
         // Add particle system for Nebula preset
         content.add(particleManager.rootEntity)
+        
+        // Initialize particle manager with saved star distance preset
+        particleManager.updateDistancePreset(starDistancePreset)
 
         Task {
             purpleGradientTextureColors = try? await makeGradientTexture(size: 1024, gradient: .sunset)
@@ -4342,7 +5151,7 @@ struct _CurvedDisplayStreamView: View {
                                     materials: [UnlitMaterial(color: .clear)])
         sphere.isEnabled = false
         content.add(sphere)
-        environmentDome = sphere
+        headStorage.environmentDome = sphere
 
         if extraSkyboxTextures.isEmpty && extraSkyboxNames.isEmpty {
             loadExtraSkyboxesFromBundle()
@@ -4350,7 +5159,7 @@ struct _CurvedDisplayStreamView: View {
         if environmentSphereLevel != 0, let tex = currentSkyboxTexture() {
             sphere.isEnabled = true
             applySkyboxTexture(tex)
-            lastEnvironmentSphereLevelApplied = environmentSphereLevel
+            headStorage.lastEnvironmentSphereLevelApplied = environmentSphereLevel
         }
     }
 
@@ -4363,9 +5172,9 @@ struct _CurvedDisplayStreamView: View {
         environmentFadeTimer?.invalidate()
         environmentFadeTimer = nil
 
-        lastEnvironmentSphereLevelApplied = 0
+        headStorage.lastEnvironmentSphereLevelApplied = 0
 
-        guard let dome = environmentDome else { return }
+        guard let dome = headStorage.environmentDome else { return }
         dome.components.set(OpacityComponent(opacity: 0.0))
         dome.isEnabled = false
     }
@@ -4374,7 +5183,8 @@ struct _CurvedDisplayStreamView: View {
         self.swapAction = swapAction
         self._streamConfig = streamConfig
         self.needsHdr = needsHdr
-        self.controllerSupport = ControllerSupport(config: streamConfig.wrappedValue, delegate: DummyControllerDelegate())
+        // Note: controllerSupport is created in setupScene (via onAppear), not here
+        // Creating it in init causes excessive re-creation on every view update
         
         let bytesPerPixel = needsHdr ? 8 : 4
         let data = Data(count: bytesPerPixel * Int(streamConfig.wrappedValue.width) * Int(streamConfig.wrappedValue.height))
@@ -4461,7 +5271,7 @@ struct _CurvedDisplayStreamView: View {
     private func handleWindowClose() {
         isMenuOpen = false
         if let sceneID = self.immersiveSpaceSceneID {
-            AudioHelpers.fixAudioForScene(identifier: sceneID)
+            AudioHelpers.fixAudioForScene(identifier: sceneID, soundStageSize: soundStageSize)
         } else {
             fixAudioForCurrentMode()
         }
@@ -4473,7 +5283,7 @@ struct _CurvedDisplayStreamView: View {
             self.showMenuPanel = false
         }
         if let sceneID = self.immersiveSpaceSceneID {
-            AudioHelpers.fixAudioForScene(identifier: sceneID)
+            AudioHelpers.fixAudioForScene(identifier: sceneID, soundStageSize: soundStageSize)
         } else {
             fixAudioForCurrentMode()
         }
@@ -4491,7 +5301,7 @@ struct _CurvedDisplayStreamView: View {
         moonlightCycleTimer?.invalidate()
         lastMoonlightUpdateTime = CACurrentMediaTime()
 
-        if let purple = self.dimmerDomePurple {
+        if let purple = self.headStorage.dimmerDomePurple {
             let initial = getMoonlightCycleColor(phase: moonlightCyclePhase).withAlphaComponent(moonlightAlphaLowPower)
             var mat = moonlightMaterial ?? UnlitMaterial(color: initial)
             mat.blending = .transparent(opacity: 1.0)
@@ -4501,30 +5311,33 @@ struct _CurvedDisplayStreamView: View {
         }
 
         moonlightCycleTimer = Timer.scheduledTimer(withTimeInterval: moonlightUpdateIntervalLowPower, repeats: true) { _ in
-            guard self.dimLevel == 11, let purple = self.dimmerDomePurple else { return }
+            guard self.dimLevel == 11, let purple = self.headStorage.dimmerDomePurple else { return }
 
             let now = CACurrentMediaTime()
             let dt = now - self.lastMoonlightUpdateTime
-            self.lastMoonlightUpdateTime = now
+            
+            DispatchQueue.main.async {
+                self.lastMoonlightUpdateTime = now
 
-            self.moonlightCyclePhase += CGFloat(dt) / self.moonlightCycleDurationLowPower
-            if self.moonlightCyclePhase >= 1.0 { self.moonlightCyclePhase -= 1.0 }
+                self.moonlightCyclePhase += CGFloat(dt) / self.moonlightCycleDurationLowPower
+                if self.moonlightCyclePhase >= 1.0 { self.moonlightCyclePhase -= 1.0 }
 
-            let nextColor = self.getMoonlightCycleColor(phase: self.moonlightCyclePhase).withAlphaComponent(self.moonlightAlphaLowPower)
-            let rgbVal = self.rgb(nextColor)
+                let nextColor = self.getMoonlightCycleColor(phase: self.moonlightCyclePhase).withAlphaComponent(self.moonlightAlphaLowPower)
+                let rgbVal = self.rgb(nextColor)
 
-            if self.colorDistance(rgbVal, self.lastMoonlightAppliedRGB) >= self.moonlightColorDeltaThresholdLowPower {
-                if var mat = self.moonlightMaterial {
-                    mat.color.tint = nextColor
-                    self.moonlightMaterial = mat
-                    purple.model?.materials = [mat]
-                } else {
-                    var mat = UnlitMaterial(color: nextColor)
-                    mat.blending = .transparent(opacity: 1.0)
-                    self.moonlightMaterial = mat
-                    purple.model?.materials = [mat]
+                if self.colorDistance(rgbVal, self.lastMoonlightAppliedRGB) >= self.moonlightColorDeltaThresholdLowPower {
+                    if var mat = self.moonlightMaterial {
+                        mat.color.tint = nextColor
+                        self.moonlightMaterial = mat
+                        purple.model?.materials = [mat]
+                    } else {
+                        var mat = UnlitMaterial(color: nextColor)
+                        mat.blending = .transparent(opacity: 1.0)
+                        self.moonlightMaterial = mat
+                        purple.model?.materials = [mat]
+                    }
+                    self.lastMoonlightAppliedRGB = rgbVal
                 }
-                self.lastMoonlightAppliedRGB = rgbVal
             }
         }
     }
@@ -4549,7 +5362,7 @@ struct _CurvedDisplayStreamView: View {
         
         // Run at 60fps for buttery smooth interpolation
         reactiveLerpTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
-            guard (self.dimLevel == 2 || self.dimLevel == 10), let purple = self.dimmerDomePurple else { return }
+            guard (self.dimLevel == 2 || self.dimLevel == 10), let purple = self.headStorage.dimmerDomePurple else { return }
             
             // Lerp factor: 0.15 = smooth but responsive (reaches 95% in ~0.2s)
             let lerpFactor: CGFloat = 0.15
@@ -4565,7 +5378,9 @@ struct _CurvedDisplayStreamView: View {
             let newG = currentG + (targetG - currentG) * lerpFactor
             let newB = currentB + (targetB - currentB) * lerpFactor
             
-            self.currentAmbientColor = UIColor(red: newR, green: newG, blue: newB, alpha: 1.0)
+            DispatchQueue.main.async {
+                self.currentAmbientColor = UIColor(red: newR, green: newG, blue: newB, alpha: 1.0)
+            }
             
             // Update material
             let (mat, _) = self.getDimmerMaterial()
@@ -4586,9 +5401,24 @@ struct _CurvedDisplayStreamView: View {
         controlsHighlighted = true
 
         hideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-            withAnimation(.easeInOut(duration: 0.35)) {
-                hideControls = true
-                controlsHighlighted = false
+            DispatchQueue.main.async {
+                if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        self.controlsExpanded = false
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + self.collapsedMenuHideDelay) {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            self.controlsExpanded = false
+                            self.hideControls = true
+                            self.controlsHighlighted = false
+                        }
+                    }
+                } else {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        self.hideControls = true
+                        self.controlsHighlighted = false
+                    }
+                }
             }
         }
     }
@@ -4596,9 +5426,24 @@ struct _CurvedDisplayStreamView: View {
     private func startHighlightTimer() {
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-            withAnimation(.easeInOut(duration: 0.35)) {
-                hideControls = true
-                controlsHighlighted = false
+            DispatchQueue.main.async {
+                if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        self.controlsExpanded = false
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + self.collapsedMenuHideDelay) {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            self.controlsExpanded = false
+                            self.hideControls = true
+                            self.controlsHighlighted = false
+                        }
+                    }
+                } else {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        self.hideControls = true
+                        self.controlsHighlighted = false
+                    }
+                }
             }
         }
     }
@@ -4613,8 +5458,10 @@ struct _CurvedDisplayStreamView: View {
             showModeLabel = true
         }
         modeLabelTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { _ in
-            withAnimation(.easeOut(duration: 0.2)) {
-                showModeLabel = false
+            DispatchQueue.main.async {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    self.showModeLabel = false
+                }
             }
         }
     }
@@ -4643,14 +5490,16 @@ struct _CurvedDisplayStreamView: View {
         statsTimer?.invalidate()
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             if let streamMan = self.streamMan, let stats = streamMan.getStatsOverlayText() {
-                self.statsOverlayText = stats
+                DispatchQueue.main.async {
+                    self.statsOverlayText = stats
+                }
             }
         }
     }
     
     private func fixAudioForCurrentMode() {
         if self.spatialAudioMode {
-            AudioHelpers.fixAudioForSurroundForCurrentWindow()
+            AudioHelpers.fixAudioForSurroundForCurrentWindow(soundStageSize: soundStageSize)
         } else {
             AudioHelpers.fixAudioForDirectStereo()
         }
@@ -4669,7 +5518,7 @@ struct _CurvedDisplayStreamView: View {
             if let collisionMesh = try? generateCurvedRoundedPlane(
                 width: CURVED_MAX_WIDTH_METERS,
                 aspectRatio: screenAspect,
-                resolution: (256, 256),
+                resolution: (64, 64),
                 curveMagnitude: curvaturePreset.value * curveAnimationMultiplier,
                 cornerRadiusFraction: 0
             ) {

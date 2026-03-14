@@ -63,6 +63,7 @@ struct FlatInputCaptureView: UIViewRepresentable {
     var absoluteTouchMode: Bool
     var hideSystemCursor: Bool
     var reclaimFocusTrigger: Int
+    var isHandGazeInputDisabled: Bool
     var onReturnPressed: (() -> Void)?
     
     func makeUIView(context: Context) -> FlatInputCaptureUIView {
@@ -72,6 +73,7 @@ struct FlatInputCaptureView: UIViewRepresentable {
         view.absoluteTouchMode = absoluteTouchMode
         view.showVirtualKeyboard = showKeyboard
         view.hideSystemCursor = hideSystemCursor
+        view.isHandGazeInputDisabled = isHandGazeInputDisabled
         view.onReturnPressed = onReturnPressed
         view.isMultipleTouchEnabled = true
         view.isUserInteractionEnabled = true
@@ -89,24 +91,19 @@ struct FlatInputCaptureView: UIViewRepresentable {
         uiView.streamConfig = streamConfig
         uiView.absoluteTouchMode = absoluteTouchMode
         uiView.hideSystemCursor = hideSystemCursor
+        uiView.isHandGazeInputDisabled = isHandGazeInputDisabled
         uiView.onReturnPressed = onReturnPressed
 
         if uiView.showVirtualKeyboard != showKeyboard {
             uiView.showVirtualKeyboard = showKeyboard
         }
 
-        // ALWAYS aggressively reclaim first responder on every update
-        // This ensures keyboard input works even after window switches
-        if !uiView.isFirstResponder {
-            print("[Keyboard] View lost first responder, reclaiming...")
-            _ = uiView.becomeFirstResponder()
-            
-            // Double-check and force if needed
+        // Only reclaim first responder when explicitly triggered (e.g., scenePhase became .active)
+        // This prevents stealing keyboard focus from other visionOS apps
+        if uiView.lastReclaimTrigger != reclaimFocusTrigger {
+            uiView.lastReclaimTrigger = reclaimFocusTrigger
             if !uiView.isFirstResponder {
-                print("[Keyboard] First attempt failed, forcing again...")
-                DispatchQueue.main.async {
-                    _ = uiView.becomeFirstResponder()
-                }
+                _ = uiView.becomeFirstResponder()
             }
         }
     }
@@ -116,8 +113,8 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     var controllerSupport: ControllerSupport?
     var streamConfig: StreamConfiguration?
     var absoluteTouchMode: Bool = true
+    var isHandGazeInputDisabled: Bool = false
     var lastReclaimTrigger: Int = 0
-    var firstResponderCheckTimer: Timer?
     var onReturnPressed: (() -> Void)?
     var showVirtualKeyboard: Bool = false {
         didSet {
@@ -180,29 +177,12 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
         super.init(frame: frame)
         setupGestures()
         setupPointerInteraction()
-        startFirstResponderMonitoring()
     }
     
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupGestures()
         setupPointerInteraction()
-        startFirstResponderMonitoring()
-    }
-    
-    private func startFirstResponderMonitoring() {
-        // Periodically check and reclaim first responder if lost
-        firstResponderCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            if !self.isFirstResponder {
-                print("[Keyboard] Periodic check: Lost first responder, reclaiming...")
-                _ = self.becomeFirstResponder()
-            }
-        }
-    }
-    
-    deinit {
-        firstResponderCheckTimer?.invalidate()
     }
     
     private func setupGestures() {
@@ -251,6 +231,14 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Reclaim first responder on touch if lost (e.g., after switching to another app)
+        if !isFirstResponder {
+            _ = becomeFirstResponder()
+        }
+        
+        // Ignore when hand/gaze input is disabled
+        guard !isHandGazeInputDisabled else { return }
+        
         // Ignore touch down events with more than one finger
         guard let allTouches = event?.allTouches, allTouches.count == 1 else {
             return
@@ -314,6 +302,9 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Ignore when hand/gaze input is disabled
+        guard !isHandGazeInputDisabled else { return }
+        
         // Ignore touch move events with more than one finger
         guard let allTouches = event?.allTouches, allTouches.count == 1 else {
             return
@@ -371,6 +362,9 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Ignore when hand/gaze input is disabled
+        guard !isHandGazeInputDisabled else { return }
+        
         guard let allTouches = event?.allTouches, allTouches.count == touches.count else {
             return
         }
@@ -595,12 +589,27 @@ struct FlatDisplayStreamView: View {
                     .ignoresSafeArea()
                     .onAppear {
                         debugLog("👻 Ghost view detected (UUID \(config.sessionUUID) != active \(viewModel.activeSessionToken)). Suppressing.")
+                        recoverFromStaleWindow()
                     }
             }
         } else {
             // During window transition (dismiss -> wait -> open), config may be nil.
             // Show black screen to prevent zombie view from initializing.
-            Color.black.ignoresSafeArea()
+            Color.black
+                .ignoresSafeArea()
+                .onAppear {
+                    recoverFromStaleWindow()
+                }
+        }
+    }
+    
+    private func recoverFromStaleWindow() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if !viewModel.activelyStreaming && viewModel.streamState == .idle {
+                print("[FlatDisplay] Stale window detected - dismissing and opening mainView")
+                openWindow(id: "mainView")
+                dismissWindow(id: "flatDisplayWindow")
+            }
         }
     }
 }
@@ -617,8 +626,9 @@ struct _FlatDisplayStreamView: View {
     
     @State private var streamMan: StreamManager?
     @State private var controllerSupport: ControllerSupport?
+    @State private var isHandGazeInputDisabled = false // Long press on control mode button to disable hand/gaze input
     @ObservedObject var connectionCallbacks: ObservableConnectionManager = .init()
-    @StateObject private var coopCoordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coopCoordinator = CoopSessionCoordinator.shared
     
     @State private var texture: TextureResource
     @State private var screen: ModelEntity = ModelEntity()
@@ -629,6 +639,8 @@ struct _FlatDisplayStreamView: View {
     
     @State private var lastUpdateSize: CGSize = .zero
     @State private var lastPhysicalWidth: Float = 0
+    @AppStorage("removeRoundedCorners") private var removeRoundedCorners: Bool = false
+    @AppStorage("darkControlsMode") private var darkControlsMode: Bool = false
     
     @State private var safeHDRSettings = FlatThreadSafeHDRSettings(
         params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 0)
@@ -639,10 +651,12 @@ struct _FlatDisplayStreamView: View {
     @State private var keyboardInput: String = " "
     @FocusState private var isKeyboardFocused: Bool
     @State private var hideControls: Bool = true
+    @State private var controlsExpanded: Bool = false
     @State private var hideTimer: Timer?
     @State private var hasPerformedTeardown = false
     @State private var windowDecommissioned = false
     @State private var spatialAudioMode: Bool = true
+    @State private var soundStageSize: SoundStageSize = .medium
     @State private var statsOverlayText: String = ""
     @State private var statsTimer: Timer?
     @State private var controlsHighlighted: Bool = false
@@ -703,7 +717,7 @@ struct _FlatDisplayStreamView: View {
         }
     }
     
-    var cornerRadiusFraction: Float { 0.012 }
+    var cornerRadiusFraction: Float { removeRoundedCorners ? 0.0 : 0.012 }
     
     init(streamConfig: Binding<StreamConfiguration>, needsHdr: Bool) {
         self._streamConfig = streamConfig
@@ -784,8 +798,12 @@ struct _FlatDisplayStreamView: View {
                         
                         Attachment(id: "presetPopup") {
                             if showInlinePresetOverlay {
-                                CenterPresetPopup(text: presetOverlayText, icon: presetOverlayIcon)
-                                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
+                                CenterPresetPopup(
+                                    text: presetOverlayText,
+                                    icon: presetOverlayIcon,
+                                    width: presetOverlayText.contains("Input Disabled") || presetOverlayText.contains("Input Enabled") ? 713 : 713
+                                )
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
                             } else {
                                 Color.clear.frame(width: 1, height: 1)
                             }
@@ -839,7 +857,8 @@ struct _FlatDisplayStreamView: View {
                             streamConfig: streamConfig,
                             absoluteTouchMode: viewModel.streamSettings.absoluteTouchMode,
                             hideSystemCursor: true,  // Always hide - PC renders its own cursor
-                            reclaimFocusTrigger: reclaimKeyboardFocus
+                            reclaimFocusTrigger: reclaimKeyboardFocus,
+                            isHandGazeInputDisabled: isHandGazeInputDisabled
                         )
                         .frame(width: fitSize.width, height: fitSize.height)
                         .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
@@ -938,7 +957,7 @@ struct _FlatDisplayStreamView: View {
         return withLifecycle
             .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
                 if shouldClose && !hasPerformedTeardown {
-                    triggerCloseSequence()
+                    DispatchQueue.main.async { triggerCloseSequence() }
                 }
             }
             .onChange(of: scenePhase) { oldValue, newValue in
@@ -947,6 +966,7 @@ struct _FlatDisplayStreamView: View {
                         print("Suspending stream due to background (Menu is not open)")
                         needsResume = true
                         startingStream = false
+                        viewModel.isSuspendingForBackground = true
                         streamMan?.stopStream()
                         streamMan = nil
                         controllerSupport?.cleanup()
@@ -958,6 +978,7 @@ struct _FlatDisplayStreamView: View {
                     
                     if needsResume {
                         print("Resuming stream from background")
+                        viewModel.isSuspendingForBackground = false
                         needsResume = false
                         self.renderGateOpen = true
                         self.hasPerformedTeardown = false
@@ -999,7 +1020,10 @@ struct _FlatDisplayStreamView: View {
             .onChange(of: viewModel.activelyStreaming) { _, newValue in
                 guard !windowDecommissioned else { return }  // Zombie window — ignore
                 if newValue {
-                    self.renderGateOpen = true
+                    // FIX: Defer state modification to prevent "Modifying state during view update" warnings
+                    DispatchQueue.main.async {
+                        self.renderGateOpen = true
+                    }
                     ensureStreamStartedIfNeeded()
                     dismissWindow(id: "mainView")
                 }
@@ -1045,8 +1069,56 @@ struct _FlatDisplayStreamView: View {
     
     // MARK: - Controls
     
+    /// Center button: tap to expand the dynamic menu.
+    private var flatCollapsedControlsView: some View {
+        Button {
+            if hideControls {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    hideControls = false
+                    controlsHighlighted = true
+                }
+                startHighlightTimer()
+            }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                controlsExpanded = true
+            }
+            startHideTimer()
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 24.07))
+                .frame(width: 50, height: 50)
+        }
+        .buttonStyle(.plain)
+    }
+    
     @ViewBuilder
     private var topControlsBar: some View {
+        Group {
+            if viewModel.streamSettings.useCollapsedControlsMenu {
+                flatDynamicControlsBar
+                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : 0.05))
+                    .animation(Animation.easeInOut(duration: 0.25), value: controlsHighlighted)
+                    .animation(Animation.easeInOut(duration: 0.25), value: hideControls)
+                    .allowsHitTesting(true)
+            } else {
+                flatOriginalControlsBar
+            }
+        }
+    }
+    
+    private var flatOriginalControlsBar: some View {
+        flatControlsBarContent
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .glassBackgroundEffect()
+        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : 0.05))
+        .animation(Animation.easeInOut(duration: 0.25), value: controlsHighlighted)
+        .animation(Animation.easeInOut(duration: 0.25), value: hideControls)
+        .allowsHitTesting(true)
+    }
+    
+    /// Original bar content (no accordion); used when dynamic menu is off.
+    private var flatControlsBarContent: some View {
         HStack(spacing: 20) {
             makeControlButton(label: "Home", systemImage: "house.fill") {
                 if isMenuOpen {
@@ -1058,126 +1130,151 @@ struct _FlatDisplayStreamView: View {
                 }
                 fixAudioForCurrentMode()
             }
-            
-            makeControlButton(label: spatialAudioMode ? "Spatial Audio" : "Direct Audio", systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones") {
+            Button {
+                if !controlsHighlighted && hideControls {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideControls = false
+                        controlsHighlighted = true
+                    }
+                    startHighlightTimer()
+                    return
+                }
+                controlsHighlighted = false
+                hideControls = false
                 spatialAudioMode.toggle()
                 fixAudioForCurrentMode()
-                
                 presetOverlayText = spatialAudioMode ? "Audio: Spatial" : "Audio: Stereo"
                 presetOverlayIcon = spatialAudioMode ? "person.spatialaudio.fill" : "headphones"
                 showInlinePresetOverlay = true
-                
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
-                    }
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                 }
+                startHideTimer()
+            } label: {
+                Label(spatialAudioMode ? "Spatial Audio" : "Direct Audio", systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones")
+                    .font(.system(size: 24.07))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                    .frame(width: 50, height: 50)
             }
-            
+            .labelStyle(.iconOnly)
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                guard spatialAudioMode else { return }
+                soundStageSize = soundStageSize.next()
+                fixAudioForCurrentMode()
+                presetOverlayText = "Sound Stage: \(soundStageSize.rawValue)"
+                presetOverlayIcon = "person.spatialaudio.fill"
+                showInlinePresetOverlay = true
+                presetOverlayTimer?.invalidate()
+                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                }
+            })
             makeControlButton(label: "Dim", systemImage: dimLevel == 0 ? "lightbulb.fill" : "lightbulb") {
                 dimLevel = dimLevel == 0 ? 1 : 0
                 UserDefaults.standard.set(dimLevel, forKey: "ambient.dimming.level")
-
+                viewModel.streamSettings.dimPassthrough = (dimLevel != 0)
                 presetOverlayText = dimLevel == 0 ? "Dimming: Off" : "Dimming: On"
                 presetOverlayIcon = dimLevel == 0 ? "lightbulb.fill" : "lightbulb"
                 showInlinePresetOverlay = true
-                
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
-                    }
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                 }
             }
-            
             makeControlButton(label: "Preset", systemImage: "camera.filters") {
-                guard canChangePreset() else {
-                    print("[FlatDisplay] Preset change on cooldown, ignoring")
-                    return
-                }
-                
+                guard canChangePreset() else { return }
                 let next = (viewModel.streamSettings.uikitPreset + 1) % 4
                 viewModel.streamSettings.uikitPreset = next
                 applyCurvedUIKitPreset(next)
-                
                 presetCooldownUntil = Date().addingTimeInterval(0.3)
-                
                 presetOverlayText = presetName(for: next)
                 presetOverlayIcon = "camera.filters"
                 showInlinePresetOverlay = true
-                
                 presetOverlayTimer?.invalidate()
                 presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
-                    }
+                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                 }
                 startHideTimer()
             }
-            
-            // 3D SBS Toggle
             makeControlButton(label: videoMode == .standard2D ? "Standard" : "3D", systemImage: "view.3d") {
-                if videoMode == .standard2D {
-                    show3DConfirm = true
-                } else {
+                if videoMode == .standard2D { show3DConfirm = true }
+                else {
                     videoMode = .standard2D
                     applyWindowAspectRatioLock()
-                    
                     presetOverlayText = "Standard Display"
                     presetOverlayIcon = "view.3d"
                     showInlinePresetOverlay = true
-                    
                     presetOverlayTimer?.invalidate()
                     presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            showInlinePresetOverlay = false
-                        }
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                     }
                 }
                 startHideTimer()
             }
-            
             makeControlButton(label: viewModel.streamSettings.statsOverlay ? "Hide Stats" : "Show Stats", systemImage: "wifi") {
                 viewModel.streamSettings.statsOverlay.toggle()
+                if viewModel.streamSettings.statsOverlay {
+                    startStatsTimer()
+                } else {
+                    statsTimer?.invalidate()
+                }
                 startHideTimer()
             }
-            
+            if viewModel.streamSettings.showTaskManagerButton {
+                makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle") {
+                    sendTaskManager()
+                    startHideTimer()
+                }
+            }
             makeControlButton(label: showVirtualKeyboard ? "Hide Keyboard" : "Show Keyboard", systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard") {
                 showVirtualKeyboard.toggle()
                 isKeyboardFocused = showVirtualKeyboard
                 startHideTimer()
             }
-            
-            makeControlButton(label: viewModel.streamSettings.absoluteTouchMode ? "Gaze Control" : "Touch Control", systemImage: viewModel.streamSettings.absoluteTouchMode ? "eye.fill" : "hand.point.up.left.fill") {
-                viewModel.streamSettings.absoluteTouchMode.toggle()
-                UserDefaults.standard.set(viewModel.streamSettings.absoluteTouchMode, forKey: "flat.absoluteTouchMode")
-                
-                presetOverlayText = viewModel.streamSettings.absoluteTouchMode ? "Gaze Control" : "Touch Control"
-                presetOverlayIcon = viewModel.streamSettings.absoluteTouchMode ? "eye.fill" : "hand.point.up.left.fill"
-                showInlinePresetOverlay = true
-                
-                presetOverlayTimer?.invalidate()
-                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        showInlinePresetOverlay = false
+            if viewModel.streamSettings.showControllerBattery {
+                BatteryIndicatorView(
+                    controlsHighlighted: $controlsHighlighted,
+                    hideControls: $hideControls,
+                    startHighlightTimer: startHighlightTimer,
+                    startHideTimer: startHideTimer
+                )
+            }
+            LongPressControlBtn(
+                label: viewModel.streamSettings.absoluteTouchMode ? "Gaze Control" : "Touch Control",
+                systemImage: isHandGazeInputDisabled ? "lock.fill" : (viewModel.streamSettings.absoluteTouchMode ? "eye.fill" : "hand.point.up.left.fill"),
+                controlsHighlighted: $controlsHighlighted,
+                hideControls: $hideControls,
+                startHighlightTimer: startHighlightTimer,
+                startHideTimer: startHideTimer,
+                primaryAction: {
+                    viewModel.streamSettings.absoluteTouchMode.toggle()
+                    UserDefaults.standard.set(viewModel.streamSettings.absoluteTouchMode, forKey: "flat.absoluteTouchMode")
+                    presetOverlayText = viewModel.streamSettings.absoluteTouchMode ? "Gaze Control" : "Touch Control"
+                    presetOverlayIcon = viewModel.streamSettings.absoluteTouchMode ? "eye.fill" : "hand.point.up.left.fill"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                    }
+                },
+                longPressAction: {
+                    isHandGazeInputDisabled.toggle()
+                    presetOverlayText = isHandGazeInputDisabled ? "Screen Input Disabled" : "Screen Input Enabled"
+                    presetOverlayIcon = isHandGazeInputDisabled ? "lock.fill" : (viewModel.streamSettings.absoluteTouchMode ? "eye.fill" : "hand.point.up.left.fill")
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                     }
                 }
-                startHideTimer()
-            }
-            
-            // Co-op Indicator (if in co-op session)
+            )
             if viewModel.isCoopSession {
                 HStack(spacing: 6) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("2P")
-                        .font(.system(size: 14, weight: .bold))
-                    
-                    // Participant counter
-                    let coordinator = CoopSessionCoordinator.shared
-                    let participantCount = coordinator.participants.count
-                    Text("(\(participantCount)/2)")
+                    Image(systemName: "person.2.fill").font(.system(size: 16, weight: .semibold))
+                    Text("2P").font(.system(size: 14, weight: .bold))
+                    Text("(\(CoopSessionCoordinator.shared.participants.count)/2)")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.8))
                 }
@@ -1185,34 +1282,40 @@ struct _FlatDisplayStreamView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.3))
-                )
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 0.85, green: 0.6, blue: 0.95).opacity(0.3)))
             }
-            
-            // Co-op Invite Button (only when hosting and guest is missing)
             if viewModel.isCoopSession {
                 let coordinator = CoopSessionCoordinator.shared
                 if coordinator.isHosting && coordinator.participants.count < 2 {
                     coopInviteButton
                 }
             }
-            
-            // Co-op Disconnect Button (always show when in co-op)
             if viewModel.isCoopSession {
                 coopDisconnectButton
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
-        .glassBackgroundEffect()
-        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : 0.5) : 0.05)
-        .animation(Animation.easeInOut(duration: 0.25), value: controlsHighlighted)
-        .animation(Animation.easeInOut(duration: 0.25), value: hideControls)
-        .allowsHitTesting(true)
     }
     
+    /// Dynamic bar: collapsed = center only (no pill); expanded = full bar with pill. Both branches animate opacity/scale for smooth expand and collapse.
+    private var flatDynamicControlsBar: some View {
+        ZStack {
+            flatCollapsedControlsView
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .opacity(controlsExpanded ? 0 : 1)
+                .scaleEffect(controlsExpanded ? 0.88 : 1)
+                .allowsHitTesting(!controlsExpanded)
+            flatControlsBarContent
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .glassBackgroundEffect()
+                .opacity(controlsExpanded ? 1 : 0)
+                .scaleEffect(controlsExpanded ? 1 : 0.88)
+                .allowsHitTesting(controlsExpanded)
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: controlsExpanded)
+    }
+
     private func makeControlButton(label: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button {
             if !controlsHighlighted && hideControls {
@@ -1248,10 +1351,7 @@ struct _FlatDisplayStreamView: View {
                 return
             }
             
-            // Create a fresh activity with a new session ID and broadcast it.
-            // We can't just re-activate the existing activity because the guest
-            // already leave()'d that session -- SharePlay won't let them re-join it.
-            // A fresh session ID forces a new GroupSession object on the guest side.
+            
             let coordinator = CoopSessionCoordinator.shared
             Task {
                 await coordinator.reInviteGuest()
@@ -1315,6 +1415,21 @@ struct _FlatDisplayStreamView: View {
         .buttonStyle(.plain)
     }
     
+    private func sendTaskManager() {
+        DispatchQueue.global(qos: .userInteractive).async {
+            let MODIFIER_CTRL: Int8 = 0x02
+            let MODIFIER_SHIFT: Int8 = 0x01
+            let modifiers = MODIFIER_CTRL | MODIFIER_SHIFT
+            let ESC_KEY: Int16 = 0x1B
+            
+           
+            
+            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x03, modifiers)  // Key Down
+            usleep(50 * 1000)
+            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x04, modifiers)  // Key Up
+        }
+    }
+    
     @ViewBuilder
     private var statsOverlayView: some View {
         if viewModel.streamSettings.statsOverlay {
@@ -1322,12 +1437,12 @@ struct _FlatDisplayStreamView: View {
                 Text(statsOverlayText.isEmpty ? "Collecting stats..." : statsOverlayText)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.white)
-                    .multilineTextAlignment(.leading)
+                    .multilineTextAlignment(.center)
             }
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.black.opacity(0.6))
+                    .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
             )
             .allowsHitTesting(false)
         }
@@ -1345,7 +1460,7 @@ struct _FlatDisplayStreamView: View {
             mesh = try generateCurvedRoundedPlane(
                 width: baseWidth,
                 aspectRatio: screenAspect,
-                resolution: (512, 512),
+                resolution: (256, 256),
                 curveMagnitude: 0,
                 cornerRadiusFraction: cornerRadiusFraction
             )
@@ -1671,6 +1786,7 @@ struct _FlatDisplayStreamView: View {
         self.hasPerformedTeardown = false
         self.windowDecommissioned = false  // Window is alive again — allow it to react to state
         self.renderGateOpen = true
+        viewModel.isStreamViewAlive = true
         dismissWindow(id: "mainView")
         isMenuOpen = false
         
@@ -1705,6 +1821,7 @@ struct _FlatDisplayStreamView: View {
         debugLog("📍 teardownScene called - hasPerformedTeardown: \(hasPerformedTeardown)")
         statsTimer?.invalidate()
         statsTimer = nil
+        viewModel.isStreamViewAlive = false
         if !hasPerformedTeardown { performCompleteTeardown() }
     }
     
@@ -1732,42 +1849,22 @@ struct _FlatDisplayStreamView: View {
         controllerSupport?.cleanup()
         controllerSupport = nil
         
-        // CRITICAL: Use stopStreamWithCompletion so we wait for LiStopConnection()
-        // to fully finish before declaring teardown complete. Without this, a new
-        // connection can start while the old one is still stopping, causing initLock
-        // timeout and black screen.
         if let sm = streamMan {
-            print("[FlatDisplay] Stopping StreamManager (waiting for completion)...")
+            print("[FlatDisplay] Stopping StreamManager (waiting for LiStopConnection completion)...")
             streamMan = nil  // Clear reference now to prevent double-stop
             
-            // Safety flag to ensure TEARDOWN COMPLETE fires exactly once, even if
-            // both the completion callback and the safety timeout race.
-            var teardownPosted = false
-            let postTeardown = {
-                guard !teardownPosted else { return }
-                teardownPosted = true
-                print("[FlatDisplay] StreamManager stopped, clearing references")
-                print("[FlatDisplay] 🔴 TEARDOWN COMPLETE")
-                NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
-            }
+            // Tell the serializer a stop is beginning — no new connection can start until
+            // notifyStopComplete() is called inside the real completion block below.
+            ConnectionSerializer.shared.notifyStopBegun()
             
             sm.stopStream(completion: {
                 DispatchQueue.main.async {
-                    postTeardown()
+                    print("[FlatDisplay] 🔴 TEARDOWN COMPLETE — LiStopConnection finished")
+                    // Ungate the serializer — new connections may now proceed.
+                    ConnectionSerializer.shared.notifyStopComplete()
+                    NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
                 }
             })
-            
-            // Safety timeout: if stopStream completion doesn't fire within 5s
-            // (e.g., ENet control stream is stuck), forcibly post teardown so the
-            // UI state machine isn't stuck in .stopping forever. Connection.m has
-            // its own internal 10s+10s timeouts for initLock/LiStopConnection, so
-            // the underlying stop will eventually complete on its own.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                if !teardownPosted {
-                    print("[FlatDisplay] ⚠️ StreamManager stop timed out after 5s - forcing teardown complete")
-                    postTeardown()
-                }
-            }
         } else {
             print("[FlatDisplay] 🔴 TEARDOWN COMPLETE (no stream to stop)")
             NotificationCenter.default.post(name: Notification.Name("RKStreamDidTeardown"), object: nil)
@@ -1784,7 +1881,7 @@ struct _FlatDisplayStreamView: View {
     
     private func fixAudioForCurrentMode() {
         if spatialAudioMode {
-            AudioHelpers.fixAudioForSurroundForCurrentWindow()
+            AudioHelpers.fixAudioForSurroundForCurrentWindow(soundStageSize: soundStageSize)
         } else {
             AudioHelpers.fixAudioForDirectStereo()
         }
@@ -2093,10 +2190,24 @@ struct _FlatDisplayStreamView: View {
     private func startHideTimer() {
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-            if viewModel.activelyStreaming {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    hideControls = true
-                    controlsHighlighted = false
+            DispatchQueue.main.async {
+                if viewModel.activelyStreaming {
+                    if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
+                        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                            self.controlsExpanded = false
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                self.hideControls = true
+                                self.controlsHighlighted = false
+                            }
+                        }
+                    } else {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            self.hideControls = true
+                            self.controlsHighlighted = false
+                        }
+                    }
                 }
             }
         }
@@ -2105,9 +2216,23 @@ struct _FlatDisplayStreamView: View {
     private func startHighlightTimer() {
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            withAnimation(.easeOut(duration: 0.3)) {
-                controlsHighlighted = false
-                hideControls = true
+            DispatchQueue.main.async {
+                if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
+                    withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                        self.controlsExpanded = false
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            self.controlsHighlighted = false
+                            self.hideControls = true
+                        }
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        self.controlsHighlighted = false
+                        self.hideControls = true
+                    }
+                }
             }
         }
     }

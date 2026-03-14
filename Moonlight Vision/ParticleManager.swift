@@ -10,6 +10,35 @@ import SwiftUI
 import RealityKit
 import UIKit
 
+enum StarDistancePreset: Int, CaseIterable {
+    case close = 0
+    case medium = 1
+    case far = 2
+    
+    var distances: (near: Float, mid: Float, distant: Float) {
+        switch self {
+        case .close:   return (7.0, 11.0, 15.0)
+        case .medium:  return (10.0, 15.0, 20.0)
+        case .far:     return (14.0, 19.0, 25.0)
+        }
+    }
+    
+    var displayName: String {
+        switch self {
+        case .close:  return "Close"
+        case .medium: return "Medium"
+        case .far:    return "Far"
+        }
+    }
+    
+    func next() -> StarDistancePreset {
+        let allCases = Self.allCases
+        let currentIndex = allCases.firstIndex(of: self) ?? 0
+        let nextIndex = (currentIndex + 1) % allCases.count
+        return allCases[nextIndex]
+    }
+}
+
 @MainActor
 class ParticleManager {
     public let rootEntity = Entity()
@@ -17,11 +46,13 @@ class ParticleManager {
     private var midStarsEmitter: Entity?
     private var nearStarsEmitter: Entity?
     
+    private var currentPreset: StarDistancePreset = .close
    
     // This absorbs the jitter caused by UI clicks/fades.
     private var smoothedBrightness: Float = 0.0
     
-    init() {
+    init(preset: StarDistancePreset = .close) {
+        self.currentPreset = preset
         setupEmitters()
     }
     
@@ -107,16 +138,44 @@ class ParticleManager {
         // No need to reset math; the lerp will catch up smoothly automatically.
     }
     
+    func updateDistancePreset(_ preset: StarDistancePreset) {
+        currentPreset = preset
+        
+        // Update existing emitters with new distances
+        guard let distantEmitter = distantStarsEmitter,
+              let midEmitter = midStarsEmitter,
+              let nearEmitter = nearStarsEmitter else { return }
+        
+        let distances = preset.distances
+        
+        // Update distant layer
+        var distantParticles = distantEmitter.components[ParticleEmitterComponent.self] ?? ParticleEmitterComponent()
+        distantParticles.emitterShapeSize = [distances.distant, distances.distant, distances.distant]
+        distantEmitter.components.set(distantParticles)
+        
+        // Update mid layer
+        var midParticles = midEmitter.components[ParticleEmitterComponent.self] ?? ParticleEmitterComponent()
+        midParticles.emitterShapeSize = [distances.mid, distances.mid, distances.mid]
+        midEmitter.components.set(midParticles)
+        
+        // Update near layer
+        var nearParticles = nearEmitter.components[ParticleEmitterComponent.self] ?? ParticleEmitterComponent()
+        nearParticles.emitterShapeSize = [distances.near, distances.near, distances.near]
+        nearEmitter.components.set(nearParticles)
+    }
+    
     private func setupEmitters() {
         // GENERATE TEXTURE: A sharp, glowing dot
         guard let texture = generateStarTexture() else { return }
         
-        // LAYER 1: DISTANT STARS (15m radius - dense, smallest)
+        let distances = currentPreset.distances
+        
+        // LAYER 1: DISTANT STARS (dense, smallest)
         let distantEntity = Entity()
         var distantParticles = ParticleEmitterComponent()
         
         distantParticles.emitterShape = .sphere
-        distantParticles.emitterShapeSize = [15.0, 15.0, 15.0] // Far layer
+        distantParticles.emitterShapeSize = [distances.distant, distances.distant, distances.distant] // Far layer
         
         distantParticles.mainEmitter.birthRate = 2000      // Dense starfield
         distantParticles.mainEmitter.size = 0.015          // 1.5 cm
@@ -141,12 +200,12 @@ class ParticleManager {
         distantStarsEmitter = distantEntity
         rootEntity.addChild(distantEntity)
         
-        // LAYER 2: MID STARS (11m radius - medium density, medium size)
+        // LAYER 2: MID STARS (medium density, medium size)
         let midEntity = Entity()
         var midParticles = ParticleEmitterComponent()
         
         midParticles.emitterShape = .sphere
-        midParticles.emitterShapeSize = [11.0, 11.0, 11.0] // Middle layer
+        midParticles.emitterShapeSize = [distances.mid, distances.mid, distances.mid] // Middle layer
         
         midParticles.mainEmitter.birthRate = 500           // Medium density
         midParticles.mainEmitter.size = 0.014             // 1.4 cm
@@ -171,12 +230,12 @@ class ParticleManager {
         midStarsEmitter = midEntity
         rootEntity.addChild(midEntity)
         
-        // LAYER 3: NEAR STARS (7m radius - sparse, largest)
+        // LAYER 3: NEAR STARS (sparse, largest)
         let nearEntity = Entity()
         var nearParticles = ParticleEmitterComponent()
         
         nearParticles.emitterShape = .sphere
-        nearParticles.emitterShapeSize = [7.0, 7.0, 7.0] // Closest layer for parallax
+        nearParticles.emitterShapeSize = [distances.near, distances.near, distances.near] // Closest layer for parallax
         
         nearParticles.mainEmitter.birthRate = 300         // Sparse (creates depth)
         nearParticles.mainEmitter.size = 0.018           // 1.8 cm (largest)

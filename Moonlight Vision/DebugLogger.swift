@@ -2,15 +2,14 @@
 //  DebugLogger.swift
 //  Moonlight Vision
 //
-//  Debug logging utility that writes to a file for crash-surviving logs.
-//  Only active in DEBUG builds - completely stripped from release/App Store builds.
+//
 //
 
 import Foundation
 
 #if DEBUG
 
-/// A lightweight debug logger that writes to a file asynchronously.
+///
 /// Logs survive app crashes and can be retrieved via Xcode's Devices window.
 class DebugLogger {
     static let shared = DebugLogger()

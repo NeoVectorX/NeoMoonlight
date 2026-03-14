@@ -57,6 +57,10 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     // Central lifecycle state
     @Published var streamState: StreamLifecycleState = .idle
     
+    /// Tracks whether an immersive space is currently open.
+    /// Used to prevent "Unable to dismiss an Immersive Space since none is opened" crashes.
+    @Published var isImmersiveSpaceOpen: Bool = false
+
     /// Active session token - views must match this to run logic.
     /// Ghost views with stale tokens render black and do nothing.
     @Published var activeSessionToken: String = ""
@@ -69,6 +73,18 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     @Published var reconnectCooldownUntil: Date? = nil
     
     @Published var isSwappingRenderers: Bool = false
+    
+    /// True when the stream view (CurvedDisplay/FlatDisplay) is alive and listening for notifications.
+    /// Used by Resume button to decide whether to post a notification or re-launch the immersive space.
+    @Published var isStreamViewAlive: Bool = false
+    
+    /// Set by Resume button when the stream view is dead and needs to be re-launched.
+    /// Observed by MoonlightVisionApp to re-open the immersive space.
+    @Published var shouldRelaunchStream: Bool = false
+    
+    /// Set true before stopStream() during background suspend so that the
+    /// resulting ConnectionLost notification is ignored (it's not a real disconnect).
+    @Published var isSuspendingForBackground: Bool = false
     
     // Co-op Session State
     @Published var isCoopSession: Bool = false
@@ -97,19 +113,31 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         // Clean up any co-op hosts that were saved to database (now they're memory-only)
         dataManager.removeCoopHosts()
         
-        CryptoManager.generateKeyPairUsingSSL()
-        clientCert = CryptoManager.readCertFromFile()
+        // Read cert if it already exists (fast path for subsequent launches)
+        clientCert = CryptoManager.readCertFromFile() ?? Data()
         uniqueId = IdManager.getUniqueId()
         streamSettings = dataManager.getSettings()
 
         super.init()
+        
+        // Generate cert on background thread if needed (expensive on first launch)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            CryptoManager.generateKeyPairUsingSSL()
+            let cert = CryptoManager.readCertFromFile()
+            DispatchQueue.main.async {
+                if let cert = cert {
+                    self?.clientCert = cert
+                    print("[Init] Certificate ready (background)")
+                }
+            }
+        }
         
         // Load gaze control settings from UserDefaults (not stored in Core Data)
         streamSettings.curvedGazeUseTouchMode = UserDefaults.standard.bool(forKey: "curved.gazeUseTouchMode")
         streamSettings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
         streamSettings.gazeCursorOffsetY = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetY")
         appManager = AppAssetManager(callback: self)
-        discoveryManager = DiscoveryManager(hosts: hosts, andCallback: self)
+        discoveryManager = DiscoveryManager(hosts: hosts, andCallback: self, uniqueId: uniqueId, cert: clientCert)
 
         // Observe first-frame and teardown events to drive lifecycle state
         let center = NotificationCenter.default
@@ -150,8 +178,10 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         // attempt fails before reaching .running. This is separate from RKStreamDidTeardown
         // (which fires when an old stream's cleanup completes) to avoid a race where an old
         // teardown arriving during a new stream's .starting phase incorrectly resets state.
+        // Defer to next run loop to avoid "Modifying state during view update" when the
+        // notification is delivered during a SwiftUI update.
         center.addObserver(forName: Notification.Name("StreamStartFailed"), object: nil, queue: .main) { [weak self] _ in
-            self?.onStreamStartFailed()
+            DispatchQueue.main.async { self?.onStreamStartFailed() }
         }
         
         // ConnectionLost is posted by connectionTerminated to trigger the view's
@@ -159,9 +189,15 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         // shouldCloseStream is set so the view calls performCompleteTeardown,
         // which waits for LiStopConnection() to finish before posting RKStreamDidTeardown.
         center.addObserver(forName: Notification.Name("ConnectionLost"), object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
+            DispatchQueue.main.async {
+                guard let self else { return }
                 print("[Lifecycle] ConnectionLost received.")
+
+                if self.isSuspendingForBackground {
+                    print("[Lifecycle] Ignoring ConnectionLost — app is suspending for background")
+                    return
+                }
+
                 // Only trigger shouldCloseStream if we're in a state where the view
                 // needs to clean up. During user-initiated disconnect, shouldCloseStream
                 // is already being set by beginDisconnect.
@@ -220,30 +256,28 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     /// so the view (FlatDisplay/CurvedDisplay) tears down its resources (streamMan, immersive space).
     /// The view's teardown will then post RKStreamDidTeardown → onTeardownComplete → .idle.
     private func onStreamStartFailed() {
-        Task { @MainActor in
-            guard streamState == .starting else {
-                print("[Lifecycle] Ignoring StreamStartFailed because state is not 'starting' (current: \(streamState.rawValue))")
-                return
+        guard streamState == .starting else {
+            print("[Lifecycle] Ignoring StreamStartFailed because state is not 'starting' (current: \(streamState.rawValue))")
+            return
+        }
+        print("[Lifecycle] Stream start failed. Triggering view teardown (streamState -> stopping)")
+        self.streamState = .stopping
+        self.shouldCloseStream = true
+        self.reconnectCooldownUntil = nil
+
+        if self.isCoopSession {
+            print("[Lifecycle] Cleaning up co-op session after start failure")
+            self.isCoopSession = false
+            self.assignedControllerSlot = 0
+            self.coopPartnerName = nil
+            self.coopBitrateOverride = nil
+            Task {
+                await CoopSessionCoordinator.shared.endSession()
             }
-            print("[Lifecycle] Stream start failed. Triggering view teardown (streamState -> stopping)")
-            self.streamState = .stopping
-            self.shouldCloseStream = true
-            self.reconnectCooldownUntil = nil
-            
-            if self.isCoopSession {
-                print("[Lifecycle] Cleaning up co-op session after start failure")
-                self.isCoopSession = false
-                self.assignedControllerSlot = 0
-                self.coopPartnerName = nil
-                self.coopBitrateOverride = nil
-                Task {
-                    await CoopSessionCoordinator.shared.endSession()
-                }
-            }
-            
-            if !self.isSwappingRenderers {
-                self.activelyStreaming = false
-            }
+        }
+
+        if !self.isSwappingRenderers {
+            self.activelyStreaming = false
         }
     }
     
@@ -805,19 +839,20 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
 
     func userDidRequestDisconnect() {
         print("[ViewModel] User requested disconnect. Setting activelyStreaming to false.")
-        self.activelyStreaming = false
-        
-        // Note: Do NOT call endSession() here!
-        // SharePlay must stay alive until AFTER LiStopConnection() finishes,
-        // otherwise the C-library hangs waiting for network ACKs that will never come.
-        // endSession() will be called in onTeardownComplete() after stream stops.
-        
-        if isCoopSession {
-            print("[ViewModel] Co-op session active - will end SharePlay AFTER stream teardown")
-        }
-        
-        // Let the UI update before we start the teardown
+
+        // Defer state updates to the next run loop to prevent "Modifying state during view update" warnings
         DispatchQueue.main.async {
+            self.activelyStreaming = false
+
+            // Note: Do NOT call endSession() here!
+            // SharePlay must stay alive until AFTER LiStopConnection() finishes,
+            // otherwise the C-library hangs waiting for network ACKs that will never come.
+            // endSession() will be called in onTeardownComplete() after stream stops.
+
+            if self.isCoopSession {
+                print("[ViewModel] Co-op session active - will end SharePlay AFTER stream teardown")
+            }
+
             self.beginDisconnect()
         }
     }
@@ -866,6 +901,14 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
                         self.shouldCloseStream = true
                     }
                 }
+            }
+            
+            // Safety timeout: if quit request hangs (server unreachable, network stall),
+            // force teardown after 8s so the app doesn't get stuck in .stopping forever.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [weak self] in
+                guard let self, self.streamState == .stopping, !self.shouldCloseStream else { return }
+                print("[ViewModel] ⚠️ Quit request timed out after 8s — forcing shouldCloseStream")
+                self.shouldCloseStream = true
             }
         } else {
             print("[ViewModel] ⚠️ WARNING: No active app found (appId: \(currentlyStreamingAppId ?? "nil")), skipping quit request")
@@ -1005,8 +1048,43 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     }
     // END SwapSafetyGuardrails
 
+    // MARK: - Centralized Safe Teardown
+
+    /// Safely tears down stream UI: dismisses any lingering UIKit presentations (e.g. error alerts),
+    /// closes all stream windows, then updates state on the next run loop to avoid "Modifying state during view update" crashes.
+    @MainActor
+    func performSafeTeardown(dismissWindow: DismissWindowAction, dismissImmersiveSpace: DismissImmersiveSpaceAction?) async {
+        print("[ViewModel] Performing safe asynchronous teardown.")
+
+        // 1. Force dismiss any lingering UIKit alerts/presentations
+        if let classicVC = _UIKitStreamView.controllerReference.object {
+            classicVC.presentedViewController?.dismiss(animated: false)
+        }
+
+        // FIX: 150ms so the UIKit presentation is fully deallocated before SwiftUI destroys the window
+        try? await Task.sleep(for: .milliseconds(150))
+
+        // 2. Dismiss all streaming windows
+        dismissWindow(id: "classicStreamingWindow")
+        dismissWindow(id: "flatDisplayWindow")
+
+        // 3. Dismiss immersive space if one exists
+        if let dismissImmersiveSpace = dismissImmersiveSpace {
+            await dismissImmersiveSpace()
+            self.isImmersiveSpaceOpen = false
+        }
+
+        // 4. Update state asynchronously to prevent "Modifying state during view update" warnings
+        DispatchQueue.main.async {
+            self.activelyStreaming = false
+            self.streamState = .idle
+            self.shouldCloseStream = false
+            self.isStreamViewAlive = false
+        }
+    }
+
     // MARK: - Renderer Swap Support
-    
+
     @MainActor
     func performRendererSwap(openWindow: OpenWindowAction, openImmersiveSpace: OpenImmersiveSpaceAction, dismissWindow: DismissWindowAction, dismissImmersiveSpace: DismissImmersiveSpaceAction? = nil) async {
         if let last = lastSwapAt {
@@ -1056,21 +1134,10 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         // END SwapSafetyGuardrails
         
         print("[ViewModel] ✅ Swap: Teardown confirmed.")
-        
-        // 4. Dismiss the old surface (again, post-teardown to be extra sure)
-        if targetRenderer == .classicMetal {
-            print("[ViewModel] Swap: Dismissing immersive space (post-teardown)")
-            await dismissImmersiveSpace?()
-            // BEGIN SwapSafetyGuardrails: immersive dismissal settle buffer INCREASED for reliability
-            try? await Task.sleep(for: .milliseconds(1800))
-            // END SwapSafetyGuardrails
-        } else {
-            print("[ViewModel] Swap: Dismissing flatDisplayWindow (post-teardown)")
-            dismissWindow(id: "flatDisplayWindow")
-            // BEGIN SwapSafetyGuardrails: window server settle buffer INCREASED for curved reopening
-            try? await Task.sleep(for: .milliseconds(1800))
-            // END SwapSafetyGuardrails
-        }
+
+        // 4. Safe teardown: dismiss any UIKit presentations, all stream windows, and immersive space
+        await performSafeTeardown(dismissWindow: dismissWindow, dismissImmersiveSpace: dismissImmersiveSpace)
+        try? await Task.sleep(for: .milliseconds(300))
 
         // 5. Update settings for the new renderer
         streamSettings.renderer = targetRenderer

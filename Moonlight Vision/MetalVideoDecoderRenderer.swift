@@ -472,6 +472,11 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
             return DR_NEED_IDR
         }
         
+        guard let session = session else {
+            free(dataPtr)
+            return DR_NEED_IDR
+        }
+        
         guard let sampleBuffer = createSampleBuffer(
             dataPtr: dataPtr,
             length: Int(length),
@@ -483,7 +488,7 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         }
         
         VTDecompressionSessionDecodeFrame(
-            session!,
+            session,
             sampleBuffer: sampleBuffer,
             flags: [._EnableAsynchronousDecompression],
             frameRefcon: nil,
@@ -546,7 +551,8 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
             let frameData = Data(bytesNoCopy: dataPtr, count: Int(length), deallocator: .none)
             return createAV1FormatDescriptionForIDRFrame(frameData)
         } else {
-            abort()
+            // Unsupported video format - return nil to request IDR
+            return nil
         }
     }
     

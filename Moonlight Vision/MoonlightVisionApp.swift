@@ -89,6 +89,7 @@ struct MoonlightVisionApp: SwiftUI.App {
         .immersionStyle(selection: .constant(.mixed), in: .mixed, .full)
         .upperLimbVisibility(.automatic)
         .immersiveEnvironmentBehavior(.coexist)
+        .restorationBehavior(.disabled)
 
         // Flat Display - RealityKit in WindowGroup
         WindowGroup(id: "flatDisplayWindow", for: StreamConfiguration.self) { streamConfig in
@@ -113,6 +114,26 @@ struct MoonlightVisionApp: SwiftUI.App {
         }
         .windowStyle(.plain)
         .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: ["flatDisplayWindow"])
+        
+        // Classic Display - UIKit-based streaming (for keyboard+mouse compatibility)
+        WindowGroup(id: "classicStreamingWindow", for: StreamConfiguration.self) { $streamConfig in
+            UIKitStreamView(streamConfig: $streamConfig)
+                .id(streamConfig?.sessionUUID ?? "none")
+                .environmentObject(appDelegate.mainViewModel)
+                .onDisappear {
+                    // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
+                }
+                .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
+                    if isSwapping { return }
+                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
+                }
+        }
+        .windowStyle(.plain)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: ["classicStreamingWindow"])
         
         // Kickstarter Window - Forces visionOS to recalculate Shared Space visibility
         // This enables external apps (Spotify, Discord, etc.) to appear in Curved Display mode
@@ -129,6 +150,9 @@ struct MoonlightVisionApp: SwiftUI.App {
 
 private struct MainRootView<Content: View>: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @EnvironmentObject private var vm: MainViewModel
     let content: () -> Content
     
@@ -138,16 +162,40 @@ private struct MainRootView<Content: View>: View {
     
     var body: some View {
         content()
-            .onAppear {
-                if vm.streamSettings.renderer != .curvedDisplay {
-                    Task { await dismissImmersiveSpace() }
-                }
+            .onChange(of: vm.shouldRelaunchStream) { shouldRelaunch in
+                guard shouldRelaunch else { return }
+                vm.shouldRelaunchStream = false
+                Task { await relaunchStream() }
             }
-            .onChange(of: vm.activelyStreaming) { active in
-                if !active, vm.streamSettings.renderer != .curvedDisplay {
-                    Task { await dismissImmersiveSpace() }
-                }
-            }
+    }
+    
+    @MainActor
+    private func relaunchStream() async {
+        let renderer = vm.streamSettings.renderer
+        
+        guard let config = vm.currentStreamConfig.copy() as? StreamConfiguration else {
+            print("[Relaunch] Failed to copy stream config")
+            return
+        }
+        
+        let newToken = UUID().uuidString
+        config.sessionUUID = newToken
+        vm.activeSessionToken = newToken
+        vm.currentStreamConfig = config
+        vm.streamState = .starting
+        
+        print("[Relaunch] Re-opening \(renderer) with new session \(newToken)")
+        
+        if renderer == .curvedDisplay {
+            dismissWindow(id: "mainView")
+            try? await Task.sleep(for: .milliseconds(300))
+            let result = try? await openImmersiveSpace(id: renderer.windowId, value: config)
+            print("[Relaunch] Immersive space result: \(String(describing: result))")
+        } else {
+            try? await Task.sleep(for: .milliseconds(150))
+            openWindow(id: renderer.windowId, value: config)
+            print("[Relaunch] \(renderer.description) window opened")
+        }
     }
 }
 

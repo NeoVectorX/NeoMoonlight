@@ -19,6 +19,7 @@
 @interface DiscoveryManager : NSObject <MDNSCallback>
 
 - (id) initWithHosts:(NSArray*)hosts andCallback:(id<DiscoveryCallback>) callback;
+- (id) initWithHosts:(NSArray*)hosts andCallback:(id<DiscoveryCallback>) callback uniqueId:(NSString*)uniqueId cert:(NSData*)cert;
 - (void) startDiscovery;
 - (void) stopDiscovery;
 - (void) stopDiscoveryBlocking;

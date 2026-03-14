@@ -85,7 +85,7 @@ struct UserGuideView: View {
                             
                             SetupStep(number: 1, text: "Download & Install Sunshine or Apollo on your gaming PC", color: brandBlue)
                             SetupStep(number: 2, text: "Access Web UI at https://localhost:47990", color: brandBlue)
-                            SetupStep(number: 3, text: "Find your PC in Moonlight on AVP and enter the PIN shown to authorize", color: brandBlue)
+                            SetupStep(number: 3, text: "Find your PC in Moonlight on AVP and enter the PIN shown to authorize. Important: If using Apollo, be sure to enable all permissions on the PIN page", color: brandBlue)
                         }
                         .padding()
                         .background(Color.white.opacity(0.05))
@@ -206,7 +206,8 @@ struct UserGuideView: View {
                             description: "Cycle through three input modes in Curved Display mode for different use cases.",
                             details: [
                                 "Three Input Modes: Toggle between Gaze Control, Screen Adjust, and Controller Mode",
-                                "Controller Mode: When enabled, Bluetooth controllers connected to Vision Pro will function. Ensure keyboard is disabled to avoid conflict with controller input"
+                                "Controller Mode: When enabled, Bluetooth controllers connected to Vision Pro will function. Ensure keyboard is disabled to avoid conflict with controller input",
+                                "Long Press to Lock: Long press the input mode button to disable hand/gaze input. Useful for eating or resting your hands without moving the cursor. Long press again to re-enable."
                             ]
                         )
 
@@ -388,10 +389,10 @@ struct UserGuideView: View {
                                 CoopStep(text: "In Neo Moonight settings, set Controller Mode to 'Single/Co-op'")
                                 CoopStep(text: "Click the Co-op button on the main menu")
                                 CoopStep(text: "Click 'Host Co-op Session'")
-                                CoopStep(text: "Select your gaming PC/App to stream")
-                                CoopStep(text: "Toggle between 'Local' or 'Online' mode (see Connection Mode above)")
-                                CoopStep(text: "Click 'Start Co-op Session' - the session will launch for you and a SharePlay audio cue will play")
-                                CoopStep(text: "Wait for your friend to join. If they're a new guest, you'll need to authorize the PIN that will appear for them. They will need to share the PIN with you to add them in Apollo. Important: Enable controller permissions for the guest client in Sunshine/Apollo settings, otherwise their gamepad won't work")
+                                CoopStep(text: "Select your PC or App to stream. Important: Use Desktop or a physical monitor app. Apollo virtual displays are not supported for co-op.")
+                                CoopStep(text: "Toggle between 'Local' or 'Online' mode")
+                                CoopStep(text: "Click 'Start Co-op Session' - the session will launch for you, you'll hear an audio cue and a SharePlay Message will appear, select 'SharePlay', not 'SharePlay for Me'")
+                                CoopStep(text: "Wait for your friend to join. If they're a new guest, you'll need to authorize the PIN that will appear for them. They will need to share the PIN with you to add them in Apollo or Sunshine. Important: Enable ALL permissions including controller for the guest client in Apollo settings, otherwise their gamepad won't work!")
                                 CoopStep(text: "If using Curved Display mode, select Controller Mode to activate your gamepad")
                             }
                             .padding()
@@ -475,7 +476,7 @@ struct UserGuideView: View {
                                 icon: "wifi",
                                 iconColor: .green,
                                 tip: "Network Performance",
-                                detail: "For best results, both players should be on the same local network. Remote play over the internet is supported but may have higher latency. If experiencing connection issues or poor quality, try reducing the resolution (1080p or 1440p recommended for remote play) and lowering the bitrate."
+                                detail: "For best results, both players should be on the same local network. Remote play over the internet is supported but may have higher latency, a strong connection is required. If experiencing connection issues or poor quality, try reducing the resolution (1080p or 1440p recommended for remote play) and lowering the bitrate."
                             )
                             
                             QuickTip(
@@ -512,6 +513,58 @@ struct UserGuideView: View {
                                 tip: "Firewall Settings",
                                 detail: "If the guest cannot connect in Online mode, ensure your PC's firewall (Windows Defender, antivirus software, etc.) allows Sunshine/Apollo through. Firewall blocking is a common connection issue."
                             )
+                            
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: "network")
+                                        .font(.title3)
+                                        .foregroundColor(.blue)
+                                        .frame(width: 24)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Testing Port Forwarding")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(.white)
+                                        
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            Text("After configuring port forwarding, test your ports to verify they're open. Ensure Sunshine is running first, then use a port checker tool:")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.7))
+                                            
+                                            HStack(spacing: 12) {
+                                                Link(destination: URL(string: "https://canyouseeme.org")!) {
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: "arrow.up.right.square.fill")
+                                                            .font(.caption)
+                                                        Text("CanYouSeeMe.org")
+                                                            .font(.caption)
+                                                            .fontWeight(.medium)
+                                                    }
+                                                    .foregroundColor(brandBlue)
+                                                }
+                                                
+                                                Link(destination: URL(string: "https://portchecker.io")!) {
+                                                    HStack(spacing: 6) {
+                                                        Image(systemName: "arrow.up.right.square.fill")
+                                                            .font(.caption)
+                                                        Text("Portchecker.io")
+                                                            .font(.caption)
+                                                            .fontWeight(.medium)
+                                                    }
+                                                    .foregroundColor(brandBlue)
+                                                }
+                                            }
+                                            .padding(.top, 2)
+                                            
+                                            Text("Test key ports like 47984, 47990, 48010. If they report \"Open\" or \"Success,\" your port forwarding (both TCP and UDP) is configured correctly. \"Closed\" or \"Error\" means the ports are blocked by your router or firewall.")
+                                                .font(.caption)
+                                                .foregroundColor(.white.opacity(0.7))
+                                                .padding(.top, 4)
+                                        }
+                                    }
+                                }
+                            }
                             
                             QuickTip(
                                 icon: "person.crop.circle",
@@ -565,7 +618,7 @@ struct UserGuideView: View {
                                     brandBlue: brandBlue
                                 )
                                 InStreamFeature(
-                                    icon: "moon.fill",
+                                    icon: "lightbulb.fill",
                                     title: "Passthrough Dimming",
                                     description: "Reduce outside distractions with environment dimming",
                                     brandBlue: brandBlue
@@ -579,7 +632,7 @@ struct UserGuideView: View {
                                 InStreamFeature(
                                     icon: "hand.point.up.left.fill",
                                     title: "Touch Control",
-                                    description: "Trackpad-style hand dragging or physical mouse/trackpad support",
+                                    description: "Trackpad-style hand dragging or physical mouse/trackpad support. Long press the control mode button to disable hand/gaze input when needed.",
                                     brandBlue: brandBlue
                                 )
                             }
@@ -636,9 +689,15 @@ struct UserGuideView: View {
                                     brandBlue: brandBlue
                                 )
                                 InStreamFeature(
-                                    icon: "moon.fill",
+                                    icon: "lightbulb.fill",
                                     title: "Advanced Lighting",
                                     description: "Choose from various gradient presets, two reactive modes that dynamically respond to screen content, or the immersive Starfield effect.",
+                                    brandBlue: brandBlue
+                                )
+                                InStreamFeature(
+                                    icon: "moon.stars.fill",
+                                    title: "Star Distance (Starfield)",
+                                    description: "When using Starfield lighting, adjust star proximity with three presets: Close (default), Medium, and Far. Ideal for preventing star clipping on scaled displays.",
                                     brandBlue: brandBlue
                                 )
                                 InStreamFeature(
@@ -669,6 +728,13 @@ struct UserGuideView: View {
                                 iconColor: .green,
                                 tip: "Apple Environments",
                                 detail: "Choose an Apple environment first, launch Curved Display mode, then rotate the digital crown to reveal the environment."
+                            )
+                            
+                            QuickTip(
+                                icon: "lock.fill",
+                                iconColor: .gray,
+                                tip: "Disable Hand Input",
+                                detail: "Long press the control mode button (Gaze/Touch Control) to disable hand and gaze input. This lets you eat, adjust your headset, or rest your hands without accidentally moving the cursor. Long press again to re-enable."
                             )
                             
                         }

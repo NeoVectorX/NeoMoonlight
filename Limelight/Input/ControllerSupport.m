@@ -575,8 +575,50 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 {
     if (@available(iOS 14.0, tvOS 14.0, *)) {
         if (controller.gamepad.battery) {
-            // Poll for updated battery status every 30 seconds
-            controller.batteryTimer = [NSTimer scheduledTimerWithTimeInterval:30 repeats:YES block:^(NSTimer *timer) {
+            NSLog(@"[Battery] Initializing battery monitoring for playerIndex=%ld, batteryState=%ld, batteryLevel=%.2f",
+                  (long)controller.playerIndex,
+                  (long)controller.gamepad.battery.batteryState,
+                  controller.gamepad.battery.batteryLevel);
+            
+            // Send initial battery state unconditionally
+            {
+                uint8_t batteryState;
+                switch (controller.gamepad.battery.batteryState) {
+                    case GCDeviceBatteryStateFull:
+                        batteryState = LI_BATTERY_STATE_FULL;
+                        break;
+                    case GCDeviceBatteryStateCharging:
+                        batteryState = LI_BATTERY_STATE_CHARGING;
+                        break;
+                    case GCDeviceBatteryStateDischarging:
+                        batteryState = LI_BATTERY_STATE_DISCHARGING;
+                        break;
+                    case GCDeviceBatteryStateUnknown:
+                    default:
+                        batteryState = LI_BATTERY_STATE_UNKNOWN;
+                        break;
+                }
+                
+                LiSendControllerBatteryEvent(controller.playerIndex, batteryState, (uint8_t)(controller.gamepad.battery.batteryLevel * 100));
+                
+                controller.lastBatteryState = controller.gamepad.battery.batteryState;
+                controller.lastBatteryLevel = controller.gamepad.battery.batteryLevel;
+                
+                NSLog(@"[Battery] Sending initial battery update to Swift UI: level=%d, state=%u, playerIndex=%ld",
+                      (int)(controller.gamepad.battery.batteryLevel * 100), batteryState, (long)controller.playerIndex);
+                
+                // Update Swift UI for primary controller (playerIndex 0)
+                if (controller.playerIndex == 0) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [[ControllerBatteryState shared] updateBatteryWithLevel:(int)(controller.gamepad.battery.batteryLevel * 100)
+                                                                          state:batteryState
+                                                                  hasController:YES];
+                    });
+                }
+            }
+            
+            // Poll for updated battery status every 5 seconds
+            controller.batteryTimer = [NSTimer scheduledTimerWithTimeInterval:5 repeats:YES block:^(NSTimer *timer) {
                 if (controller.lastBatteryState != controller.gamepad.battery.batteryState ||
                     controller.lastBatteryLevel != controller.gamepad.battery.batteryLevel) {
                     uint8_t batteryState;
@@ -601,11 +643,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                     
                     controller.lastBatteryState = controller.gamepad.battery.batteryState;
                     controller.lastBatteryLevel = controller.gamepad.battery.batteryLevel;
+                    
+                    NSLog(@"[Battery] Battery update: level=%d, state=%u, playerIndex=%ld",
+                          (int)(controller.gamepad.battery.batteryLevel * 100), batteryState, (long)controller.playerIndex);
+                    
+                    // Update Swift UI for primary controller (playerIndex 0)
+                    if (controller.playerIndex == 0) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [[ControllerBatteryState shared] updateBatteryWithLevel:(int)(controller.gamepad.battery.batteryLevel * 100)
+                                                                              state:batteryState
+                                                                      hasController:YES];
+                        });
+                    }
                 }
             }];
-            
-            // Fire the timer immediately to send the initial battery state
-            [controller.batteryTimer fire];
+        } else {
+            NSLog(@"[Battery] No battery available for controller playerIndex=%ld", (long)controller.playerIndex);
         }
     }
 }
@@ -614,6 +667,15 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 {
     if (@available(iOS 14.0, tvOS 14.0, *)) {
         [controller.batteryTimer invalidate];
+        
+        // Update Swift UI when primary controller disconnects
+        if (controller.playerIndex == 0) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[ControllerBatteryState shared] updateBatteryWithLevel:0
+                                                                  state:LI_BATTERY_STATE_UNKNOWN
+                                                          hasController:NO];
+            });
+        }
     }
 }
 

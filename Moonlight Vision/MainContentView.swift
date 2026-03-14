@@ -954,7 +954,11 @@ struct ComputerCard3D: View {
     @ViewBuilder
     private var resumeButton: some View {
         Button {
-            NotificationCenter.default.post(name: Notification.Name("ResumeStreamFromMenu"), object: nil)
+            if viewModel.isStreamViewAlive {
+                NotificationCenter.default.post(name: Notification.Name("ResumeStreamFromMenu"), object: nil)
+            } else {
+                viewModel.shouldRelaunchStream = true
+            }
         } label: {
             Text("Resume")
                 .fontWeight(.semibold)

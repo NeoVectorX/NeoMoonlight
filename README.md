@@ -6,7 +6,14 @@
 
 **Neo Moonlight** is a community‑fork of [RikuKunMS2's moonlight-ios-vision](https://github.com/RikuKunMS2/moonlight-ios-vision) and the original [Moonlight iOS](https://github.com/moonlight-stream/moonlight-ios) project, enhanced specifically for the Apple Vision Pro.
 
----
+## 🚀 Features & Improvements  
+- **Low‑Latency Streaming Entitlement** — Implements Apple's [`com.apple.developer.low-latency-streaming`](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.low-latency-streaming) entitlement for smoother, lag‑reduced streaming.  
+- **Spatial Audio / Stereo Toggle** — Added a new top icon that lets you switch between spatial audio and stereo while gaming.  
+- **Auto‑Hiding UI Icons** — Icons disappear automatically during streaming to maximize immersion.  
+- **Rounded Corners** — Rounded corners to better fit visionOS design aesthetics.  
+- **Classic Display Mode** — Restored UIKit-based rendering as an alternative display mode for improved compatibility.
+- **Automatic Aspect Ratio** — Stream aspect ratio adjusts automatically.
+- **Mouse Cursor Toggle** — Added a toggle switch in settings to disable VisionOS cursor, eliminating duplicate cursors.
 
 ## 🚀 Neo Moonlight v12.0 - Plato Edition
 **Release Date:** February 2026

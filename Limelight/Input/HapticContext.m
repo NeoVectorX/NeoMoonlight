@@ -19,14 +19,20 @@
 }
 
 -(void)cleanup API_AVAILABLE(ios(14.0), tvos(14.0), visionos(1.0)) {
-    if (_hapticPlayer != nil) {
-        [_hapticPlayer cancelAndReturnError:nil];
-        _hapticPlayer = nil;
-    }
+    // Check _hapticEngine first - if stoppedHandler already fired,
+    // both _hapticEngine and _hapticPlayer will be nil
     if (_hapticEngine != nil) {
+        if (_hapticPlayer != nil) {
+            // Only stop if we were actively playing - avoids exception if engine already stopped
+            if (_playing) {
+                [_hapticPlayer stopAtTime:0 error:nil];
+            }
+            _hapticPlayer = nil;
+        }
         [_hapticEngine stopWithCompletionHandler:nil];
         _hapticEngine = nil;
     }
+    _playing = NO;
 }
 
 -(void)setMotorAmplitude:(unsigned short)amplitude API_AVAILABLE(ios(14.0), tvos(14.0), visionos(1.0)) {

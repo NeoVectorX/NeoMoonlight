@@ -6,6 +6,29 @@
 //  Copyright © 2025 Moonlight Game Streaming Project. All rights reserved.
 //
 
+import AVFoundation
+
+enum SoundStageSize: String, Codable, CaseIterable {
+    case small = "Small"
+    case medium = "Medium"
+    case large = "Large"
+    
+    var avAudioSessionSize: AVAudioSession.SoundStageSize {
+        switch self {
+        case .small: return .small
+        case .medium: return .medium
+        case .large: return .large
+        }
+    }
+    
+    func next() -> SoundStageSize {
+        let all = SoundStageSize.allCases
+        let currentIndex = all.firstIndex(of: self) ?? 0
+        let nextIndex = (currentIndex + 1) % all.count
+        return all[nextIndex]
+    }
+}
+
 class AudioHelpers {
 
     private static func fixCategoryAndMic() {
@@ -38,17 +61,16 @@ class AudioHelpers {
     
     /// Ensure that the audio session is surround and anchored to the active window
     /// Also ensures that the microphone uses voice chat noise cancellation.
-    static func fixAudioForSurroundForCurrentWindow() {
+    static func fixAudioForSurroundForCurrentWindow(soundStageSize: SoundStageSize = .medium) {
         AudioHelpers.fixCategoryAndMic()
         
         let audioSession = AVAudioSession.sharedInstance()
         do {
             if let id = UIApplication.shared.connectedScenes.first?.session.persistentIdentifier {
-                print("AudioHelpers - Found current window \(id)")
+                print("AudioHelpers - Found current window \(id) with sound stage: \(soundStageSize.rawValue)")
 
-                // TODO(shinyquagsire23): Not sure how this would interact w/ surround sound or Dolby
                 try audioSession.setPreferredOutputNumberOfChannels(audioSession.maximumOutputNumberOfChannels)
-                try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: .medium, anchoringStrategy: .scene(identifier: id)))
+                try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: soundStageSize.avAudioSessionSize, anchoringStrategy: .scene(identifier: id)))
             }
             else {
                 print("AudioHelpers - Couldn't find current window?")
@@ -59,18 +81,17 @@ class AudioHelpers {
         }
     }
     
-    static func fixAudioForSurroundForUIKitWindow(_ window: UIWindow) {
+    static func fixAudioForSurroundForUIKitWindow(_ window: UIWindow, soundStageSize: SoundStageSize = .medium) {
         AudioHelpers.fixCategoryAndMic()
         
         let audioSession = AVAudioSession.sharedInstance()
         do {
             print(window, window.windowScene?.session.persistentIdentifier)
             if let id = window.windowScene?.session.persistentIdentifier {
-                print("AudioHelpers - Found UIKit window \(id)")
+                print("AudioHelpers - Found UIKit window \(id) with sound stage: \(soundStageSize.rawValue)")
                 
-                // TODO(shinyquagsire23): Not sure how this would interact w/ surround sound or Dolby
                 try audioSession.setPreferredOutputNumberOfChannels(audioSession.maximumOutputNumberOfChannels)
-                try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: .medium, anchoringStrategy: .scene(identifier: id)))
+                try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: soundStageSize.avAudioSessionSize, anchoringStrategy: .scene(identifier: id)))
             }
             else {
                 fixAudioForDirectStereo()
@@ -82,14 +103,14 @@ class AudioHelpers {
     }
     
     /// Anchor audio to a specific scene by its identifier
-    static func fixAudioForScene(identifier: String) {
+    static func fixAudioForScene(identifier: String, soundStageSize: SoundStageSize = .medium) {
         AudioHelpers.fixCategoryAndMic()
         
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            print("AudioHelpers - Anchoring audio to scene: \(identifier)")
+            print("AudioHelpers - Anchoring audio to scene: \(identifier) with sound stage: \(soundStageSize.rawValue)")
             try audioSession.setPreferredOutputNumberOfChannels(audioSession.maximumOutputNumberOfChannels)
-            try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: .medium, anchoringStrategy: .scene(identifier: identifier)))
+            try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: soundStageSize.avAudioSessionSize, anchoringStrategy: .scene(identifier: identifier)))
         } catch {
             print("AudioHelpers - Failed to anchor to scene \(identifier): \(error)")
         }

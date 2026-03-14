@@ -27,12 +27,18 @@ struct MainContentViewAttachment: View {
 struct HostedMainContentView: UIViewRepresentable {
     @EnvironmentObject var viewModel: MainViewModel
     
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
     func makeUIView(context: Context) -> UIView {
         let hostingController = UIHostingController(rootView: 
             MainContentView()
                 .environmentObject(viewModel)
                 .environment(\.isEmbeddedInCurved, true)
         )
+        
+        context.coordinator.hostingController = hostingController
         
         hostingController.view.backgroundColor = .clear
         hostingController.view.isOpaque = false
@@ -42,5 +48,9 @@ struct HostedMainContentView: UIViewRepresentable {
     
     func updateUIView(_ uiView: UIView, context: Context) {
         // Updates are handled automatically by SwiftUI's environment
+    }
+    
+    class Coordinator {
+        var hostingController: AnyObject?
     }
 }

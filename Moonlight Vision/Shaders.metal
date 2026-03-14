@@ -80,6 +80,13 @@ inline float roundedRectSDF(float2 centerPos, float2 size, float radius) {
 
 // MARK: - Color Grading
 inline float3 applyVisionProGrading(float3 color, ColorEnhancementUniforms params) {
+    // EARLY EXIT: If all values are default, skip the math entirely
+    if (abs(params.saturation - 1.0) < 0.001 && 
+        abs(params.contrast - 1.0) < 0.001 && 
+        abs(params.warmth) < 0.001) {
+        return clamp(color, 0.0, 1.0);
+    }
+
     float luma = dot(color, kRec709Luma);
     float3 saturated = mix(float3(luma), color, params.saturation);
     float3 contrasted = (saturated - 0.5) * params.contrast + 0.5;
@@ -203,9 +210,8 @@ fragment half4 copyFragmentShaderHDR_EDR_UIKit(
     float cornerRadius = 16.0;
     float dist = roundedRectSDF(centerPos, texSize * 0.5, cornerRadius);
 
-    if (dist > 0.0) {
-        discard_fragment();
-    }
+    // Use smoothstep to create a 1-pixel soft edge for perfect anti-aliasing
+    float alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
 
     float ySample = yTex.sample(s, in.uv).r;
     float2 uvSample = cbcrTex.sample(s, in.uv).rg;
@@ -240,7 +246,7 @@ fragment half4 copyFragmentShaderHDR_EDR_UIKit(
     finalColor = applyVisionProGrading(finalColor, eff);
     finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
 
-    return half4(half3(finalColor), 1.0h);
+    return half4(half3(finalColor), half(alpha));
 }
 
 fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
@@ -258,9 +264,8 @@ fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
     float cornerRadius = 16.0;
     float dist = roundedRectSDF(centerPos, texSize * 0.5, cornerRadius);
 
-    if (dist > 0.0) {
-        discard_fragment();
-    }
+    // Use smoothstep to create a 1-pixel soft edge for perfect anti-aliasing
+    float alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
 
     float3 rgb_nl = float3(rgbTex.sample(s, in.uv).rgb);
 
@@ -282,5 +287,5 @@ fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
     finalColor = applyVisionProGrading(finalColor, eff);
     finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
 
-    return half4(half3(finalColor), 1.0h);
+    return half4(half3(finalColor), half(alpha));
 }

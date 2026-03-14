@@ -10,6 +10,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Binding public var settings: TemporarySettings
+    @AppStorage("classic.absoluteTouchMode") private var classicAbsoluteTouchMode: Bool = false
     @State private var selectedAspectRatio: AspectRatio?
     @State private var isCustomAspectRatio: Bool = false
     @State private var isCustomResolution: Bool = false
@@ -194,17 +195,37 @@ struct SettingsView: View {
                             .padding(.top, 8)
                     }
                     
-                    HStack {
-                        Text("Display Mode")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Picker("Display Mode", selection: $settings.renderer) {
-                            Text(Renderer.classicMetal.description).tag(Renderer.classicMetal)
-                            Text(Renderer.curvedDisplay.description).tag(Renderer.curvedDisplay)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Display Mode")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Picker("Display Mode", selection: $settings.renderer) {
+                                Text(Renderer.classicMetal.description).tag(Renderer.classicMetal)
+                                Text(Renderer.curvedDisplay.description).tag(Renderer.curvedDisplay)
+                                Text(Renderer.classicDisplay.description).tag(Renderer.classicDisplay)
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: settings.renderer) { _, _ in
+                                settings.save()
+                            }
                         }
-                        .pickerStyle(.menu)
-                        .onChange(of: settings.renderer) { _, _ in
-                            settings.save()
+                        
+                        if settings.renderer == .curvedDisplay {
+                            Text("Curved Display offers an immersive experience with customizable screen curvature, 360° environments, and advanced visual effects. External apps are not visible in this mode.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else if settings.renderer == .classicMetal {
+                            Text("Flat Display provides a traditional flat screen experience with RealityKit rendering and modern visual enhancements. External apps remain visible.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else if settings.renderer == .classicDisplay {
+                            Text("Classic Display uses the original UIKit rendering for improved compatibility with keyboard and mouse input. External apps remain visible.")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(.vertical, 4)
@@ -389,7 +410,26 @@ struct SettingsView: View {
                             .pickerStyle(.menu)
                         }
                         
-                        Text("Choose your default cursor control method. **Gaze Control**: Use your eyes and pinch to control the cursor. **Touch Control**: Use trackpad-style hand dragging with pinch to control cursor. Toggle between modes anytime during streaming.")
+                        Text("Choose your default cursor control method. **Gaze Control**: Use your eyes and pinch to control the cursor. Quick double pinch = click, hold pinch = right-click. **Touch Control**: Use trackpad-style hand dragging with pinch to control cursor. Quick double pinch = click, hold pinch = right-click. Toggle between modes anytime during streaming.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Classic Display Default Controls")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Picker("", selection: $classicAbsoluteTouchMode) {
+                                Text("Touch Control").tag(false)
+                                Text("Gaze Control").tag(true)
+                            }
+                            .pickerStyle(.menu)
+                        }
+                        
+                        Text("Choose your cursor control method for Classic Display. **Gaze Control**: Touch position follows your gaze. **Touch Control**: Trackpad-style relative movement. This setting is applied when the stream starts and cannot be changed mid-stream.")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -426,8 +466,8 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Controller & Audio Settings
-                SettingsSection(title: "Controller & Audio") {
+                // Additional Options
+                SettingsSection(title: "Additional Options") {
                     VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Controller Mode")
@@ -448,11 +488,98 @@ struct SettingsView: View {
                     Toggle("Swap A/B and X/Y Buttons", isOn: $settings.swapABXYButtons)
                         .padding(.vertical, 4)
                     
-                    Toggle("Play Audio on PC", isOn: $settings.playAudioOnPC)
-                        .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Play Audio on PC", isOn: $settings.playAudioOnPC)
+                        
+                        Text("Plays audio on your PC speakers/headphones instead of streaming to Vision Pro.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
                     
-                    Toggle("Mic Streamer Compatibility Mode", isOn: $settings.showMicButton)
-                        .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Mic Streamer Compatibility Mode", isOn: $settings.showMicButton)
+                        
+                        Text("Adds a mute button to control Mic Streamer app while in Curved Display mode.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show Task Manager Button", isOn: Binding(
+                            get: { settings.showTaskManagerButton },
+                            set: { newValue in
+                                settings.showTaskManagerButton = newValue
+                                UserDefaults.standard.set(newValue, forKey: "showTaskManagerButton")
+                            }
+                        ))
+                        
+                        Text("Adds a button to the top controls that quickly opens Task Manager on your PC.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show Controller Battery Level", isOn: Binding(
+                            get: { settings.showControllerBattery },
+                            set: { newValue in
+                                settings.showControllerBattery = newValue
+                                UserDefaults.standard.set(newValue, forKey: "showControllerBattery")
+                            }
+                        ))
+                        
+                        Text("Displays battery level and charging status for the primary controller.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Dynamic Controls Menu", isOn: Binding(
+                            get: { settings.useCollapsedControlsMenu },
+                            set: { newValue in
+                                settings.useCollapsedControlsMenu = newValue
+                                UserDefaults.standard.set(newValue, forKey: "useCollapsedControlsMenu")
+                            }
+                        ))
+                        
+                        Text("Top bar becomes a single less distracting icon that expands on tap. Turn off for the classic always-visible bar.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Remove Rounded Corners", isOn: Binding(
+                            get: { settings.removeRoundedCorners },
+                            set: { newValue in
+                                settings.removeRoundedCorners = newValue
+                                UserDefaults.standard.set(newValue, forKey: "removeRoundedCorners")
+                            }
+                        ))
+                        
+                        Text("Disables the rounded corners on the stream display. Requires relaunch.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Dark Mode", isOn: Binding(
+                            get: { settings.darkControlsMode },
+                            set: { newValue in
+                                settings.darkControlsMode = newValue
+                                UserDefaults.standard.set(newValue, forKey: "darkControlsMode")
+                            }
+                        ))
+                        
+                        Text("Further reduces control bar visibility for enhanced immersion in dark environments. (Flat and Curved display mode only)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
                 }
                 
                 // Advanced Settings
@@ -500,15 +627,21 @@ struct SettingsView: View {
                         .padding(.top, 4)
                     }
                     
-                    HStack {
-                        Text("Frame Pacing")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Picker("", selection: $settings.useFramePacing) {
-                            Text("Lowest Latency").tag(false)
-                            Text("Smoothest Video").tag(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Frame Pacing")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Picker("", selection: $settings.useFramePacing) {
+                                Text("Lowest Latency").tag(false)
+                                Text("Smoothest Video").tag(true)
+                            }
+                            .pickerStyle(.menu)
                         }
-                        .pickerStyle(.menu)
+                        
+                        Text("Lowest Latency: minimal lag, ideal for competitive games. Smoothest Video: no stutters, ideal for cinematic games.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                     }
                     .padding(.vertical, 4)
                 }

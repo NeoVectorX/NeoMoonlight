@@ -210,6 +210,19 @@ struct AppsView: View {
     }
     
     private func openAppStream(app: TemporaryApp) {
+        // Gate: do not start a new connection until any in-progress stop has truly
+        // completed (LiStopConnection returned). The ConnectionSerializer is the
+        // authoritative gate — no timers, no guessing.
+        if ConnectionSerializer.shared.isStopInProgress {
+            print("[AppsView] ConnectionSerializer gate is closed — waiting for stop to complete before starting")
+            Task {
+                await ConnectionSerializer.shared.waitUntilReadyToStart()
+                print("[AppsView] ConnectionSerializer gate opened — proceeding with stream start")
+                openAppStream(app: app)
+            }
+            return
+        }
+
         // CRITICAL FIX: Defensively clear any stale state before starting
         viewModel.prepareForNewStream()
         
@@ -227,13 +240,18 @@ struct AppsView: View {
                         print("[AppsView] Opening curved display immersive space...")
                         let result = try await openImmersiveSpace(id: renderer.windowId, value: config)
                         print("[AppsView] Immersive space result: \(result)")
+                        self.viewModel.isImmersiveSpaceOpen = true
                         self.clearNowLoading()
                     }
                 }
             } else {
-                // Flat Display renderer (classicMetal)
+                // Flat Display or Classic Display renderer
                 Task {
-                    await dismissImmersiveSpace()
+                    // Only dismiss immersive space if one is actually open
+                    if viewModel.isImmersiveSpaceOpen {
+                        await dismissImmersiveSpace()
+                        viewModel.isImmersiveSpaceOpen = false
+                    }
                     await MainActor.run {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                             openWindow(id: renderer.windowId, value: config)

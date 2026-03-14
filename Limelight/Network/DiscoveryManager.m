@@ -33,10 +33,12 @@
 }
 
 - (id)initWithHosts:(NSArray *)hosts andCallback:(id<DiscoveryCallback>)callback {
+    return [self initWithHosts:hosts andCallback:callback uniqueId:nil cert:nil];
+}
+
+- (id)initWithHosts:(NSArray *)hosts andCallback:(id<DiscoveryCallback>)callback uniqueId:(NSString*)uniqueId cert:(NSData*)cert {
     self = [super init];
     
-    // Using addHostToDiscovery ensures no duplicates
-    // will make it into the list from the database
     _callback = callback;
     shouldDiscover = NO;
     _hostQueue = [NSMutableArray array];
@@ -49,9 +51,15 @@
     
     _opQueue = [[NSOperationQueue alloc] init];
     _mdnsMan = [[MDNSManager alloc] initWithCallback:self];
-    [CryptoManager generateKeyPairUsingSSL];
-    _uniqueId = [IdManager getUniqueId];
-    _cert = [CryptoManager readCertFromFile];
+
+    if (uniqueId != nil && cert != nil) {
+        _uniqueId = uniqueId;
+        _cert = cert;
+    } else {
+        [CryptoManager generateKeyPairUsingSSL];
+        _uniqueId = [IdManager getUniqueId];
+        _cert = [CryptoManager readCertFromFile];
+    }
     return self;
 }
 

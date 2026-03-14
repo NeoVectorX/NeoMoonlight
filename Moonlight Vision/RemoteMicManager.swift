@@ -21,10 +21,12 @@ class RemoteMicManager: ObservableObject {
     
     private var connection: NWConnection?
     private var visualizerTimer: Timer?
+    private var connectionRefreshTimer: Timer?
     
     init() {
         setupConnection()
         startVisualizer()
+        startConnectionRefresh()
     }
     
     // MARK: - Network
@@ -62,7 +64,6 @@ class RemoteMicManager: ObservableObject {
         connection?.send(content: data, completion: .contentProcessed { [weak self] error in
             if let error = error {
                 print("[RemoteMic] Send error: \(error)")
-                // Attempt reconnect
                 Task { @MainActor in
                     self?.setupConnection()
                 }
@@ -72,12 +73,43 @@ class RemoteMicManager: ObservableObject {
         })
     }
     
+    private func sendCommandWithRetry(_ command: String) {
+        if connection?.state != .ready {
+            setupConnection()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.sendCommandWithRetry(command)
+            }
+            return
+        }
+        
+        sendCommand(command)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.sendCommand(command)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.sendCommand(command)
+        }
+    }
+    
+    private func startConnectionRefresh() {
+        connectionRefreshTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshConnection()
+            }
+        }
+    }
+    
+    private func refreshConnection() {
+        connection?.cancel()
+        setupConnection()
+    }
+    
     // MARK: - Actions
     
     func toggleMute() {
         isMuted.toggle()
         let command = isMuted ? "MUTE" : "UNMUTE"
-        sendCommand(command)
+        sendCommandWithRetry(command)
     }
     
     // MARK: - Visualizer
@@ -99,6 +131,8 @@ class RemoteMicManager: ObservableObject {
     func cleanup() {
         visualizerTimer?.invalidate()
         visualizerTimer = nil
+        connectionRefreshTimer?.invalidate()
+        connectionRefreshTimer = nil
         connection?.cancel()
         connection = nil
     }

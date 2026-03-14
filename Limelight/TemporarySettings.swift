@@ -40,6 +40,11 @@ public class TemporarySettings: NSObject {
     @objc public var hideSystemCursor = false
     @objc public var showMicButton = false
     @objc public var hideHandsIn360Environment = false
+    @objc public var showTaskManagerButton = false
+    @objc public var showControllerBattery = false
+    @objc public var removeRoundedCorners = false
+    @objc public var darkControlsMode = false
+    @objc public var useCollapsedControlsMenu = false
 
     // --- HDR / Color Settings ---
     @objc public var brightness: Float = 2.2
@@ -65,6 +70,9 @@ public class TemporarySettings: NSObject {
         self.hideSystemCursor = false
         self.showMicButton = false
         self.hideHandsIn360Environment = false
+        self.showTaskManagerButton = false
+        self.showControllerBattery = false
+        self.useCollapsedControlsMenu = false
         
         // HDR Defaults
         self.brightness = 2.2
@@ -120,6 +128,11 @@ public class TemporarySettings: NSObject {
         // self.showMicButton = settings.showMicButton?.boolValue ?? false
         self.showMicButton = false
         self.hideHandsIn360Environment = settings.hideHandsIn360Environment?.boolValue ?? false
+        self.showTaskManagerButton = UserDefaults.standard.bool(forKey: "showTaskManagerButton")
+        self.showControllerBattery = UserDefaults.standard.bool(forKey: "showControllerBattery")
+        self.removeRoundedCorners = UserDefaults.standard.bool(forKey: "removeRoundedCorners")
+        self.darkControlsMode = UserDefaults.standard.bool(forKey: "darkControlsMode")
+        self.useCollapsedControlsMenu = UserDefaults.standard.bool(forKey: "useCollapsedControlsMenu")
         
         // HDR / COLOR DEFAULTS (not stored in database, local only)
         self.brightness = 2.2
@@ -155,15 +168,18 @@ public class TemporarySettings: NSObject {
     public static var caseDisplayRepresentations: [Renderer : DisplayRepresentation] = [
         .classicMetal: .init(stringLiteral: "Flat Display"),
         .curvedDisplay: .init(stringLiteral: "Curved Display"),
+        .classicDisplay: .init(stringLiteral: "Classic Display"),
     ]
     
     case classicMetal = 0
     case curvedDisplay = 2
+    case classicDisplay = 3
 
     var windowId: String {
         switch self {
         case .classicMetal: return "flatDisplayWindow"
         case .curvedDisplay: return "curvedDisplayImmersiveSpace"
+        case .classicDisplay: return "classicStreamingWindow"
         }
     }
     
@@ -171,6 +187,7 @@ public class TemporarySettings: NSObject {
         switch self {
         case .classicMetal: return "Flat Display"
         case .curvedDisplay: return "Curved Display"
+        case .classicDisplay: return "Classic Display"
         }
     }
 }

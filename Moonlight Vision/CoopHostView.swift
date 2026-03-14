@@ -17,7 +17,7 @@ struct CoopHostView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.dismiss) private var dismiss
     
-    @StateObject private var coordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coordinator = CoopSessionCoordinator.shared
     
     let host: TemporaryHost
     @Binding var isPresented: Bool

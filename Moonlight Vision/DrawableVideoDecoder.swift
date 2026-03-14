@@ -122,6 +122,9 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
     private var firstFrameEmitted = false
 
     private static let ambientEngine: AmbientLightEngine? = AmbientLightEngine()
+    
+    // Flag to control whether we spawn the ambient analysis task
+    var isReactiveDimmingEnabled: Bool = false
 
     // MARK: - Initialization
 
@@ -406,11 +409,14 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
         let outTextureForAmbient = drawable.texture
 
+        // Present only after GPU finishes (async; avoids blocking decoder thread and OOM/watchdog crashes)
+        commandBuffer.addCompletedHandler { _ in
+            drawable.present()
+        }
         commandBuffer.commit()
-        drawable.present()
 
         // Fire and forget. The engine handles the math and notification on its own timeline.
-        if let engine = Self.ambientEngine {
+        if isReactiveDimmingEnabled, let engine = Self.ambientEngine {
             Task.detached {
                 await engine.analyze(texture: outTextureForAmbient)
             }
@@ -633,6 +639,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             return DR_NEED_IDR
         }
 
+        guard let session = session else {
+            free(dataPtr)
+            return DR_NEED_IDR
+        }
+
         guard let sampleBuffer = createSampleBuffer(
             dataPtr: dataPtr,
             length: Int(length),
@@ -643,7 +654,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             return DR_NEED_IDR
         }
 
-        VTDecompressionSessionDecodeFrame(session!, sampleBuffer: sampleBuffer, flags: [._EnableAsynchronousDecompression], frameRefcon: nil, infoFlagsOut: nil)
+        VTDecompressionSessionDecodeFrame(session, sampleBuffer: sampleBuffer, flags: [._EnableAsynchronousDecompression], frameRefcon: nil, infoFlagsOut: nil)
 
         if decodeUnit.pointee.frameType == FRAME_TYPE_IDR {
             callbacks.videoContentShown()
@@ -674,8 +685,8 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             let frameData = Data(bytesNoCopy: dataPtr, count: Int(length), deallocator: .none)
             return createAV1FormatDescriptionForIDRFrame(frameData)
         } else {
-            // Unsupported
-            abort()
+            // Unsupported video format - return nil to request IDR
+            return nil
         }
     }
 

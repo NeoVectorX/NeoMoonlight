@@ -424,60 +424,19 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
     // on a thread inside common and we don't want to deadlock. It also avoids
     // blocking on the caller's thread waiting to acquire initLock.
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        // Timeout for acquiring the lock (another connection might be stopping)
-        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:10.0];
-        BOOL acquired = [initLock lockBeforeDate:deadline];
+        // Acquire the lock — wait indefinitely. ConnectionSerializer on the Swift side
+        // ensures no new LiStartConnection() can begin until our completion fires,
+        // so holding this lock is always safe and no forced-unlock is ever needed.
+        [initLock lock];
         
-        if (!acquired) {
-            Log(LOG_E, @"[Connection] terminateWithCompletion: initLock acquisition timed out after 10s.");
-            // Fire completion so UI recovers, but don't try to stop — lock holder will unlock when done
-            if (completion) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    completion();
-                });
-            }
-            return;
-        }
+        // Run LiStopConnection() and wait for it to truly finish.
+        // LiStopConnection() can occasionally be slow (audio thread shutdown),
+        // but we must wait — firing the completion early is what caused crashes.
+        LiStopConnection();
         
-        // Run LiStopConnection() on a separate thread with a timeout.
-        // LiStopConnection() can hang permanently during audio stream shutdown,
-        // which blocks the completion callback and prevents new connections.
-        dispatch_semaphore_t stopSem = dispatch_semaphore_create(0);
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            LiStopConnection();
-            dispatch_semaphore_signal(stopSem);
-        });
-        
-        long result = dispatch_semaphore_wait(stopSem, dispatch_time(DISPATCH_TIME_NOW, 10LL * NSEC_PER_SEC));
-        if (result != 0) {
-            Log(LOG_E, @"[Connection] LiStopConnection() timed out after 10s — forcing unlock so next connection can proceed.");
-            
-            // Try one more interrupt to kick the stuck stop out of its hang
-            LiInterruptConnection();
-            
-            // Unlock initLock so the next LiStartConnection() can proceed.
-            // LiStopConnection() is likely stuck waiting on a dead audio thread
-            // and not actively modifying shared connection state. The risk of a
-            // race with the new LiStartConnection() is small compared to the
-            // certainty of the next connection failing if we keep the lock held.
-            [initLock unlock];
-            
-            if (completion) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    completion();
-                });
-            }
-            
-            // Log when the hung stop eventually finishes (informational only)
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-                dispatch_semaphore_wait(stopSem, DISPATCH_TIME_FOREVER);
-                Log(LOG_I, @"[Connection] LiStopConnection() finally completed after timeout (lock already released).");
-            });
-            return;
-        }
-        
-        // Normal path: LiStopConnection() completed within timeout
         [initLock unlock];
+        
+        Log(LOG_I, @"[Connection] LiStopConnection() completed and initLock released.");
         
         if (completion) {
             dispatch_async(dispatch_get_main_queue(), ^{

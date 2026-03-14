@@ -11,6 +11,8 @@ struct LongPressControlBtn: View {
     let startHideTimer: () -> Void
     let primaryAction: () -> Void
     let longPressAction: () -> Void
+    /// Optional; when set, called on tap so the host can fire sensory feedback (e.g. curved display spatial audio makes system tap quiet).
+    var onTapFeedback: (() -> Void)? = nil
     
     var body: some View {
         Button {
@@ -25,6 +27,7 @@ struct LongPressControlBtn: View {
             // Keep controlsHighlighted = true during action execution
             // This prevents state flicker that breaks drag gesture recognition
             hideControls = false
+            onTapFeedback?()
             primaryAction()
             startHideTimer()
         } label: {
@@ -36,6 +39,7 @@ struct LongPressControlBtn: View {
                 .contentShape(Rectangle())
                 .simultaneousGesture(
                     LongPressGesture(minimumDuration: 0.8).onEnded { _ in
+                        onTapFeedback?()
                         longPressAction()
                     }
                 )

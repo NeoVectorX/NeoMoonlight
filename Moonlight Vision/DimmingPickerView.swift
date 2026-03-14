@@ -12,34 +12,47 @@ struct DimmingPickerView: View {
     @Binding var isPresented: Bool
     @Binding var environmentSphereLevel: Int
     @Binding var newsetLevel: Int
+    @Binding var presetBrightness: [Int: Double]
+    let defaultPresetBrightness: [Int: Double]
+    /// When set, long-pressing the Starfield preset calls this when hold starts (e.g. start cycling star distance). Curved display only.
+    var onStarfieldLongPress: (() -> Void)? = nil
+    /// When set, called when the user releases after a Starfield long-press (e.g. stop cycling).
+    var onStarfieldLongPressEnd: (() -> Void)? = nil
     
     // Dimming preset items
-    private struct DimItem: Identifiable {
+    struct DimItem: Identifiable {
         let id: String
         let displayName: String
         let dimLevel: Int
+        let supportsAdjustment: Bool
     }
+    
+    // Presets that support brightness adjustment via long-press
+    private let adjustablePresets: Set<Int> = [1, 5, 6, 7, 8, 9, 14]
     
     private var allItems: [DimItem] {
         [
-            DimItem(id: "0", displayName: "Off", dimLevel: 0),
-            DimItem(id: "1", displayName: "Night", dimLevel: 1),
-            DimItem(id: "2", displayName: "Reactive V1", dimLevel: 2),
-            DimItem(id: "10", displayName: "Reactive V2", dimLevel: 10),
-            DimItem(id: "12", displayName: "Starfield", dimLevel: 12),
-            DimItem(id: "4", displayName: "Eclipse", dimLevel: 4),
-            DimItem(id: "5", displayName: "Midnight", dimLevel: 5),
-            DimItem(id: "6", displayName: "Twilight", dimLevel: 6),
-            DimItem(id: "7", displayName: "Dawn", dimLevel: 7),
-            DimItem(id: "8", displayName: "Sunrise", dimLevel: 8),
-            DimItem(id: "9", displayName: "Woodland", dimLevel: 9),
-            DimItem(id: "14", displayName: "Desert", dimLevel: 14)
+            DimItem(id: "0", displayName: "Off", dimLevel: 0, supportsAdjustment: false),
+            DimItem(id: "1", displayName: "Night", dimLevel: 1, supportsAdjustment: true),
+            DimItem(id: "2", displayName: "Reactive V1", dimLevel: 2, supportsAdjustment: false),
+            DimItem(id: "10", displayName: "Reactive V2", dimLevel: 10, supportsAdjustment: false),
+            DimItem(id: "12", displayName: "Starfield", dimLevel: 12, supportsAdjustment: false),
+            DimItem(id: "4", displayName: "Eclipse", dimLevel: 4, supportsAdjustment: false),
+            DimItem(id: "5", displayName: "Midnight", dimLevel: 5, supportsAdjustment: true),
+            DimItem(id: "6", displayName: "Twilight", dimLevel: 6, supportsAdjustment: true),
+            DimItem(id: "7", displayName: "Dawn", dimLevel: 7, supportsAdjustment: true),
+            DimItem(id: "8", displayName: "Sunrise", dimLevel: 8, supportsAdjustment: true),
+            DimItem(id: "9", displayName: "Woodland", dimLevel: 9, supportsAdjustment: true),
+            DimItem(id: "14", displayName: "Desert", dimLevel: 14, supportsAdjustment: true)
         ]
     }
     
     // Theme Colors
     private let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
+    
+    // State for tracking which preset is currently being adjusted
+    @State private var cyclingPresetLevel: Int? = nil
     
     var body: some View {
         VStack(spacing: 20) {
@@ -65,29 +78,104 @@ struct DimmingPickerView: View {
             // Grid (6 columns × 2 rows)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 20) {
                 ForEach(allItems) { item in
-                    Button {
-                        selectItem(item)
-                    } label: {
-                        VStack(spacing: 8) {
-                            DimmingThumbnailView(displayName: item.displayName, dimLevel: item.dimLevel, isPickerOpen: isPresented)
+                    if item.supportsAdjustment {
+                        // Adjustable preset with long-press for brightness cycling
+                        AdjustableDimItemView(
+                            item: item,
+                            dimLevel: $dimLevel,
+                            presetBrightness: $presetBrightness,
+                            cyclingPresetLevel: $cyclingPresetLevel,
+                            defaultPresetBrightness: defaultPresetBrightness,
+                            isSelected: isSelected(item),
+                            brandOrange: brandOrange,
+                            isPickerOpen: isPresented,
+                            onSelect: { selectItem(item) }
+                        )
+                    } else if item.dimLevel == 12, onStarfieldLongPress != nil {
+                        // Starfield preset: tap selects, long-press cycles star distance (curved display)
+                        Button {
+                            selectItem(item)
+                        } label: {
+                            VStack(spacing: 8) {
+                                DimmingThumbnailView(
+                                    displayName: item.displayName,
+                                    dimLevel: item.dimLevel,
+                                    isPickerOpen: isPresented,
+                                    brightness: nil,
+                                    isCycling: false
+                                )
                                 .frame(height: 80)
                                 .clipShape(Circle())
                                 .overlay(
                                     Circle()
                                         .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
                                 )
-                            
-                            Text(item.displayName)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(isSelected(item) ? brandOrange : .white)
-                                .lineLimit(1)
+                                
+                                HStack(spacing: 3) {
+                                    Text(item.displayName)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                        .lineLimit(1)
+                                    Image(systemName: "lightbulb.circle")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+                                }
+                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(HoldablePlainButtonStyle(
+                            onHold: {
+                                selectItem(item)
+                                onStarfieldLongPress?()
+                            },
+                            onRelease: {
+                                onStarfieldLongPressEnd?()
+                            },
+                            minimumHoldDuration: 0.2
+                        ))
+                    } else {
+                        // Non-adjustable preset (tap only)
+                        Button {
+                            selectItem(item)
+                        } label: {
+                            VStack(spacing: 8) {
+                                DimmingThumbnailView(
+                                    displayName: item.displayName,
+                                    dimLevel: item.dimLevel,
+                                    isPickerOpen: isPresented,
+                                    brightness: nil,
+                                    isCycling: false
+                                )
+                                .frame(height: 80)
+                                .clipShape(Circle())
+                                .overlay(
+                                    Circle()
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                )
+                                
+                                Text(item.displayName)
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                    .lineLimit(1)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .frame(minHeight: 220)
+            
+            // Hint for adjustable presets
+            HStack(spacing: 4) {
+                Image(systemName: "lightbulb.circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.5))
+                Text("Dimmable Preset: Long press (pinch hold) on preset to adjust dimming.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            .padding(.top, 4)
         }
         .padding(32)
         .background(
@@ -114,8 +202,125 @@ struct DimmingPickerView: View {
             environmentSphereLevel = 0
             newsetLevel = 0
         }
+    }
+}
+
+// MARK: - Adjustable Dim Item View (supports long-press brightness cycling)
+
+private struct AdjustableDimItemView: View {
+    let item: DimmingPickerView.DimItem
+    @Binding var dimLevel: Int
+    @Binding var presetBrightness: [Int: Double]
+    @Binding var cyclingPresetLevel: Int?
+    let defaultPresetBrightness: [Int: Double]
+    let isSelected: Bool
+    let brandOrange: Color
+    let isPickerOpen: Bool
+    let onSelect: () -> Void
+    
+    @State private var cycleTask: Task<Void, Never>? = nil
+    @State private var cycleStartTime: Date? = nil
+    
+    private var currentBrightness: Double {
+        presetBrightness[item.dimLevel] ?? defaultPresetBrightness[item.dimLevel] ?? 0.85
+    }
+    
+    private var isCycling: Bool {
+        cyclingPresetLevel == item.dimLevel
+    }
+    
+    var body: some View {
+        Button {
+            if !isCycling {
+                onSelect()
+            }
+        } label: {
+            VStack(spacing: 8) {
+                DimmingThumbnailView(
+                    displayName: item.displayName,
+                    dimLevel: item.dimLevel,
+                    isPickerOpen: isPickerOpen,
+                    brightness: currentBrightness,
+                    isCycling: isCycling
+                )
+                .frame(height: 80)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(isSelected ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected ? 3 : 1)
+                )
+                // Glow effect during cycling
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.8 : 0.0), radius: isCycling ? 12 : 0)
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.4 : 0.0), radius: isCycling ? 24 : 0)
+                .animation(.easeInOut(duration: 0.15), value: currentBrightness)
+                .animation(.easeOut(duration: 0.4), value: isCycling)
+                
+                HStack(spacing: 3) {
+                    Text(item.displayName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(isSelected ? brandOrange : .white)
+                        .lineLimit(1)
+                    
+                    Image(systemName: "lightbulb.circle")
+                        .font(.system(size: 9))
+                        .foregroundColor(isSelected ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HoldablePlainButtonStyle(
+            onHold: { startBrightnessCycle() },
+            onRelease: {
+                if isCycling {
+                    stopBrightnessCycle()
+                }
+            }
+        ))
+        .onDisappear {
+            cycleTask?.cancel()
+            cycleTask = nil
+        }
+    }
+    
+    private func startBrightnessCycle() {
+        // First, select this preset
+        onSelect()
         
-        // Keep picker open to allow cycling through presets
+        cyclingPresetLevel = item.dimLevel
+        cycleStartTime = Date()
+        
+        cycleTask?.cancel()
+        cycleTask = Task {
+            let cycleDuration: Double = 5.0 // seconds for full dark→light→dark
+            
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(cycleStartTime ?? Date())
+                // Sine wave: 0.5 + 0.5 * sin(...) gives range 0.0 to 1.0
+                let brightness = 0.5 + 0.5 * sin(elapsed * 2.0 * .pi / cycleDuration)
+                
+                await MainActor.run {
+                    presetBrightness[item.dimLevel] = brightness
+                    // Save to UserDefaults as we cycle (will save final value on release too)
+                    UserDefaults.standard.set(brightness, forKey: "preset.brightness.\(item.dimLevel)")
+                }
+                
+                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms updates (20 FPS)
+            }
+        }
+    }
+    
+    private func stopBrightnessCycle() {
+        cycleTask?.cancel()
+        cycleTask = nil
+        cycleStartTime = nil
+        
+        // Save the final brightness value
+        let finalBrightness = presetBrightness[item.dimLevel] ?? defaultPresetBrightness[item.dimLevel] ?? 0.85
+        UserDefaults.standard.set(finalBrightness, forKey: "preset.brightness.\(item.dimLevel)")
+        
+        withAnimation(.easeOut(duration: 0.4)) {
+            cyclingPresetLevel = nil
+        }
     }
 }
 
@@ -123,6 +328,9 @@ private struct DimmingThumbnailView: View {
     let displayName: String
     let dimLevel: Int
     let isPickerOpen: Bool
+    let brightness: Double?  // User-adjustable brightness for applicable presets
+    let isCycling: Bool      // Whether brightness is currently being cycled via long-press
+    
     @State private var animationPhase: Double = 0
     @State private var animationTask: Task<Void, Never>?
     
@@ -140,7 +348,8 @@ private struct DimmingThumbnailView: View {
                 Circle()
                     .fill(gradientForPreset())
                     .frame(width: 80, height: 80)
-                    .opacity(dimLevel == 2 ? 0.8 : 1.0)
+                    // Apply brightness to thumbnail opacity for adjustable presets
+                    .opacity(thumbnailOpacity)
                     .overlay(
                         Group {
                             if dimLevel == 0 {
@@ -172,6 +381,16 @@ private struct DimmingThumbnailView: View {
                 animationTask?.cancel()
                 animationTask = nil
             }
+    }
+    
+    private var thumbnailOpacity: Double {
+        // For adjustable presets during cycling, mirror the brightness value
+        if let brightness = brightness {
+            // Scale brightness to a visible opacity range (0.3 to 1.0) so it's never invisible
+            return 0.3 + (brightness * 0.7)
+        }
+        // Default opacities for non-adjustable presets
+        return dimLevel == 2 ? 0.8 : 1.0
     }
     
     private func startAnimation() {
@@ -433,5 +652,35 @@ private struct DimmingThumbnailView: View {
                 endPoint: .bottomTrailing
             )
         }
+    }
+}
+
+// MARK: - Holdable Plain Button Style (tap = native sound + select; hold = start cycle; release = stop cycle)
+
+struct HoldablePlainButtonStyle: ButtonStyle {
+    let onHold: () -> Void
+    let onRelease: () -> Void
+    /// Seconds before onHold fires (default 0.5). Use a shorter value (e.g. 0.2) for quicker response.
+    var minimumHoldDuration: Double = 0.5
+    
+    @State private var holdTask: Task<Void, Never>?
+    
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .onChange(of: configuration.isPressed) { oldValue, isPressed in
+                if isPressed {
+                    holdTask?.cancel()
+                    let duration = minimumHoldDuration
+                    holdTask = Task {
+                        try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                        if !Task.isCancelled {
+                            await MainActor.run { onHold() }
+                        }
+                    }
+                } else {
+                    holdTask?.cancel()
+                    onRelease()
+                }
+            }
     }
 }

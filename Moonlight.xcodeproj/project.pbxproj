@@ -58,7 +58,10 @@
 		B1EDB13C2D4D95BF00EB1839 /* StreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EDB13B2D4D95BF00EB1839 /* StreamConfiguration.swift */; };
 		B1EDB13D2D4D95BF00EB1839 /* StreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EDB13B2D4D95BF00EB1839 /* StreamConfiguration.swift */; };
 		B1EDB13E2D4D95BF00EB1839 /* StreamConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EDB13B2D4D95BF00EB1839 /* StreamConfiguration.swift */; };
+		DB03915B78904A008963F7AD /* ConnectionSerializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0C71A03C724E81996785B1 /* ConnectionSerializer.swift */; };
 		DC1F5A07206436B20037755F /* ConnectionHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = DC1F5A06206436B20037755F /* ConnectionHelper.m */; };
+		DD1B2A212F4BABA0003DA4AF /* ControllerBatteryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */; };
+		DD1B2A222F4BABA0003DA4AF /* BatteryIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */; };
 		DD2563522F1A8FF7008F8B66 /* camo.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563512F1A8FF7008F8B66 /* camo.jpg */; };
 		DD2563542F1AEC82008F8B66 /* ParticleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2563532F1AEC82008F8B66 /* ParticleManager.swift */; };
 		DD2563562F1C1841008F8B66 /* nebula.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563552F1C1841008F8B66 /* nebula.jpg */; };
@@ -358,6 +361,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		3A0C71A03C724E81996785B1 /* ConnectionSerializer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSerializer.swift; sourceTree = "<group>"; };
 		3E4F94682DC2E2D6006CF0C1 /* ComputerViewWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputerViewWrapper.swift; sourceTree = "<group>"; };
 		3E86FC1C2D4FFDED0016BB8E /* UpdatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatesView.swift; sourceTree = "<group>"; };
 		566E9D2B2770B23A00EF7BFE /* Moonlight v1.7.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Moonlight v1.7.xcdatamodel"; sourceTree = "<group>"; };
@@ -414,6 +418,8 @@
 		D4746EEA1CBC740C006FB401 /* Moonlight-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Moonlight-Bridging-Header.h"; path = "Input/Moonlight-Bridging-Header.h"; sourceTree = "<group>"; };
 		DC1F5A05206436B10037755F /* ConnectionHelper.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ConnectionHelper.h; sourceTree = "<group>"; };
 		DC1F5A06206436B20037755F /* ConnectionHelper.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ConnectionHelper.m; sourceTree = "<group>"; };
+		DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryIndicatorView.swift; sourceTree = "<group>"; };
+		DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerBatteryState.swift; sourceTree = "<group>"; };
 		DD2563512F1A8FF7008F8B66 /* camo.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = camo.jpg; sourceTree = "<group>"; };
 		DD2563532F1AEC82008F8B66 /* ParticleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticleManager.swift; sourceTree = "<group>"; };
 		DD2563552F1C1841008F8B66 /* nebula.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = nebula.jpg; sourceTree = "<group>"; };
@@ -852,6 +858,8 @@
 		F7A119592B5DE1AB001E8686 /* Moonlight Vision */ = {
 			isa = PBXGroup;
 			children = (
+				DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */,
+				DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */,
 				DD7DD6CE2F423FFE0010D797 /* DebugLogger.swift */,
 				DD2563532F1AEC82008F8B66 /* ParticleManager.swift */,
 				DD8A202E2F16CE8B00230746 /* SplashView.swift */,
@@ -902,6 +910,7 @@
 				B1EDB1322D4D95A700EB1839 /* RealityKitStreamView.swift */,
 				B1EDB1332D4D95A700EB1839 /* StreamControls.swift */,
 				B1EDB1342D4D95A700EB1839 /* UIKitStreamView.swift */,
+				3A0C71A03C724E81996785B1 /* ConnectionSerializer.swift */,
 				F7A1195A2B5DE1E2001E8686 /* MoonlightVisionApp.swift */,
 				3E4F94682DC2E2D6006CF0C1 /* ComputerViewWrapper.swift */,
 				F7A1195C2B5DE1FD001E8686 /* MainContentView.swift */,
@@ -1583,6 +1592,7 @@
 				F7A119132B5DDF73001E8686 /* Utils.m in Sources */,
 				F7A119152B5DDF73001E8686 /* Connection.m in Sources */,
 				E77582EB2D5550D500948545 /* AudioHelpers.swift in Sources */,
+				DB03915B78904A008963F7AD /* ConnectionSerializer.swift in Sources */,
 				DD8A202F2F16CE8B00230746 /* SplashView.swift in Sources */,
 				DD8A1F262F11ADF900230746 /* CoopModeSelectionView.swift in Sources */,
 				DD8A1F272F11ADF900230746 /* CoopHostView.swift in Sources */,
@@ -1633,6 +1643,8 @@
 				DDF84EA92EEA207E00FACAA3 /* AmbientLightEngine.swift in Sources */,
 				F71801442B654D9100A9336B /* TemporaryApp.swift in Sources */,
 				DDF84E9A2EE874EC00FACAA3 /* MetalVideoDecoderRenderer.swift in Sources */,
+				DD1B2A212F4BABA0003DA4AF /* ControllerBatteryState.swift in Sources */,
+				DD1B2A222F4BABA0003DA4AF /* BatteryIndicatorView.swift in Sources */,
 				F7A1192D2B5DDF73001E8686 /* CryptoManager.m in Sources */,
 				F7A1192E2B5DDF73001E8686 /* ConnectionHelper.m in Sources */,
 				B1AC7CF12D4E011B0013B9A3 /* HDRParsingUtils.m in Sources */,
@@ -1830,9 +1842,9 @@
 				CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES;
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 6;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 21;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1886,6 +1898,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = xros;
 				SKIP_INSTALL = NO;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
@@ -1909,9 +1922,9 @@
 				CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES;
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 6;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 21;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1965,6 +1978,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = xros;
 				SKIP_INSTALL = NO;
 				SUPPORTED_PLATFORMS = "xros xrsimulator";

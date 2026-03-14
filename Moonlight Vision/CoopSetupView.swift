@@ -17,7 +17,7 @@ struct CoopSetupView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.dismiss) private var dismiss
     
-    @StateObject private var coordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coordinator = CoopSessionCoordinator.shared
     
     let host: TemporaryHost
     @Binding var isPresented: Bool
@@ -375,12 +375,16 @@ struct CoopSetupView: View {
                 Task {
                     print("[CoopSetup] Opening curved display for co-op...")
                     _ = try await self.openImmersiveSpace(id: renderer.windowId, value: config)
+                    self.viewModel.isImmersiveSpaceOpen = true
                 }
             }
         } else {
-            // Flat Display
+            // Flat Display or Classic Display
             Task {
-                await dismissImmersiveSpace()
+                if viewModel.isImmersiveSpaceOpen {
+                    await dismissImmersiveSpace()
+                    viewModel.isImmersiveSpaceOpen = false
+                }
                 await MainActor.run {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         self.openWindow(id: renderer.windowId, value: config)

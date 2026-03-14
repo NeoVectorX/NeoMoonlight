@@ -35,9 +35,22 @@ typedef void (^noargCallbackType)(void);
 
 -(void)updatePreferredDisplayMode:(BOOL)streamActive;
 - (void)stopStream;
+- (void)restartStream;
 - (void)applyUIKitPreset:(int32_t)preset;
+
+// visionOS: View-only mode - view is set up but stream is managed externally by Swift
+- (void)setViewOnlyMode:(BOOL)viewOnly;
+- (void)startStreamExternal;
+- (void)stopStreamExternal;
+- (BOOL)isStreamActive;
 
 // Method to update HDR parameters
 - (void)updateRendererHDRParams:(float)brightness saturation:(float)saturation contrast:(float)contrast luminosity:(float)luminosity gamma:(float)gamma;
+
+// Method to get stats overlay text
+- (nullable NSString*)getStatsOverlayText;
+
+// Toggle the virtual keyboard and return YES if keyboard is now visible
+- (BOOL)toggleKeyboard;
 
 @end

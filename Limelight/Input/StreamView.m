@@ -433,6 +433,24 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
     }
 }
 
+- (BOOL)toggleKeyboard {
+    if (isInputingText) {
+        Log(LOG_D, @"Closing the keyboard (via toggle)");
+        [keyInputField resignFirstResponder];
+        isInputingText = false;
+        return NO;
+    } else {
+        Log(LOG_D, @"Opening the keyboard (via toggle)");
+        keyInputField.delegate = self;
+        keyInputField.text = @"0";
+        [keyInputField becomeFirstResponder];
+        [keyInputField addTarget:self action:@selector(onKeyboardPressed:) forControlEvents:UIControlEventEditingChanged];
+        [keyInputField.undoManager disableUndoRegistration];
+        isInputingText = true;
+        return YES;
+    }
+}
+
 - (UIBarButtonItem *)createButtonWithImageNamed:(NSString *)imageName backgroundColor:(UIColor *)backgroundColor target:(id)target action:(SEL)action keyCode:(NSInteger)keyCode isToggleable:(BOOL)isToggleable {
     UIImage *image = [UIImage imageNamed:imageName];
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];

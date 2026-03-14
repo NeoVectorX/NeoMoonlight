@@ -13,7 +13,7 @@ struct CoopModeSelectionView: View {
     @EnvironmentObject private var viewModel: MainViewModel
     @Environment(\.dismiss) private var dismiss
     
-    @StateObject private var coordinator = CoopSessionCoordinator.shared
+    @ObservedObject private var coordinator = CoopSessionCoordinator.shared
     
     @Binding var isPresented: Bool
     
