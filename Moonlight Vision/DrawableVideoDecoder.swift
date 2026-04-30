@@ -365,9 +365,14 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         }
 
         // Buffer 0: ShaderHDRParams — frame signal description
-        // Live EDR headroom read on the render thread; UIScreen access is safe from any thread.
+        // visionOS has fixed EDR headroom (Vision Pro's micro-OLED peak capability).
+        // On other platforms, query UIScreen dynamically.
+        #if os(visionOS)
+        let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range (~100-200 nit eye brightness)
+        #else
         let rawHeadroom = UIScreen.main.currentEDRHeadroom
         let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+        #endif
 
         var shaderHDR = ShaderHDRParams(
             is10Bit:       is10Bit,

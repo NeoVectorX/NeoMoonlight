@@ -230,7 +230,7 @@ struct UserGuideView: View {
                     iconColor: brandBlue
                 ) {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text("Play together with a friend using SharePlay. One person hosts the session while the other joins as a guest.")
+                        Text("Play together with a friend using SharePlay. One person hosts the session while the other joins as a guest with a second controller.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .padding(.bottom, 4)

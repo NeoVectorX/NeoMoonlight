@@ -1085,8 +1085,12 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         let is10Bit:     UInt32 = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
         let isFullRange: UInt32 = uikitPixelFormatIsFullRange(pixelFormat) ? 1 : 0
 
+        #if os(visionOS)
+        let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range
+        #else
         let rawHeadroom = UIScreen.main.currentEDRHeadroom
         let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+        #endif
 
         // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
         struct ShaderHDRParamsUIKit {
