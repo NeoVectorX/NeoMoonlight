@@ -33,6 +33,24 @@ struct SettingsView: View {
             }
         )
     }
+    
+    private var resolutionSelection: Binding<Resolution> {
+        Binding(
+            get: {
+                isCustomResolution ? Resolution(width: -1, height: -1) : settings.resolution
+            },
+            set: { newValue in
+                if newValue.width == -1 && newValue.height == -1 {
+                    isCustomResolution = true
+                    customWidth = String(settings.resolution.width)
+                    customHeight = String(settings.resolution.height)
+                } else {
+                    isCustomResolution = false
+                    settings.resolution = newValue
+                }
+            }
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -51,21 +69,7 @@ struct SettingsView: View {
                         Text("Resolution")
                             .foregroundColor(.white)
                         Spacer()
-                        Picker("", selection: Binding(
-                            get: {
-                                isCustomResolution ? Resolution(width: -1, height: -1) : settings.resolution
-                            },
-                            set: { newValue in
-                                if newValue.width == -1 && newValue.height == -1 {
-                                    isCustomResolution = true
-                                    customWidth = String(settings.resolution.width)
-                                    customHeight = String(settings.resolution.height)
-                                } else {
-                                    isCustomResolution = false
-                                    settings.resolution = newValue
-                                }
-                            }
-                        )) {
+                        Picker("", selection: resolutionSelection) {
                             Text("Custom").tag(Resolution(width: -1, height: -1))
                             
                             ForEach(Self.resolutionsGroupedByType, id: \.0) { aspectRatio, resolutions in
@@ -197,7 +201,7 @@ struct SettingsView: View {
                             Text("Bitrate")
                                 .foregroundColor(.white)
                             Spacer()
-                            Picker("", selection: $bitrateSelection) {
+                            Picker("", selection: bitrateSelection) {
                                 ForEach(Self.bitrateTable, id: \.self) { bitrate in
                                     Text("\(bitrate / 1000) Mbps").tag(bitrate)
                                 }
@@ -207,7 +211,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 4)
                         
-                        if bitrateSelection == -1 {
+                        if bitrateSelection.wrappedValue == -1 {
                             HStack {
                                 TextField("Bitrate (Mbps)", text: $customBitrateString)
                                     .textFieldStyle(.roundedBorder)
