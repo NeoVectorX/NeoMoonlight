@@ -1470,8 +1470,7 @@ struct _FlatDisplayStreamView: View {
             mesh = .generatePlane(width: baseWidth, height: baseHeight)
         }
         
-        var material = UnlitMaterial(texture: texture)
-        material.applyPostProcessToneMap = false
+        let material = UnlitMaterial(texture: texture)
         screen = ModelEntity(mesh: mesh, materials: [material])
         screen.position = SIMD3<Float>(0, 0, 0)
         
@@ -2178,20 +2177,14 @@ struct _FlatDisplayStreamView: View {
                     print("[FlatDisplay] Switched to SBS 3D material")
                 } catch {
                     print("[FlatDisplay] ⚠️ Failed to set SBS material parameter: \(error)")
-                    var m = UnlitMaterial(texture: texture)
-                    m.applyPostProcessToneMap = false
-                    screen.model?.materials = [m]
+                    screen.model?.materials = [UnlitMaterial(texture: texture)]
                 }
             } else {
                 print("[FlatDisplay] ⚠️ SBS material not loaded, using standard material")
-                var m = UnlitMaterial(texture: texture)
-                m.applyPostProcessToneMap = false
-                screen.model?.materials = [m]
+                screen.model?.materials = [UnlitMaterial(texture: texture)]
             }
         } else {
-            var m = UnlitMaterial(texture: self.texture)
-            m.applyPostProcessToneMap = false
-            screen.model?.materials = [m]
+            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
             print("[FlatDisplay] Switched to standard 2D material")
         }
     }
@@ -2440,9 +2433,7 @@ struct _FlatDisplayStreamView: View {
                 contents: .init(mipmapLevels: [.mip(data: data, bytesPerRow: bytesPerPixel * width)])
             )
             isHDRTexture = desiredHDR
-            var m = UnlitMaterial(texture: texture)
-            m.applyPostProcessToneMap = false
-            screen.model?.materials = [m]
+            screen.model?.materials = [UnlitMaterial(texture: texture)]
         } catch {
             print("⚠️ Failed to recreate texture for HDR toggle: \(error). Keeping existing texture.")
             // Keep existing texture rather than crash
