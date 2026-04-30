@@ -3487,14 +3487,10 @@ struct _CurvedDisplayStreamView: View {
                 surfaceMaterial = mat
                 screen.model?.materials = [mat]
             } else {
-                var screenMat = UnlitMaterial(texture: texture)
-                screenMat.applyPostProcessToneMap = false
-                screen.model?.materials = [screenMat]
+                screen.model?.materials = [UnlitMaterial(texture: texture)]
             }
         } else {
-            var screenMat = UnlitMaterial(texture: self.texture)
-            screenMat.applyPostProcessToneMap = false
-            screen.model?.materials = [screenMat]
+            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
         }
     }
 
@@ -3608,14 +3604,10 @@ struct _CurvedDisplayStreamView: View {
                 surfaceMaterial = mat
                 screen.model?.materials = [mat]
             } else {
-                var screenMat = UnlitMaterial(texture: texture)
-                screenMat.applyPostProcessToneMap = false
-                screen.model?.materials = [screenMat]
+                screen.model?.materials = [UnlitMaterial(texture: texture)]
             }
         } else {
-            var screenMat = UnlitMaterial(texture: self.texture)
-            screenMat.applyPostProcessToneMap = false
-            screen.model?.materials = [screenMat]
+            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
         }
     }
     
@@ -3722,13 +3714,9 @@ struct _CurvedDisplayStreamView: View {
         }
         
         if videoMode == .standard2D {
-            var screenMat = UnlitMaterial(texture: texture)
-            screenMat.applyPostProcessToneMap = false
-            screen = ModelEntity(mesh: mesh, materials: [screenMat])
+            screen = ModelEntity(mesh: mesh, materials: [UnlitMaterial(texture: texture)])
         } else {
-            var screenMat = UnlitMaterial(texture: texture)
-            screenMat.applyPostProcessToneMap = false
-            screen = ModelEntity(mesh: mesh, materials: [screenMat])
+            screen = ModelEntity(mesh: mesh, materials: [UnlitMaterial(texture: texture)])
         }
 
         // Generate curved collision mesh that matches visual geometry
