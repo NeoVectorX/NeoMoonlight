@@ -643,9 +643,10 @@ struct _FlatDisplayStreamView: View {
     @AppStorage("darkControlsMode") private var darkControlsMode: Bool = false
     
     @State private var safeHDRSettings = FlatThreadSafeHDRSettings(
-        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 0)
+        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
     )
     @StateObject private var hdrParams = HDRTestParams()
+    @StateObject private var hdrPanelSettings = HDRSettings()
     
     @State private var showVirtualKeyboard = false
     @State private var keyboardInput: String = " "
@@ -1469,7 +1470,8 @@ struct _FlatDisplayStreamView: View {
             mesh = .generatePlane(width: baseWidth, height: baseHeight)
         }
         
-        let material = UnlitMaterial(texture: texture)
+        var material = UnlitMaterial(texture: texture)
+        material.applyPostProcessToneMap = false
         screen = ModelEntity(mesh: mesh, materials: [material])
         screen.position = SIMD3<Float>(0, 0, 0)
         
@@ -1746,6 +1748,7 @@ struct _FlatDisplayStreamView: View {
                 params.mode = 0
             }
         }
+        params.pqExposure = hdrPanelSettings.pqExposure
         safeHDRSettings.value = params
         
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
@@ -2175,14 +2178,20 @@ struct _FlatDisplayStreamView: View {
                     print("[FlatDisplay] Switched to SBS 3D material")
                 } catch {
                     print("[FlatDisplay] ⚠️ Failed to set SBS material parameter: \(error)")
-                    screen.model?.materials = [UnlitMaterial(texture: texture)]
+                    var m = UnlitMaterial(texture: texture)
+                    m.applyPostProcessToneMap = false
+                    screen.model?.materials = [m]
                 }
             } else {
                 print("[FlatDisplay] ⚠️ SBS material not loaded, using standard material")
-                screen.model?.materials = [UnlitMaterial(texture: texture)]
+                var m = UnlitMaterial(texture: texture)
+                m.applyPostProcessToneMap = false
+                screen.model?.materials = [m]
             }
         } else {
-            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
+            var m = UnlitMaterial(texture: self.texture)
+            m.applyPostProcessToneMap = false
+            screen.model?.materials = [m]
             print("[FlatDisplay] Switched to standard 2D material")
         }
     }
@@ -2431,7 +2440,9 @@ struct _FlatDisplayStreamView: View {
                 contents: .init(mipmapLevels: [.mip(data: data, bytesPerRow: bytesPerPixel * width)])
             )
             isHDRTexture = desiredHDR
-            screen.model?.materials = [UnlitMaterial(texture: texture)]
+            var m = UnlitMaterial(texture: texture)
+            m.applyPostProcessToneMap = false
+            screen.model?.materials = [m]
         } catch {
             print("⚠️ Failed to recreate texture for HDR toggle: \(error). Keeping existing texture.")
             // Keep existing texture rather than crash

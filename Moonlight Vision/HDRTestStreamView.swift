@@ -468,6 +468,7 @@ struct _HDRTestStreamView: View {
                             contrast: hdrSettings.contrast,
                             saturation: hdrSettings.saturation,
                             brightness: 0.0,
+                            pqExposure: hdrSettings.pqExposure,
                             mode: hdrSettings.mode
                         )
                     },
@@ -683,8 +684,9 @@ struct _HDRTestStreamView: View {
 }
 
 final class HDRTestParams: ObservableObject {
-    @Published var boost: Float = 1.0
-    @Published var contrast: Float = 1.0
-    @Published var saturation: Float = 1.0
-    @Published var mode: Int32 = 1
+    @Published var boost:       Float = 1.0
+    @Published var contrast:    Float = 1.0
+    @Published var saturation:  Float = 1.0
+    @Published var pqExposure:  Float = 1.0
+    @Published var mode:        Int32 = 1
 }
