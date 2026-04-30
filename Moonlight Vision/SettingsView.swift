@@ -16,6 +16,23 @@ struct SettingsView: View {
     @State private var isCustomResolution: Bool = false
     @State private var customWidth: String = ""
     @State private var customHeight: String = ""
+    @State private var customBitrateString: String = ""
+    
+    private var bitrateSelection: Binding<Int32> {
+        Binding(
+            get: {
+                Self.bitrateTable.contains(settings.bitrate) ? settings.bitrate : -1
+            },
+            set: { newValue in
+                if newValue != -1 {
+                    settings.bitrate = newValue
+                } else {
+                    // Custom selected - initialize text field with current value
+                    customBitrateString = String(settings.bitrate / 1000)
+                }
+            }
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -175,24 +192,42 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                     
-                    HStack {
-                        Text("Bitrate")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Picker("", selection: $settings.bitrate) {
-                            ForEach(Self.bitrateTable, id: \.self) { bitrate in
-                                Text("\(bitrate / 1000) Mbps").tag(bitrate)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Bitrate")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Picker("", selection: $bitrateSelection) {
+                                ForEach(Self.bitrateTable, id: \.self) { bitrate in
+                                    Text("\(bitrate / 1000) Mbps").tag(bitrate)
+                                }
+                                Text("Custom").tag(Int32(-1))
+                            }
+                            .pickerStyle(.menu)
+                        }
+                        .padding(.vertical, 4)
+                        
+                        if bitrateSelection == -1 {
+                            HStack {
+                                TextField("Bitrate (Mbps)", text: $customBitrateString)
+                                    .textFieldStyle(.roundedBorder)
+                                    .keyboardType(.numberPad)
+                                    .frame(width: 120)
+                                    .onChange(of: customBitrateString) { _, newValue in
+                                        if let mbps = Int32(newValue), mbps > 0 {
+                                            settings.bitrate = mbps * 1000
+                                        }
+                                    }
+                                Text("Mbps")
+                                    .foregroundColor(.secondary)
                             }
                         }
-                        .pickerStyle(.menu)
-                    }
-                    .padding(.vertical, 4)
-                    
-                    if settings.bitrate > 300000 {
-                        Label("Bitrates exceeding 300 Mbps require an extreme high-performance network.", systemImage: "wifi.exclamationmark")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .padding(.top, 8)
+                        
+                        if settings.bitrate > 300000 {
+                            Label("Bitrates exceeding 300 Mbps require an extreme high-performance network.", systemImage: "wifi.exclamationmark")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                     
                     VStack(alignment: .leading, spacing: 8) {
