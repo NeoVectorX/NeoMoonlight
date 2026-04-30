@@ -659,9 +659,10 @@ struct _CurvedDisplayStreamView: View {
     // hasInitializedPosition moved to headStorage to avoid "Modifying state during view update"
     
     @State private var safeHDRSettings = ThreadSafeHDRSettings(
-        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 0)
+        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
     )
     @StateObject private var hdrParams = HDRTestParams()
+    @StateObject private var hdrPanelSettings = HDRSettings()
 
     @State private var showVirtualKeyboard = false
     @State private var hideControls: Bool = false
@@ -1675,6 +1676,7 @@ struct _CurvedDisplayStreamView: View {
                 contrast: 1.1,
                 saturation: 1.08,
                 brightness: 0.0,
+                pqExposure: 1.0,
                 mode: 1
             )
             ensureHDRTextureMatchesSetting()
@@ -3485,10 +3487,14 @@ struct _CurvedDisplayStreamView: View {
                 surfaceMaterial = mat
                 screen.model?.materials = [mat]
             } else {
-                screen.model?.materials = [UnlitMaterial(texture: texture)]
+                var screenMat = UnlitMaterial(texture: texture)
+                screenMat.applyPostProcessToneMap = false
+                screen.model?.materials = [screenMat]
             }
         } else {
-            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
+            var screenMat = UnlitMaterial(texture: self.texture)
+            screenMat.applyPostProcessToneMap = false
+            screen.model?.materials = [screenMat]
         }
     }
 
@@ -3584,6 +3590,7 @@ struct _CurvedDisplayStreamView: View {
             contrast: viewModel.streamSettings.gamma,
             saturation: viewModel.streamSettings.saturation,
             brightness: 0.0,
+            pqExposure: hdrPanelSettings.pqExposure,
             mode: hdrParams.mode
         )
         if viewModel.streamSettings.enableHdr {
@@ -3601,10 +3608,14 @@ struct _CurvedDisplayStreamView: View {
                 surfaceMaterial = mat
                 screen.model?.materials = [mat]
             } else {
-                screen.model?.materials = [UnlitMaterial(texture: texture)]
+                var screenMat = UnlitMaterial(texture: texture)
+                screenMat.applyPostProcessToneMap = false
+                screen.model?.materials = [screenMat]
             }
         } else {
-            screen.model?.materials = [UnlitMaterial(texture: self.texture)]
+            var screenMat = UnlitMaterial(texture: self.texture)
+            screenMat.applyPostProcessToneMap = false
+            screen.model?.materials = [screenMat]
         }
     }
     
@@ -3711,10 +3722,13 @@ struct _CurvedDisplayStreamView: View {
         }
         
         if videoMode == .standard2D {
-            screen = ModelEntity(mesh: mesh, materials: [UnlitMaterial(texture: texture)])
+            var screenMat = UnlitMaterial(texture: texture)
+            screenMat.applyPostProcessToneMap = false
+            screen = ModelEntity(mesh: mesh, materials: [screenMat])
         } else {
-            let material = UnlitMaterial(texture: texture)
-            screen = ModelEntity(mesh: mesh, materials: [material])
+            var screenMat = UnlitMaterial(texture: texture)
+            screenMat.applyPostProcessToneMap = false
+            screen = ModelEntity(mesh: mesh, materials: [screenMat])
         }
 
         // Generate curved collision mesh that matches visual geometry

@@ -97,15 +97,6 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
     
     private var logCounter: Int = 0
     
-    // HDR enhancement parameters struct for passing to shader
-    private struct ShaderHDRParams {
-        var boost: Float        // luminosity
-        var contrast: Float     // gamma/contrast
-        var saturation: Float
-        var brightness: Float
-        var mode: Int32         // 0,1,2
-    }
-    
     // MARK: - Initialization
     
     @objc(initWithView:callbacks:streamAspectRatio:useFramePacing:enableHDR:)
@@ -1066,65 +1057,86 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             return
         }
         
-        // 7. BUFFER 0: HDR Params (Detect from PixelBuffer with safe string comparison)
-        struct HDRParams { var presetIndex: UInt32; var isPQ: UInt32; var isBT2020Matrix: UInt32; var isBT2020Primaries: UInt32 }
-        
-        // Force PQ mode when HDR is enabled (AV1 streams often don't set transfer function tag)
-        // If user enabled HDR, assume PQ encoding regardless of metadata
-        var isPQ: UInt32 = hdrEnabled ? 1 : 0
-        var isBT2020Primaries: UInt32 = 0
-        var isBT2020Matrix: UInt32 = 0
-        
-        // Still check attachments for color space, with HDR fallback
-        if let primAttachment = CVBufferCopyAttachment(pb, kCVImageBufferColorPrimariesKey, nil),
-           let primVal = primAttachment as? String {
-            if primVal == "ITU_R_2020" { isBT2020Primaries = 1 }
-            else if primVal == "ITU_R_709_2" { isBT2020Primaries = 0 }
-        } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Primaries = hdrEnabled ? 1 : 0
+        // 7. BUFFER 0: ShaderHDRParams — must match Metal struct exactly
+        // Read actual transfer function tag; only fall back to heuristic when metadata is absent.
+        var isPQ = false
+        if let tfVal = CVBufferCopyAttachment(pb, kCVImageBufferTransferFunctionKey, nil) as? String {
+            isPQ = (tfVal == "SMPTE_ST_2084_PQ")
+        } else if hdrEnabled {
+            isPQ = uikitPixelFormatIs10Bit(pixelFormat)
         }
-        
-        if let mtxAttachment = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil),
-           let mtxVal = mtxAttachment as? String {
-            if mtxVal == "ITU_R_2020" { isBT2020Matrix = 1 }
-            else if mtxVal == "ITU_R_709_2" { isBT2020Matrix = 0 }
+
+        var primariesType: UInt32 = 0  // 0=709, 1=2020, 2=SMPTE-C
+        if let primVal = CVBufferCopyAttachment(pb, kCVImageBufferColorPrimariesKey, nil) as? String {
+            if primVal == "ITU_R_2020"  { primariesType = 1 }
+            else if primVal == "SMPTE_C" { primariesType = 2 }
         } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Matrix = hdrEnabled ? 1 : 0
+            primariesType = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
         }
-        
-        // Always use presetIndex=0 for HDR (full PQ pipeline)
-        let presetIndex: UInt32 = hdrEnabled ? 0 : 1
-        
-        var hdrParams = HDRParams(presetIndex: presetIndex, isPQ: isPQ, isBT2020Matrix: isBT2020Matrix, isBT2020Primaries: isBT2020Primaries)
-        
-        // Debug logging for HDR detection
+
+        var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
+        if let mtxVal = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String {
+            if mtxVal == "ITU_R_2020"   { matrixType = 1 }
+            else if mtxVal == "ITU_R_601_4" { matrixType = 2 }
+        } else {
+            matrixType = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
+        }
+
+        let is10Bit:     UInt32 = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
+        let isFullRange: UInt32 = uikitPixelFormatIsFullRange(pixelFormat) ? 1 : 0
+
+        let rawHeadroom = UIScreen.main.currentEDRHeadroom
+        let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+
+        // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
+        struct ShaderHDRParamsUIKit {
+            var is10Bit:       UInt32
+            var isFullRange:   UInt32
+            var isPQ:          UInt32
+            var matrixType:    UInt32
+            var primariesType: UInt32
+            var edrHeadroom:   Float
+        }
+        var frameParams = ShaderHDRParamsUIKit(
+            is10Bit:       is10Bit,
+            isFullRange:   isFullRange,
+            isPQ:          isPQ ? 1 : 0,
+            matrixType:    matrixType,
+            primariesType: primariesType,
+            edrHeadroom:   edrHeadroom
+        )
+        renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<ShaderHDRParamsUIKit>.size, index: 0)
+
+        // BUFFER 1: FullHDRParams — user grading (maps to FullHDRParams in Metal)
+        struct FullHDRParamsUIKit {
+            var boost:      Float
+            var contrast:   Float
+            var saturation: Float
+            var brightness: Float
+            var pqExposure: Float
+            var mode:       Int32
+        }
+        var fullParams = FullHDRParamsUIKit(
+            boost:      1.0,
+            contrast:   1.0,
+            saturation: 1.0,
+            brightness: 0.0,
+            pqExposure: 1.0,
+            mode:       0
+        )
+        renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<FullHDRParamsUIKit>.size, index: 1)
+
         logCounter += 1
-        if logCounter % 120 == 0 { // Log every 2 seconds at 60fps
-            print("MetalVideoDecoderRenderer: HDR Debug - hdrEnabled=\(hdrEnabled), isPQ=\(isPQ), isBT2020Matrix=\(isBT2020Matrix), isBT2020Primaries=\(isBT2020Primaries), presetIndex=\(presetIndex)")
+        if logCounter % 120 == 0 {
+            print("MetalVideoDecoderRenderer: isPQ=\(isPQ), matrix=\(matrixType), primaries=\(primariesType), edrHeadroom=\(edrHeadroom)")
         }
-        
-        renderEncoder.setFragmentBytes(&hdrParams, length: MemoryLayout<HDRParams>.size, index: 0)
-        
-        // 8. BUFFER 2: Color Enhancements (CRITICAL FIX - prevent black screen)
-        struct ColorEnhancementUniforms { var saturation: Float; var contrast: Float; var padding1: Float; var padding2: Float }
-        
-        // Always use the properties, whether HDR or SDR
-        var sat = self.hdrSaturation
-        var con = self.hdrContrast
-        
-        // Safety clamps (prevent invalid values)
-        if sat < 0.1 { sat = 1.0 }
-        if con < 0.1 { con = 1.0 }
-        
-        // Update debug logging
-        if logCounter % 120 == 0 { // Log every 2 seconds at 60fps
-            print("MetalVideoDecoderRenderer: Applying sat=\(sat), con=\(con) to shader")
-        }
-        
-        var enh = ColorEnhancementUniforms(saturation: sat, contrast: con, padding1: 0, padding2: 0)
-        renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniforms>.size, index: 2)
+
+        // BUFFER 2: ColorEnhancementUniforms — hdrSaturation / hdrContrast from properties
+        struct ColorEnhancementUniformsUIKit { var saturation: Float; var contrast: Float; var warmth: Float; var padding1: Float }
+        let sat = max(hdrSaturation, 0.1)
+        let con = max(hdrContrast,   0.1)
+        var enh = ColorEnhancementUniformsUIKit(saturation: sat, contrast: con, warmth: 0.0, padding1: 0)
+        renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniformsUIKit>.size, index: 2)
         
         // 9. Draw
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -1132,6 +1144,39 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: - Pixel Format Helpers
+
+    private func uikitPixelFormatIs10Bit(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func uikitPixelFormatIsFullRange(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        default:
+            return false
+        }
     }
 }
 

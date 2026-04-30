@@ -80,32 +80,11 @@ struct HDRControlPanel: View {
             DisclosureGroup(isExpanded: $showAdvanced) {
                 VStack(alignment: .leading, spacing: 16) {
                     HDRSlider(
-                        title: "Luminance",
-                        value: $settings.luminance,
-                        range: 100...1000,
-                        defaultValue: 300,
-                        icon: "lightbulb.fill",
-                        unit: " nits",
-                        step: 10
-                    )
-                    
-                    HDRSlider(
-                        title: "Gamma",
-                        value: $settings.gamma,
-                        range: 1.8...2.8,
-                        defaultValue: 2.2,
-                        icon: "chart.line.uptrend.xyaxis",
-                        step: 0.1
-                    )
-                    
-                    HDRSlider(
-                        title: "Peak Brightness",
-                        value: $settings.peakBrightness,
-                        range: 400...1600,
-                        defaultValue: 800,
-                        icon: "sun.max.circle.fill",
-                        unit: " nits",
-                        step: 50
+                        title: "HDR Exposure",
+                        value: $settings.pqExposure,
+                        range: 0.5...2.0,
+                        defaultValue: 1.0,
+                        icon: "dial.medium.fill"
                     )
                 }
                 .padding(.top, 12)
@@ -139,12 +118,10 @@ struct HDRControlPanel: View {
         .padding(28)
         .frame(width: 450)
         .glassBackgroundEffect()
-        .onChange(of: settings.brightness) { _, _ in settings.save() }
-        .onChange(of: settings.contrast) { _, _ in settings.save() }
-        .onChange(of: settings.saturation) { _, _ in settings.save() }
-        .onChange(of: settings.luminance) { _, _ in settings.save() }
-        .onChange(of: settings.gamma) { _, _ in settings.save() }
-        .onChange(of: settings.peakBrightness) { _, _ in settings.save() }
+        .onChange(of: settings.brightness)  { _, _ in settings.save() }
+        .onChange(of: settings.contrast)    { _, _ in settings.save() }
+        .onChange(of: settings.saturation)  { _, _ in settings.save() }
+        .onChange(of: settings.pqExposure)  { _, _ in settings.save() }
     }
 }
 

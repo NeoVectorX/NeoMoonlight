@@ -12,9 +12,10 @@ import CoreVideo
 import Foundation
 import Metal
 import MetalKit
-import QuartzCore // For CADisplayLink
+import QuartzCore
 import RealityKit
 import SwiftUI
+import UIKit
 import VideoToolbox
 import CoreFoundation
 
@@ -28,7 +29,8 @@ struct HDRParams {
     var contrast: Float
     var saturation: Float
     var brightness: Float
-    var mode: Int32  // 0 = Power Curve, 1 = ACES, 2 = ACES + Vibrance
+    var pqExposure: Float  // PQ-only exposure trim; 1.0 = neutral
+    var mode: Int32
 }
 
 private struct ColorEnhancementUniforms {
@@ -38,12 +40,24 @@ private struct ColorEnhancementUniforms {
     var padding1: Float
 }
 
+// Must match ShaderHDRParams in Shaders.metal exactly (field order + types).
+private struct ShaderHDRParams {
+    var is10Bit:       UInt32
+    var isFullRange:   UInt32
+    var isPQ:          UInt32
+    var matrixType:    UInt32   // 0=709, 1=2020, 2=601
+    var primariesType: UInt32   // 0=709, 1=2020, 2=SMPTE-C
+    var edrHeadroom:   Float    // live UIScreen EDR headroom
+}
+
+// Must match FullHDRParams in Shaders.metal exactly.
 private struct ShaderFullHDRParams {
-    var boost: Float
-    var contrast: Float
-    var saturation: Float
-    var brightness: Float
-    var mode: Int32
+    var boost:       Float
+    var contrast:    Float
+    var saturation:  Float
+    var brightness:  Float
+    var pqExposure:  Float
+    var mode:        Int32
 }
 
 let kCVImageBufferYCbCrMatrix_ITU_R_2020 = "ITU_R_2020" as CFString
@@ -98,6 +112,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
     var session: VTDecompressionSession?
     var decoderCallback: VTDecompressionOutputCallbackRecord
+
+    // Limits GPU command buffer depth to 3 in-flight frames.
+    // Prevents memory pressure and watchdog kills when the decoder runs faster than the GPU.
+    private let inflightSemaphore = DispatchSemaphore(value: 3)
+
     lazy var mtlDevice: MTLDevice = {
         guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError()
@@ -181,95 +200,99 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         presentationTimeStamp _: CMTime,
         presentationDuration _: CMTime?
     ) {
+        guard let imageBuffer = imageBuffer else { return }
+
+        // Back-pressure: drop the frame silently if 3 frames are already queued on the GPU.
+        if inflightSemaphore.wait(timeout: .now()) != .success { return }
+
+        autoreleasepool {
+            renderFrame(imageBuffer: imageBuffer)
+        }
+    }
+
+    private func renderFrame(imageBuffer: CVImageBuffer) {
         guard
-            let imageBuffer = imageBuffer,
             let commandBuffer = commandQueue?.makeCommandBuffer(),
-            let textureCache = textureCache
+            let textureCache  = textureCache
         else {
-            print("DrawableVideoDecoder: Missing imageBuffer/commandBuffer/textureCache")
+            inflightSemaphore.signal()
             return
         }
 
-        let pf = CVPixelBufferGetPixelFormatType(imageBuffer)
-        let planeCount = CVPixelBufferGetPlaneCount(imageBuffer)
-
-        // 1. PQ Detection (With Force-Fix)
-        // If the user enabled HDR, we MUST assume PQ, even if the stream metadata is missing.
-        var isPQ = hdrEnabled
-        
-        // (Optional) If not already forced, check metadata as fallback
-        if !isPQ {
-            if let tfVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue(),
-               CFGetTypeID(tfVal) == CFStringGetTypeID() {
-                isPQ = CFEqual(tfVal as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
-            }
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            self?.inflightSemaphore.signal()
         }
 
-        // 2. Primaries Detection (Gamut)
-        var isBT2020Primaries = false
+        let pf         = CVPixelBufferGetPixelFormatType(imageBuffer)
+        let planeCount = CVPixelBufferGetPlaneCount(imageBuffer)
+
+        // --- PQ Detection ---
+        // Read the actual transfer function tag from the decoded pixel buffer.
+        // Only fall back to pixel-format heuristic when metadata is missing.
+        // Never force-PQ just because HDR mode is on — that was decoding SDR
+        // content through pqToNits() and producing completely wrong output.
+        var isPQ = false
+        if let tfVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue(),
+           CFGetTypeID(tfVal) == CFStringGetTypeID() {
+            isPQ = CFEqual(tfVal as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
+        } else if hdrEnabled {
+            isPQ = pixelFormatIs10Bit(pf)
+        }
+
+        // --- Primaries Detection ---
+        var primariesType: UInt32 = 0  // 0=709, 1=2020, 2=SMPTE-C
         if let primVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferColorPrimariesKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(primVal) == CFStringGetTypeID() {
             let prim = primVal as! CFString
-            if CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_2020) {
-                isBT2020Primaries = true
-            } else if CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_709_2) {
-                isBT2020Primaries = false
-            }
+            if      CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_2020)  { primariesType = 1 }
+            else if CFEqual(prim, "SMPTE_C" as CFString)                    { primariesType = 2 }
+            // else stays 0 (BT.709)
         } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Primaries = hdrEnabled
+            primariesType = pixelFormatIs10Bit(pf) ? 1 : 0
         }
 
-        // 3. Matrix Detection (YUV Coeffs)
-        var isBT2020Matrix = false
+        // --- Matrix Detection ---
+        var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
         if let mtxVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(mtxVal) == CFStringGetTypeID() {
             let mtx = mtxVal as! CFString
-            if CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_2020) {
-                isBT2020Matrix = true
-            } else if CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_709_2) {
-                isBT2020Matrix = false
-            }
+            if      CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_2020)  { matrixType = 1 }
+            else if CFEqual(mtx, "ITU_R_601_4" as CFString)             { matrixType = 2 }
+            // else stays 0 (BT.709)
         } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Matrix = hdrEnabled
+            matrixType = pixelFormatIs10Bit(pf) ? 1 : 0
         }
 
-        guard
-            let drawable = try? drawableQueue?.nextDrawable()
-        else {
-            print("DrawableVideoDecoder: nextDrawable() returned nil")
-            return
-        }
-        
-        if hdrEnabled {
-            updateHDRMetadata()
-        }
+        let is10Bit    = pixelFormatIs10Bit(pf)    ? UInt32(1) : 0
+        let isFullRange = pixelFormatIsFullRange(pf) ? UInt32(1) : 0
 
-        // Explicit bi-planar detection
-        var isBiPlanar = false
-        var yFormat: MTLPixelFormat = .invalid
+        if hdrEnabled { updateHDRMetadata() }
+
+        // --- Texture Format Selection ---
+        var isBiPlanar  = false
+        var yFormat:    MTLPixelFormat = .invalid
         var cbcrFormat: MTLPixelFormat = .invalid
 
         if planeCount >= 2 {
-            // Prefer native formats derived from CVPixelBuffer
-            let srcMetalFormats = CVMetalHelpers.getTextureTypesForFormat(pf)
-            if srcMetalFormats.count > 0 { yFormat = srcMetalFormats[0] }
-            if srcMetalFormats.count > 1 { cbcrFormat = srcMetalFormats[1] }
-            isBiPlanar = (cbcrFormat != .invalid)
-            
-            // If HDR enabled, ensure P010 path where possible
             if hdrEnabled {
-                yFormat = .r16Unorm
+                yFormat    = .r16Unorm
                 cbcrFormat = .rg16Unorm
+                isBiPlanar = true
+            } else {
+                yFormat    = .r8Unorm
+                cbcrFormat = .rg8Unorm
                 isBiPlanar = true
             }
         }
 
-        // DEBUG: First-frame log (once)
         if !firstFrameEmitted {
             let fmtStr = CVMetalHelpers.coreVideoPixelFormatToStr[pf] ?? "\(pf)"
-            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), PQ=\(isPQ), 2020Primaries=\(isBT2020Primaries), 2020Matrix=\(isBT2020Matrix)")
+            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), isPQ=\(isPQ), fullRange=\(isFullRange==1), 10bit=\(is10Bit==1), matrix=\(matrixType), primaries=\(primariesType)")
+        }
+
+        guard let drawable = try? drawableQueue?.nextDrawable() else {
+            commandBuffer.commit()
+            return
         }
 
         let fragment: String = isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
@@ -278,8 +301,9 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             if copyPipelineStateYUV == nil || lastCopyFragment != fragment {
                 copyPipelineStateYUV = buildCopyPipeline(fragment: fragment)
                 lastCopyFragment = fragment
-                if copyPipelineStateYUV == nil {
+                guard copyPipelineStateYUV != nil else {
                     print("DrawableVideoDecoder: Failed to build YUV pipeline")
+                    commandBuffer.commit()
                     return
                 }
             }
@@ -287,20 +311,21 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             if copyPipelineState == nil || lastCopyFragment != fragment {
                 copyPipelineState = buildCopyPipeline(fragment: fragment)
                 lastCopyFragment = fragment
-                if copyPipelineState == nil {
+                guard copyPipelineState != nil else {
                     print("DrawableVideoDecoder: Failed to build single-plane pipeline")
+                    commandBuffer.commit()
                     return
                 }
             }
         }
 
         let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = drawable.texture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].texture    = drawable.texture
+        renderPassDescriptor.colorAttachments[0].loadAction  = .clear
         renderPassDescriptor.colorAttachments[0].storeAction = .store
 
         guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            print("DrawableVideoDecoder: Failed to create render encoder")
+            commandBuffer.commit()
             return
         }
 
@@ -310,90 +335,65 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             let w1 = CVPixelBufferGetWidthOfPlane(imageBuffer, 1)
             let h1 = CVPixelBufferGetHeightOfPlane(imageBuffer, 1)
 
-            var yTexRef: CVMetalTexture?
-            var cbcrTexRef: CVMetalTexture?
-
-            let res0 = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                yFormat, w0, h0, 0, &yTexRef
-            )
-            let res1 = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                cbcrFormat, w1, h1, 1, &cbcrTexRef
-            )
-            if res0 != 0 || res1 != 0 {
-                print("DrawableVideoDecoder: CVMetalTexture (YUV) failed: \(res0), \(res1)")
+            var yRef:    CVMetalTexture?
+            var cbcrRef: CVMetalTexture?
+            let r0 = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, yFormat,    w0, h0, 0, &yRef)
+            let r1 = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, cbcrFormat, w1, h1, 1, &cbcrRef)
+            guard r0 == 0, r1 == 0,
+                  let yTex   = yRef.flatMap(CVMetalTextureGetTexture),
+                  let uvTex  = cbcrRef.flatMap(CVMetalTextureGetTexture) else {
                 renderEncoder.endEncoding()
                 commandBuffer.commit()
                 return
             }
-
-            guard let yTex = yTexRef.flatMap(CVMetalTextureGetTexture),
-                  let cbcrTex = cbcrTexRef.flatMap(CVMetalTextureGetTexture) else {
-                print("DrawableVideoDecoder: Failed to get Y/CBCR textures")
-                renderEncoder.endEncoding()
-                commandBuffer.commit()
-                return
-            }
-
             renderEncoder.setRenderPipelineState(copyPipelineStateYUV!)
-            renderEncoder.setFragmentTexture(yTex, index: 0)
-            renderEncoder.setFragmentTexture(cbcrTex, index: 1)
+            renderEncoder.setFragmentTexture(yTex,  index: 0)
+            renderEncoder.setFragmentTexture(uvTex, index: 1)
         } else {
-            var imageTexture: CVMetalTexture?
+            var imgRef: CVMetalTexture?
             let w = CVPixelBufferGetWidthOfPlane(imageBuffer, 0)
             let h = CVPixelBufferGetHeightOfPlane(imageBuffer, 0)
-            let srcFormat = CVMetalHelpers.getTextureTypesForFormat(pf)[0]
-
-            let result = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                srcFormat, w, h, 0, &imageTexture
-            )
-            guard result == 0, let imageTexture, let sourceTexture = CVMetalTextureGetTexture(imageTexture) else {
-                print("DrawableVideoDecoder: CVMetalTexture (single-plane) failed: \(result)")
+            let srcFmt = CVMetalHelpers.getTextureTypesForFormat(pf)[0]
+            let result = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, srcFmt, w, h, 0, &imgRef)
+            guard result == 0, let srcTex = imgRef.flatMap(CVMetalTextureGetTexture) else {
                 renderEncoder.endEncoding()
                 commandBuffer.commit()
                 return
             }
-
             renderEncoder.setRenderPipelineState(copyPipelineState!)
-            renderEncoder.setFragmentTexture(sourceTexture, index: 0)
+            renderEncoder.setFragmentTexture(srcTex, index: 0)
         }
 
-        // --- 1. FORCE PQ FIX (The "Washed Out" Fix) ---
-        // If HDR is enabled, we assume the signal is PQ, even if metadata is missing.
-        // This prevents the "Gray Screen" issue.
-        if hdrEnabled { isPQ = true }
-        
-        // --- 2. THE STRUCT FIX (Type Mismatch Fix) ---
-        // We defined the struct properties as UInt32 (to match Metal 'uint').
-        // We convert our Swift Bools to 1 or 0 here.
-        struct ShaderHDRParams { var presetIndex: UInt32; var isPQ: UInt32; var isBT2020Matrix: UInt32; var isBT2020Primaries: UInt32 }
-        
-        var shaderParams = ShaderHDRParams(
-            presetIndex: 0,
-            isPQ: isPQ ? 1 : 0,               // Convert Bool -> UInt32
-            isBT2020Matrix: isBT2020Matrix ? 1 : 0,
-            isBT2020Primaries: isBT2020Primaries ? 1 : 0
+        // Buffer 0: ShaderHDRParams — frame signal description
+        // Live EDR headroom read on the render thread; UIScreen access is safe from any thread.
+        let rawHeadroom = UIScreen.main.currentEDRHeadroom
+        let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+
+        var shaderHDR = ShaderHDRParams(
+            is10Bit:       is10Bit,
+            isFullRange:   isFullRange,
+            isPQ:          isPQ ? 1 : 0,
+            matrixType:    matrixType,
+            primariesType: primariesType,
+            edrHeadroom:   edrHeadroom
         )
-        
-        if let pb = mtlDevice.makeBuffer(bytes: &shaderParams, length: MemoryLayout<ShaderHDRParams>.size, options: .storageModeShared) {
-            renderEncoder.setFragmentBuffer(pb, offset: 0, index: 0)
-        }
+        renderEncoder.setFragmentBytes(&shaderHDR, length: MemoryLayout<ShaderHDRParams>.size, index: 0)
 
-        var full = hdrSettingsProvider?() ?? HDRParams(
-            boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 1
+        // Buffer 1: FullHDRParams — user grading
+        let userParams = hdrSettingsProvider?() ?? HDRParams(
+            boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0
         )
         var fullParams = ShaderFullHDRParams(
-            boost: full.boost,
-            contrast: full.contrast,
-            saturation: full.saturation,
-            brightness: full.brightness,
-            mode: full.mode
+            boost:      userParams.boost,
+            contrast:   userParams.contrast,
+            saturation: userParams.saturation,
+            brightness: userParams.brightness,
+            pqExposure: userParams.pqExposure,
+            mode:       userParams.mode
         )
         renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
 
-        // Existing enhancements (buffer 2)
+        // Buffer 2: ColorEnhancementUniforms — warmth / per-renderer adjustments
         let satConWarm = enhancementsProvider?() ?? (1.0, 1.0, 0.0)
         var enh = ColorEnhancementUniforms(saturation: satConWarm.0, contrast: satConWarm.1, warmth: satConWarm.2, padding1: 0)
         renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniforms>.size, index: 2)
@@ -401,7 +401,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
 
-        // --- ENABLE MIPMAP GENERATION (The Shimmer Fix) ---
+        // Mipmap generation for ambient light engine sampling
         if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
             blitEncoder.generateMipmaps(for: drawable.texture)
             blitEncoder.endEncoding()
@@ -409,13 +409,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
         let outTextureForAmbient = drawable.texture
 
-        // Present only after GPU finishes (async; avoids blocking decoder thread and OOM/watchdog crashes)
         commandBuffer.addCompletedHandler { _ in
             drawable.present()
         }
         commandBuffer.commit()
 
-        // Fire and forget. The engine handles the math and notification on its own timeline.
         if isReactiveDimmingEnabled, let engine = Self.ambientEngine {
             Task.detached {
                 await engine.analyze(texture: outTextureForAmbient)
@@ -426,8 +424,45 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             firstFrameEmitted = true
             DispatchQueue.main.async {
                 self.callbacks.videoContentShown()
-                print("DrawableVideoDecoder: First frame presented (PQ=\(isPQ), 2020Primaries=\(isBT2020Primaries), 2020Matrix=\(isBT2020Matrix))")
+                print("DrawableVideoDecoder: First frame presented (PQ=\(isPQ), primaries=\(primariesType), matrix=\(matrixType), edrHeadroom=\(edrHeadroom))")
             }
+        }
+    }
+
+    // MARK: - Pixel Format Helpers
+
+    private func pixelFormatIs10Bit(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func pixelFormatIsFullRange(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        default:
+            // For formats not in the list, check the format description if available.
+            return (formatDesc != nil) ? CVMetalHelpers.getIsFullRangeForVideoFormat(formatDesc!) : false
         }
     }
 
@@ -1085,6 +1120,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             contrast: 1.0,
             saturation: 1.0,
             brightness: 0.0,
+            pqExposure: 1.0,
             mode: 0
         )
 

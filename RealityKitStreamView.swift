@@ -126,7 +126,7 @@ struct _RealityKitStreamView: View {
     
     // HDR Settings (Thread Safe)
     @State private var safeHDRSettings = ThreadSafeHDRSettings(
-        params: HDRParams(boost: 2.0, contrast: 1.0, saturation: 1.0, brightness: 0.0)
+        params: HDRParams(boost: 2.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
     )
     
     @State var shouldClose: Bool = false
@@ -241,7 +241,9 @@ struct _RealityKitStreamView: View {
                 boost: viewModel.streamSettings.brightness,
                 contrast: viewModel.streamSettings.gamma,
                 saturation: viewModel.streamSettings.saturation,
-                brightness: 0.0
+                brightness: 0.0,
+                pqExposure: 1.0,
+                mode: 0
             )
         }
         
@@ -299,7 +301,9 @@ struct _RealityKitStreamView: View {
             boost: viewModel.streamSettings.brightness,
             contrast: viewModel.streamSettings.gamma,
             saturation: viewModel.streamSettings.saturation,
-            brightness: 0.0
+            brightness: 0.0,
+            pqExposure: 1.0,
+            mode: 0
         )
         
         // Load saved settings before setting up state
