@@ -1071,7 +1071,7 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             if primVal == "ITU_R_2020"  { primariesType = 1 }
             else if primVal == "SMPTE_C" { primariesType = 2 }
         } else {
-            primariesType = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
+            primariesType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat)) ? 1 : 0
         }
 
         var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
@@ -1079,7 +1079,7 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             if mtxVal == "ITU_R_2020"   { matrixType = 1 }
             else if mtxVal == "ITU_R_601_4" { matrixType = 2 }
         } else {
-            matrixType = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
+            matrixType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat)) ? 1 : 0
         }
 
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
@@ -1114,12 +1114,12 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
 
         // BUFFER 1: FullHDRParams — user grading (maps to FullHDRParams in Metal)
         struct FullHDRParamsUIKit {
-            var boost:      Float
-            var contrast:   Float
-            var saturation: Float
-            var brightness: Float
-            var pqExposure: Float
-            var mode:       Int32
+            var boost:       Float
+            var contrast:    Float
+            var saturation:  Float
+            var brightness:  Float
+            var pqExposure:  Float
+            var mode:        Int32
         }
         var fullParams = FullHDRParamsUIKit(
             boost:      1.0,

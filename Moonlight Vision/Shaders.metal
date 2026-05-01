@@ -9,6 +9,8 @@ constant float PQ_REFERENCE_WHITE_NITS = 203.0;
 constant float3 kRec709Luma  = float3(0.2126,  0.7152,  0.0722);
 constant float3 kRec2020Luma = float3(0.2627,  0.6780,  0.0593);
 constant float3 kDisplayP3Luma = float3(0.2289, 0.6917, 0.0793);
+// HDR: fixed contrast pivot (EDR scene space). SDR keeps per-pixel luma pivot (legacy accurate SDR).
+constant float kHDRContrastPivot = 0.10;
 
 // MARK: - Structures
 
@@ -168,18 +170,8 @@ inline float3 uchimuraToneMap(float3 colorP3, float edrCeiling) {
     return colorP3 * (mappedLuma / luma);
 }
 
-// MARK: - OLED Toe Lift
-// Micro-OLED displays achieve true black (zero emission), so lifting near-black values
-// reveals shadow detail that would appear milky on an LCD.
-// The lift is subtle: values above 0.05 are completely unaffected.
-inline float3 oledToeLift(float3 color) {
-    float3 lifted = color + 0.018 * (1.0 - smoothstep(0.0, 0.05, color));
-    return max(lifted, float3(0.0));
-}
-
 // MARK: - Luma-Preserved Color Grading
-// Contrast pivots around the current luma value (not a fixed 0.5) to avoid
-// per-channel hue rotation and black-level drift in HDR content.
+// Original per-pixel luma pivot (for SDR; matches pre-overhaul behavior exactly).
 inline float3 lumaPreservedGrading(float3 color, float saturation, float contrast, float warmth, float3 lumaWeights) {
     float luma = dot(color, lumaWeights);
 
@@ -196,6 +188,28 @@ inline float3 lumaPreservedGrading(float3 color, float saturation, float contras
         warmed.b = contrasted.b * (1.0 - warmth * 0.5);
     }
 
+    return max(warmed, float3(0.0));
+}
+
+// HDR: fixed contrast pivot in EDR space so sub-pivot tones respond to contrast != 1.
+inline float3 lumaPreservedGradingHDR(float3 color, float saturation, float contrast, float warmth, float3 lumaWeights) {
+    float L = dot(color, lumaWeights);
+    float3 saturated = mix(float3(L), color, saturation);
+
+    float Lp = (L - kHDRContrastPivot) * contrast + kHDRContrastPivot;
+    Lp = max(Lp, 0.0);
+    float3 contrasted;
+    if (L < 1e-4f) {
+        contrasted = float3(Lp);
+    } else {
+        contrasted = saturated * (Lp / L);
+    }
+
+    float3 warmed = contrasted;
+    if (abs(warmth) > 0.001) {
+        warmed.r = contrasted.r * (1.0 + warmth * 0.5);
+        warmed.b = contrasted.b * (1.0 - warmth * 0.5);
+    }
     return max(warmed, float3(0.0));
 }
 
@@ -257,18 +271,15 @@ inline float3 processFrame(
         float3 lumaW = use2020 ? kRec2020Luma : kDisplayP3Luma;
         float radialSat = radialSaturationScale(uv);
         float effectiveSat = enh.saturation * full.saturation * radialSat;
-        colorP3 = lumaPreservedGrading(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth, lumaW);
+        colorP3 = lumaPreservedGradingHDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth, lumaW);
 
         // 5. User level trims (HDR path — applied in linear light before tone mapping)
         colorP3 *= max(full.boost, 0.0);
         colorP3 += max(full.brightness, 0.0);
         colorP3 *= max(full.pqExposure, 0.0);
 
-        // 6. Uchimura tone map against live EDR headroom
+        // 6. Uchimura tone map against live EDR headroom (no display-specific black lift afterward).
         colorP3 = uchimuraToneMap(colorP3, p.edrHeadroom);
-
-        // 7. OLED toe lift — safe to do after tone mapping
-        colorP3 = oledToeLift(colorP3);
 
         finalColor = colorP3;
 
@@ -288,7 +299,7 @@ inline float3 processFrame(
         float effectiveSat = enh.saturation * full.saturation * radialSat;
         colorP3 = lumaPreservedGradingSDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth);
 
-        // 4. User level trims
+        // 4. User level trims — same Exposure × Brightness stacking as legacy (needed for perceptual match on headsets).
         colorP3 *= max(full.boost, 0.0);
         colorP3 += max(full.brightness, 0.0);
         colorP3 *= max(full.pqExposure, 0.0);

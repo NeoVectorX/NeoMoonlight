@@ -357,13 +357,12 @@ struct _RealityKitClassic3DView: View {
                         hdrSettingsProvider: nil,
                         enhancementsProvider: {
                             let p = self.viewModel.streamSettings.uikitPreset
-                            let warmth: Float = self.viewModel.streamSettings.enableHdr ? 0.03 : 0.0
                             switch p {
-                            case 0: return (1.0, 1.0, warmth)     // Default
-                            case 1: return (1.15, 1.0, warmth)    // Cinematic
-                            case 2: return (1.25, 1.0, warmth)    // Vivid
-                            case 3: return (0.90, 1.05, warmth)   // Realistic
-                            default: return (1.0, 1.0, warmth)
+                            case 0: return (1.0, 1.0, 0.0)     // Default — neutral
+                            case 1: return (1.15, 1.0, 0.0)    // Cinematic
+                            case 2: return (1.25, 1.0, 0.0)    // Vivid
+                            case 3: return (0.90, 1.05, 0.0)   // Realistic
+                            default: return (1.0, 1.0, 0.0)
                             }
                         },
                         callbackToRender: { texture, _, correctedResultion in
