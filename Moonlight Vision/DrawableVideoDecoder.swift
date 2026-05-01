@@ -343,18 +343,21 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         if hdrEnabled { updateHDRMetadata() }
 
         // --- Texture Format Selection ---
+        // When HDR is off, use the same CV→Metal mapping as pre–HDR-overhaul builds (and as
+        // MetalVideoDecoderRenderer): 10-bit SDR stays on r16/rg16 (or packed YCbCr), not r8/rg8.
         var isBiPlanar  = false
         var yFormat:    MTLPixelFormat = .invalid
         var cbcrFormat: MTLPixelFormat = .invalid
 
         if planeCount >= 2 {
+            let srcMetalFormats = CVMetalHelpers.getTextureTypesForFormat(pf)
+            if srcMetalFormats.count > 0 { yFormat = srcMetalFormats[0] }
+            if srcMetalFormats.count > 1 { cbcrFormat = srcMetalFormats[1] }
+            isBiPlanar = (cbcrFormat != .invalid)
+
             if hdrEnabled {
-                yFormat    = .r16Unorm
+                yFormat = .r16Unorm
                 cbcrFormat = .rg16Unorm
-                isBiPlanar = true
-            } else {
-                yFormat    = .r8Unorm
-                cbcrFormat = .rg8Unorm
                 isBiPlanar = true
             }
         }
