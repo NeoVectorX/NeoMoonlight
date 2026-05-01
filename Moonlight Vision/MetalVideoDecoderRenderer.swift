@@ -1082,32 +1082,33 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             matrixType = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
         }
 
-        let is10Bit:     UInt32 = uikitPixelFormatIs10Bit(pixelFormat) ? 1 : 0
-        let isFullRange: UInt32 = uikitPixelFormatIsFullRange(pixelFormat) ? 1 : 0
+        let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
+        let isFullRangeBool: Bool = uikitPixelFormatIsFullRange(pixelFormat)
 
         #if os(visionOS)
-        let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range
+        let edrHeadroom: Float = 2.0
         #else
         let rawHeadroom = UIScreen.main.currentEDRHeadroom
         let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
         #endif
 
         // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
+        // Metal float3x3 = 3 × float4 columns (48 bytes); float3 = 16 bytes padded.
         struct ShaderHDRParamsUIKit {
-            var is10Bit:       UInt32
-            var isFullRange:   UInt32
             var isPQ:          UInt32
-            var matrixType:    UInt32
             var primariesType: UInt32
             var edrHeadroom:   Float
+            var pad:           Float = 0
+            var yuvMatrix:     simd_float3x3
+            var yuvOffset:     simd_float3
         }
+        let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
         var frameParams = ShaderHDRParamsUIKit(
-            is10Bit:       is10Bit,
-            isFullRange:   isFullRange,
             isPQ:          isPQ ? 1 : 0,
-            matrixType:    matrixType,
             primariesType: primariesType,
-            edrHeadroom:   edrHeadroom
+            edrHeadroom:   edrHeadroom,
+            yuvMatrix:     yuvMatrix,
+            yuvOffset:     yuvOffset
         )
         renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<ShaderHDRParamsUIKit>.size, index: 0)
 

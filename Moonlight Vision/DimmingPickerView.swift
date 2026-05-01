@@ -34,8 +34,8 @@ struct DimmingPickerView: View {
         [
             DimItem(id: "0", displayName: "Off", dimLevel: 0, supportsAdjustment: false),
             DimItem(id: "1", displayName: "Night", dimLevel: 1, supportsAdjustment: true),
-            DimItem(id: "2", displayName: "Reactive V1", dimLevel: 2, supportsAdjustment: false),
-            DimItem(id: "10", displayName: "Reactive V2", dimLevel: 10, supportsAdjustment: false),
+            DimItem(id: "2", displayName: "Reactive 1", dimLevel: 2, supportsAdjustment: false),
+            DimItem(id: "10", displayName: "Reactive 2", dimLevel: 10, supportsAdjustment: false),
             DimItem(id: "12", displayName: "Starfield", dimLevel: 12, supportsAdjustment: false),
             DimItem(id: "4", displayName: "Eclipse", dimLevel: 4, supportsAdjustment: false),
             DimItem(id: "5", displayName: "Midnight", dimLevel: 5, supportsAdjustment: true),
@@ -91,6 +91,39 @@ struct DimmingPickerView: View {
                             isPickerOpen: isPresented,
                             onSelect: { selectItem(item) }
                         )
+                    } else if item.dimLevel == 2 || item.dimLevel == 10 {
+                        // Reactive 1 = Chromaglow edge only; Reactive 2 = full solid reactive sphere (no Chromaglow).
+                        Button {
+                            selectItem(item)
+                        } label: {
+                            VStack(spacing: 8) {
+                                DimmingThumbnailView(
+                                    displayName: item.displayName,
+                                    dimLevel: item.dimLevel,
+                                    isPickerOpen: isPresented,
+                                    brightness: nil,
+                                    isCycling: false
+                                )
+                                .frame(height: 80)
+                                .clipShape(Circle())
+                                .overlay(
+                                    Circle()
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                )
+                                
+                                HStack(spacing: 3) {
+                                    Text(item.displayName)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                        .lineLimit(1)
+                                    Image(systemName: item.dimLevel == 2 ? "rays" : "circle.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     } else if item.dimLevel == 12, onStarfieldLongPress != nil {
                         // Starfield preset: tap selects, long-press cycles star distance (curved display)
                         Button {

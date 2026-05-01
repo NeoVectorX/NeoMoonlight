@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var selectedAspectRatio: AspectRatio?
     @State private var isCustomAspectRatio: Bool = false
     @State private var isCustomResolution: Bool = false
+    @State private var isCustomBitrate: Bool = false
     @State private var customWidth: String = ""
     @State private var customHeight: String = ""
     @State private var customBitrateString: String = ""
@@ -21,14 +22,15 @@ struct SettingsView: View {
     private var bitrateSelection: Binding<Int32> {
         Binding(
             get: {
-                Self.bitrateTable.contains(settings.bitrate) ? settings.bitrate : -1
+                isCustomBitrate ? -1 : settings.bitrate
             },
             set: { newValue in
-                if newValue != -1 {
-                    settings.bitrate = newValue
+                if newValue == -1 {
+                    isCustomBitrate = true
+                    customBitrateString = ""
                 } else {
-                    // Custom selected - initialize text field with current value
-                    customBitrateString = String(settings.bitrate / 1000)
+                    isCustomBitrate = false
+                    settings.bitrate = newValue
                 }
             }
         )
@@ -202,29 +204,56 @@ struct SettingsView: View {
                                 .foregroundColor(.white)
                             Spacer()
                             Picker("", selection: bitrateSelection) {
+                                Text("Custom").tag(Int32(-1))
+                                
                                 ForEach(Self.bitrateTable, id: \.self) { bitrate in
                                     Text("\(bitrate / 1000) Mbps").tag(bitrate)
                                 }
-                                Text("Custom").tag(Int32(-1))
                             }
                             .pickerStyle(.menu)
                         }
                         .padding(.vertical, 4)
                         
-                        if bitrateSelection.wrappedValue == -1 {
-                            HStack {
-                                TextField("Bitrate (Mbps)", text: $customBitrateString)
-                                    .textFieldStyle(.roundedBorder)
-                                    .keyboardType(.numberPad)
-                                    .frame(width: 120)
-                                    .onChange(of: customBitrateString) { _, newValue in
-                                        if let mbps = Int32(newValue), mbps > 0 {
-                                            settings.bitrate = mbps * 1000
-                                        }
+                        if isCustomBitrate {
+                            VStack(spacing: 12) {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Bitrate (Mbps)")
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.6))
+                                        
+                                        TextField("", text: $customBitrateString)
+                                            .textFieldStyle(.plain)
+                                            .keyboardType(.numberPad)
+                                            .foregroundColor(.white)
+                                            .padding(10)
+                                            .frame(width: 80)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .fill(Color.white.opacity(0.1))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 8)
+                                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                            )
+                                            .onChange(of: customBitrateString) { _, newValue in
+                                                let filtered = newValue.filter { $0.isNumber }
+                                                if filtered != newValue {
+                                                    customBitrateString = filtered
+                                                }
+                                                if let mbps = Int32(filtered), mbps > 0 {
+                                                    settings.bitrate = mbps * 1000
+                                                }
+                                            }
                                     }
-                                Text("Mbps")
-                                    .foregroundColor(.secondary)
+                                    
+                                    Text("Enter custom bitrate in Mbps (e.g., 150)")
+                                        .font(.caption)
+                                        .foregroundColor(.white.opacity(0.5))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
+                            .padding(.top, 8)
                         }
                         
                         if settings.bitrate > 300000 {

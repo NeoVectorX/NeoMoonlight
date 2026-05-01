@@ -154,6 +154,133 @@ struct _RealityKitClassic3DView: View {
         default: return "FILTER: Default"
         }
     }
+    
+    @ViewBuilder
+    private var statsOverlayView: some View {
+        if viewModel.streamSettings.statsOverlay && !statsOverlayText.isEmpty {
+            VStack {
+                HStack {
+                    Text(statsOverlayText)
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(12)
+                        .background(.black.opacity(0.7))
+                        .cornerRadius(8)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding()
+            .allowsHitTesting(false)
+        }
+    }
+    
+    private var errorOrnamentContent: some View {
+        VStack(alignment: .center) {
+            Image(systemName: "exclamationmark.triangle")
+            Text("Stream error")
+                .font(.title)
+            Text(connectionCallbacks.errorMessage ?? "Unknown error")
+            Button("Close") {
+                shouldClose.toggle()
+                dismissWindow()
+            }
+        }
+        .padding()
+        .glassBackgroundEffect()
+    }
+    
+    private var controlsOrnamentContent: some View {
+        HStack(spacing: 24) {
+            Button {
+                if hideControls && !controlsHighlighted {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideControls = false
+                        controlsHighlighted = true
+                        hideTimer?.invalidate()
+                        startHighlightTimer()
+                    }
+                    return
+                }
+                pushWindow(id: "mainView")
+                startHideTimer()
+            } label: {
+                Label("Home", systemImage: "house.fill")
+            }
+            .labelStyle(.iconOnly)
+            
+            Button {
+                if hideControls && !controlsHighlighted {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideControls = false
+                        controlsHighlighted = true
+                        hideTimer?.invalidate()
+                        startHighlightTimer()
+                    }
+                    return
+                }
+                videoMode = videoMode == .standard2D ? .sideBySide3D : .standard2D
+                if videoMode == .sideBySide3D {
+                    screen.model?.materials = [surfaceMaterial!]
+                } else {
+                    screen.model?.materials = [UnlitMaterial(texture: texture)]
+                }
+                startHideTimer()
+            } label: {
+                Label(videoMode == .standard2D ? "Standard Display" : "3D",
+                      systemImage: videoMode == .standard2D ? "rectangle" : "rectangle.split.2x1")
+            }
+            .labelStyle(.iconOnly)
+            
+            Button {
+                if hideControls && !controlsHighlighted {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideControls = false
+                        controlsHighlighted = true
+                        hideTimer?.invalidate()
+                        startHighlightTimer()
+                    }
+                    return
+                }
+                spatialAudioMode.toggle()
+                if spatialAudioMode {
+                    AudioHelpers.fixAudioForSurroundForCurrentWindow()
+                } else {
+                    AudioHelpers.fixAudioForDirectStereo()
+                }
+                startHideTimer()
+            } label: {
+                Label(spatialAudioMode ? "Spatial" : "Direct",
+                      systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones")
+            }
+            .labelStyle(.iconOnly)
+            
+            Button {
+                if hideControls && !controlsHighlighted {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        hideControls = false
+                        controlsHighlighted = true
+                        hideTimer?.invalidate()
+                        startHighlightTimer()
+                    }
+                    return
+                }
+                let all: [Int32] = [0, 1, 2, 3]
+                let cur = viewModel.streamSettings.uikitPreset
+                let next = all[(all.firstIndex(of: cur) ?? -1 + 1) % all.count]
+                viewModel.streamSettings.uikitPreset = next
+                LiRequestIdrFrame()
+                startHideTimer()
+            } label: {
+                Label("Preset: \(rkPresetName(viewModel.streamSettings.uikitPreset))", systemImage: "camera.filters")
+            }
+            .labelStyle(.iconOnly)
+        }
+        .opacity(hideControls ? 0.05 : (controlsHighlighted ? 1.0 : 0.5))
+        .animation(.easeInOut(duration: 0.3), value: hideControls)
+        .allowsHitTesting(true)
+        .padding()
+    }
 
     var body: some View {
         GeometryReader3D { proxy in
@@ -196,128 +323,12 @@ struct _RealityKitClassic3DView: View {
             .handlesGameControllerEvents(matching: .gamepad)
         }
         .persistentSystemOverlays(hideControls ? .hidden : .visible)
-        .overlay {
-            if viewModel.streamSettings.statsOverlay && !statsOverlayText.isEmpty {
-                VStack {
-                    HStack {
-                        Text(statsOverlayText)
-                            .font(.system(size: 14, design: .monospaced))
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(.black.opacity(0.7))
-                            .cornerRadius(8)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding()
-                .allowsHitTesting(false)
-            }
-        }
-        .ornament(visibility: connectionCallbacks.showAlert ? .visible :  .hidden , attachmentAnchor: .scene(.bottomFront), contentAlignment: .bottom) {
-            VStack(alignment: .center) {
-                Image(systemName: "exclamationmark.triangle")
-                Text("Stream error")
-                    .font(.title)
-                Text(connectionCallbacks.errorMessage ?? "Unknown error")
-                Button("Close") {
-                    shouldClose.toggle()
-                    dismissWindow()
-                }
-            }
-            .padding()
-            .glassBackgroundEffect()
+        .overlay { statsOverlayView }
+        .ornament(visibility: connectionCallbacks.showAlert ? .visible : .hidden, attachmentAnchor: .scene(.bottomFront), contentAlignment: .bottom) {
+            errorOrnamentContent
         }
         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .center) {
-            HStack(spacing: 24) {
-                Button {
-                    if hideControls && !controlsHighlighted {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            hideControls = false
-                            controlsHighlighted = true
-                            hideTimer?.invalidate()
-                            startHighlightTimer()
-                        }
-                        return
-                    }
-                    pushWindow(id: "mainView")
-                    startHideTimer()
-                } label: {
-                    Label("Home", systemImage: "house.fill")
-                }
-                .labelStyle(.iconOnly)
-                
-                Button {
-                    if hideControls && !controlsHighlighted {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            hideControls = false
-                            controlsHighlighted = true
-                            hideTimer?.invalidate()
-                            startHighlightTimer()
-                        }
-                        return
-                    }
-                    videoMode = videoMode == .standard2D ? .sideBySide3D : .standard2D
-                    if videoMode == .sideBySide3D {
-                        screen.model?.materials = [surfaceMaterial!]
-                    } else {
-                        screen.model?.materials = [UnlitMaterial(texture: texture)]
-                    }
-                    startHideTimer()
-                } label: {
-                    Label(videoMode == .standard2D ? "Standard Display" : "3D",
-                          systemImage: videoMode == .standard2D ? "rectangle" : "rectangle.split.2x1")
-                }
-                .labelStyle(.iconOnly)
-                
-                Button {
-                    if hideControls && !controlsHighlighted {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            hideControls = false
-                            controlsHighlighted = true
-                            hideTimer?.invalidate()
-                            startHighlightTimer()
-                        }
-                        return
-                    }
-                    spatialAudioMode.toggle()
-                    if spatialAudioMode {
-                        AudioHelpers.fixAudioForSurroundForCurrentWindow()
-                    } else {
-                        AudioHelpers.fixAudioForDirectStereo()
-                    }
-                    startHideTimer()
-                } label: {
-                    Label(spatialAudioMode ? "Spatial" : "Direct",
-                          systemImage: spatialAudioMode ? "person.spatialaudio.fill" : "headphones")
-                }
-                .labelStyle(.iconOnly)
-                
-                Button {
-                    if hideControls && !controlsHighlighted {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            hideControls = false
-                            controlsHighlighted = true
-                            hideTimer?.invalidate()
-                            startHighlightTimer()
-                        }
-                        return
-                    }
-                    let all: [Int32] = [0, 1, 2, 3]
-                    let cur = viewModel.streamSettings.uikitPreset
-                    let next = all[(all.firstIndex(of: cur) ?? -1 + 1) % all.count]
-                    viewModel.streamSettings.uikitPreset = next
-                    LiRequestIdrFrame()
-                    startHideTimer()
-                } label: {
-                    Label("Preset: \(rkPresetName(viewModel.streamSettings.uikitPreset))", systemImage: "camera.filters")
-                }
-                .labelStyle(.iconOnly)
-            }
-            .opacity(hideControls ? 0.05 : (controlsHighlighted ? 1.0 : 0.5))
-            .animation(.easeInOut(duration: 0.3), value: hideControls)
-            .allowsHitTesting(true)
-            .padding()
+            controlsOrnamentContent
         }
         .onAppear {
             if !viewModel.activelyStreaming {
@@ -354,18 +365,19 @@ struct _RealityKitClassic3DView: View {
                             case 3: return (0.90, 1.05, warmth)   // Realistic
                             default: return (1.0, 1.0, warmth)
                             }
-                        }
-                    ) { texture, correctedResultion in
-                        DispatchQueue.main.async {
-                            if let correctedResultion = correctedResultion {
-                                streamConfig.width = Int32(correctedResultion.0)
-                                streamConfig.height = Int32(correctedResultion.1)
+                        },
+                        callbackToRender: { texture, _, correctedResultion in
+                            DispatchQueue.main.async {
+                                if let correctedResultion = correctedResultion {
+                                    streamConfig.width = Int32(correctedResultion.0)
+                                    streamConfig.height = Int32(correctedResultion.1)
+                                }
+                                self.texture.replace(withDrawables: texture)
+                                self.controllerSupport!.connectionEstablished()
+                                startHideTimer()
                             }
-                            self.texture.replace(withDrawables: texture)
-                            self.controllerSupport!.connectionEstablished()
-                            startHideTimer()
                         }
-                    }
+                    )
                 },
                 connectionCallbacks: self.connectionCallbacks
             )

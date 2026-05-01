@@ -472,7 +472,7 @@ struct _HDRTestStreamView: View {
                             mode: hdrSettings.mode
                         )
                     },
-                    callbackToRender: { texture, correctedResolution in
+                    callbackToRender: { texture, _, correctedResolution in
                         DispatchQueue.main.async {
                             if let correctedResolution = correctedResolution {
                                 streamConfig.width = Int32(correctedResolution.0)
