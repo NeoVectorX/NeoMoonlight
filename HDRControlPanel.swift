@@ -46,8 +46,14 @@ struct HDRControlPanel: View {
                 sectionLabel("Display Quality")
 
                 HDRSlider(title: "Brightness",  value: $settings.brightness, range: 0.5...2.0, defaultValue: 1.35, icon: "sun.max.fill",          brandOrange: brandOrange)
-                HDRSlider(title: "Contrast",    value: $settings.contrast,   range: 0.5...2.0, defaultValue: 1.15, icon: "circle.lefthalf.filled", brandOrange: brandOrange)
-                HDRSlider(title: "Saturation",  value: $settings.saturation, range: 0.0...2.0, defaultValue: 1.4,  icon: "paintpalette.fill",       brandOrange: brandOrange)
+                VStack(alignment: .leading, spacing: 4) {
+                    HDRSlider(title: "Contrast", value: $settings.contrast, range: 0.5...2.0, defaultValue: 1.15, icon: "circle.lefthalf.filled", brandOrange: brandOrange)
+                    Text("Values below 1.0 brighten dark areas toward mid-tones.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.38))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HDRSlider(title: "Saturation",  value: $settings.saturation, range: 0.0...2.0, defaultValue: 1.40, icon: "paintpalette.fill",       brandOrange: brandOrange)
             }
 
             dividerLine

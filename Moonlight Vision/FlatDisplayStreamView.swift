@@ -1790,6 +1790,18 @@ struct _FlatDisplayStreamView: View {
                 params.mode = 0
             }
         }
+        if preset == 0 {
+            params.boost       = hdrPanelSettings.brightness
+            params.contrast    = hdrPanelSettings.contrast
+            params.saturation  = hdrPanelSettings.saturation
+            params.brightness = 0.0
+            if isHdr {
+                let hrB: Float = 1.40
+                params.boost       = Swift.min(Swift.max(params.boost * hrB, 1.0), 1.50)
+                params.contrast    = Swift.min(Swift.max(params.contrast, 1.00), 1.20)
+                params.saturation = Swift.min(Swift.max(params.saturation, 0.85), 1.15)
+            }
+        }
         params.pqExposure = hdrPanelSettings.pqExposure
         safeHDRSettings.value = params
         
@@ -1799,10 +1811,10 @@ struct _FlatDisplayStreamView: View {
     // Live update from HDR panel sliders — overrides preset base values.
     private func updateHDRParamsFromPanel() {
         var params = safeHDRSettings.value
-        params.boost      = hdrPanelSettings.brightness
-        params.contrast   = hdrPanelSettings.contrast
-        params.saturation = hdrPanelSettings.saturation
-        params.pqExposure = hdrPanelSettings.pqExposure
+        params.boost       = hdrPanelSettings.brightness
+        params.contrast    = hdrPanelSettings.contrast
+        params.saturation  = hdrPanelSettings.saturation
+        params.pqExposure  = hdrPanelSettings.pqExposure
         params.brightness = 0.0
         safeHDRSettings.value = params
     }
@@ -2372,9 +2384,8 @@ struct _FlatDisplayStreamView: View {
                         useFramePacing: self.streamConfig.useFramePacing,
                         enableHDR: self.viewModel.streamSettings.enableHdr,
                         hdrSettingsProvider: { [safeHDRSettings] in safeHDRSettings.value },
-                        enhancementsProvider: { [weak viewModel] in
-                            let warmth: Float = viewModel?.streamSettings.enableHdr ?? false ? 0.03 : 0.0
-                            return (1.0, 1.0, warmth)
+                        enhancementsProvider: {
+                            (1.0, 1.0, 0.0)
                         },
                         callbackToRender: { textureQueue, _, correctedResolution in
                             guard self.renderGateOpen else { return }

@@ -1694,14 +1694,10 @@ struct _CurvedDisplayStreamView: View {
         
         if needsHdr {
             hdrParams.mode = 1
-            safeHDRSettings.value = HDRParams(
-                boost: 1.35,
-                contrast: 1.1,
-                saturation: 1.08,
-                brightness: 0.0,
-                pqExposure: 1.0,
-                mode: 1
-            )
+            var p = safeHDRSettings.value
+            p.mode = 1
+            safeHDRSettings.value = p
+            updateHDRParamsFromPanel()
             ensureHDRTextureMatchesSetting()
         }
         
@@ -3620,6 +3616,21 @@ struct _CurvedDisplayStreamView: View {
                 params.mode = 0
             }
         }
+        // FILTER: Default — Enhanced HDR panel wins for brightness/sat/contrast. Without this,
+        // bootstrap applies preset scaffold (e.g. SDR boost 1.0) after sync and the image flashes correct then dips dark.
+        if preset == 0 {
+            params.boost       = hdrPanelSettings.brightness
+            params.contrast    = hdrPanelSettings.contrast
+            params.saturation  = hdrPanelSettings.saturation
+            params.brightness  = 0.0
+            if viewModel.streamSettings.enableHdr {
+                let hrB = hdrHeadroomBoost()
+                params.boost       = Swift.min(Swift.max(params.boost * hrB, 1.0), 1.50)
+                params.contrast    = Swift.min(Swift.max(params.contrast, 1.00), 1.20)
+                params.saturation = Swift.min(Swift.max(params.saturation, 0.85), 1.15)
+            }
+        }
+        params.pqExposure = hdrPanelSettings.pqExposure
         safeHDRSettings.value = params
         
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
@@ -3838,13 +3849,19 @@ struct _CurvedDisplayStreamView: View {
         content.add(head)
         headStorage.headAnchor = head
 
+        // First session only: apply a wide default placement. If the user has saved
+        // position/scale (`curved.pos` / `curved.scale`), bootstrap already restored
+        // `screenPosition` — do not async-overwrite it here (that broke persistence).
         if !headStorage.hasInitializedPosition {
-            screen.position = SIMD3<Float>(0.0, 1.5, -9.0)
             headStorage.hasInitializedPosition = true
-            // Defer @State modifications to avoid "Modifying state during view update"
-            DispatchQueue.main.async {
-                self.screenPosition = self.screen.position
-                self.screenScale = 4.0
+            let storedPos = UserDefaults.standard.array(forKey: "curved.pos") as? [Float]
+            let hasSavedPosition = storedPos?.count == 3
+            if !hasSavedPosition {
+                screen.position = SIMD3<Float>(0.0, 1.5, -9.0)
+                DispatchQueue.main.async {
+                    self.screenPosition = self.screen.position
+                    self.screenScale = 4.0
+                }
             }
         }
         
@@ -4430,9 +4447,9 @@ struct _CurvedDisplayStreamView: View {
                         useFramePacing: self.streamConfig.useFramePacing,
                         enableHDR: self.viewModel.streamSettings.enableHdr,
                         hdrSettingsProvider: { [safeHDRSettings] in safeHDRSettings.value },
-                        enhancementsProvider: { [weak viewModel] in
-                            let warmth: Float = viewModel?.streamSettings.enableHdr ?? false ? 0.03 : 0.0
-                            return (1.0, 1.0, warmth)
+                        enhancementsProvider: {
+                            // Neutral path: enhancement buffer does not tint or multiply grading.
+                            (1.0, 1.0, 0.0)
                         },
                         callbackToRender: { textureQueue, haloQueue, correctedResolution in
                             guard self.renderGateOpen else { return }
@@ -5396,6 +5413,7 @@ struct _CurvedDisplayStreamView: View {
         let packed = [pos.x, pos.y, pos.z]
         UserDefaults.standard.set(packed, forKey: kCurvedPosKey)
         UserDefaults.standard.set(scale, forKey: kCurvedScaleKey)
+        savedTiltAngle = Double(tiltAngle)
     }
 
     private func restoreSavedTransform() {
@@ -5404,7 +5422,7 @@ struct _CurvedDisplayStreamView: View {
         }
         let scale = UserDefaults.standard.float(forKey: kCurvedScaleKey)
         if scale > 0 { screenScale = scale }
-        tiltAngle = 0.0
+        tiltAngle = Float(savedTiltAngle)
     }
     
     private let kCurvedLockedKey = "curved.locked"

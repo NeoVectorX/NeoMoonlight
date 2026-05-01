@@ -9,6 +9,11 @@
 import Foundation
 import Combine
 
+private enum HDRSettingsMigration {
+    /// One-shot: restores pre-overhaul trims for installs that persisted contrast/sat both 1.0.
+    static let legacyTrimsKey = "hdrTrimsRestoredLegacy_v1"
+}
+
 class HDRSettings: ObservableObject {
     @Published var brightness: Float {
         didSet { UserDefaults.standard.set(brightness, forKey: "hdrBrightness") }
@@ -22,18 +27,37 @@ class HDRSettings: ObservableObject {
         didSet { UserDefaults.standard.set(saturation, forKey: "hdrSaturation") }
     }
 
-    // PQ-only exposure trim — scales HDR content luminance without affecting SDR.
-    // Range 0.5–2.0, default 1.0 (neutral). Persisted separately to avoid conflicts with
-    // the legacy luminance/gamma/peakBrightness keys from previous builds.
+    // Exposure trim — applied after brightness in Metal (PQ + SDR paths for consistent panel behavior).
     @Published var pqExposure: Float {
         didSet { UserDefaults.standard.set(pqExposure, forKey: "hdrPqExposure") }
     }
 
     init() {
-        self.brightness  = UserDefaults.standard.object(forKey: "hdrBrightness")  as? Float ?? 1.35
-        self.contrast    = UserDefaults.standard.object(forKey: "hdrContrast")    as? Float ?? 1.15
-        self.saturation  = UserDefaults.standard.object(forKey: "hdrSaturation")  as? Float ?? 1.4
-        self.pqExposure  = UserDefaults.standard.object(forKey: "hdrPqExposure")  as? Float ?? 1.0
+        // Match pre-overhaul defaults (NeoMoonlight Vision): strong SDR/headset match without flat “clinical” mids.
+        let defaultsBrightness: Float = 1.35
+        let defaultsContrast: Float = 1.15
+        let defaultsSaturation: Float = 1.40
+
+        var contrastIn = UserDefaults.standard.object(forKey: "hdrContrast") as? Float ?? defaultsContrast
+        var saturationIn = UserDefaults.standard.object(forKey: "hdrSaturation") as? Float ?? defaultsSaturation
+
+        let alreadyMigrated = UserDefaults.standard.bool(forKey: HDRSettingsMigration.legacyTrimsKey)
+        if !alreadyMigrated {
+            UserDefaults.standard.set(true, forKey: HDRSettingsMigration.legacyTrimsKey)
+            // Brief “neutral 1/1/…” window left dull trims in UserDefaults; restore historical punch.
+            if UserDefaults.standard.object(forKey: "hdrContrast") as? Float == 1.0
+                && UserDefaults.standard.object(forKey: "hdrSaturation") as? Float == 1.0 {
+                contrastIn = defaultsContrast
+                saturationIn = defaultsSaturation
+                UserDefaults.standard.set(contrastIn, forKey: "hdrContrast")
+                UserDefaults.standard.set(saturationIn, forKey: "hdrSaturation")
+            }
+        }
+
+        self.brightness = UserDefaults.standard.object(forKey: "hdrBrightness") as? Float ?? defaultsBrightness
+        self.contrast = contrastIn
+        self.saturation = saturationIn
+        self.pqExposure = UserDefaults.standard.object(forKey: "hdrPqExposure") as? Float ?? 1.0
     }
 
     func save() {
@@ -43,7 +67,7 @@ class HDRSettings: ObservableObject {
     func reset() {
         brightness  = 1.35
         contrast    = 1.15
-        saturation  = 1.4
+        saturation  = 1.40
         pqExposure  = 1.0
     }
 }

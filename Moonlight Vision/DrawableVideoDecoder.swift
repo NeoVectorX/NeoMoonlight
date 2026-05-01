@@ -321,7 +321,8 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             else if CFEqual(prim, "SMPTE_C" as CFString)                    { primariesType = 2 }
             // else stays 0 (BT.709)
         } else {
-            primariesType = pixelFormatIs10Bit(pf) ? 1 : 0
+            // Hosts often omit primaries tags on 10‑bit SDR; do not infer BT.2020 unless HDR is on.
+            primariesType = (hdrEnabled && pixelFormatIs10Bit(pf)) ? 1 : 0
         }
 
         // --- Matrix Detection ---
@@ -333,7 +334,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             else if CFEqual(mtx, "ITU_R_601_4" as CFString)             { matrixType = 2 }
             // else stays 0 (BT.709)
         } else {
-            matrixType = pixelFormatIs10Bit(pf) ? 1 : 0
+            matrixType = (hdrEnabled && pixelFormatIs10Bit(pf)) ? 1 : 0
         }
 
         let is10Bit    = pixelFormatIs10Bit(pf)    ? UInt32(1) : 0
