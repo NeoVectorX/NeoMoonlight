@@ -669,7 +669,8 @@ struct _FlatDisplayStreamView: View {
     @State private var needsResume = false
     @State private var videoMode: VideoMode = .standard2D
     @State private var show3DConfirm = false
-    
+    @State private var showHDRPanel = false
+
     @State private var showInlinePresetOverlay: Bool = false
     @State private var presetOverlayText: String = ""
     @State private var presetOverlayIcon: String = "camera.filters"
@@ -683,7 +684,7 @@ struct _FlatDisplayStreamView: View {
     @State private var hostingWindow: UIWindow?
     
     @State private var isHDRTexture: Bool = false
-    
+
     @State private var streamEpoch: Int = 0
     @State private var startingStream: Bool = false
     @State private var firstFrameSeenEpoch: Int = -1
@@ -846,6 +847,14 @@ struct _FlatDisplayStreamView: View {
                                     .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
                             } else {
                                 Color.clear.frame(width: 1, height: 1)
+                            }
+                        }
+                        Attachment(id: "hdrPanel") {
+                            if showHDRPanel {
+                                HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel)
+                                    .transition(.identity)
+                            } else {
+                                Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
                             }
                         }
                     }
@@ -1042,6 +1051,10 @@ struct _FlatDisplayStreamView: View {
             .onChange(of: viewModel.streamSettings.swapABXYButtons) { _, newValue in
                 controllerSupport?.setSwapABXYButtons(newValue)
             }
+            .onChange(of: hdrPanelSettings.brightness)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.contrast)    { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.saturation)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.pqExposure)  { _, _ in updateHDRParamsFromPanel() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeStreamFromMenu)) { _ in
                 handleResume()
             }
@@ -1198,6 +1211,15 @@ struct _FlatDisplayStreamView: View {
                     withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
                 }
                 startHideTimer()
+            }
+            if viewModel.streamSettings.enableHdr {
+                makeControlButton(
+                    label: showHDRPanel ? "Close HDR" : "HDR",
+                    systemImage: "wand.and.stars"
+                ) {
+                    showHDRPanel.toggle()
+                    startHideTimer()
+                }
             }
             makeControlButton(label: videoMode == .standard2D ? "Standard" : "3D", systemImage: "view.3d") {
                 if videoMode == .standard2D { show3DConfirm = true }
@@ -1593,6 +1615,11 @@ struct _FlatDisplayStreamView: View {
                 sbsEnt.scale = [scale, scale, scale]
             }
         }
+
+        if let hdrEnt = attachments.entity(for: "hdrPanel") {
+            screen.addChild(hdrEnt)
+            hdrEnt.position = [0, 0, 0.15]
+        }
     }
     
     private func updateAttachments(attachments: RealityViewAttachments, width: Float, height: Float) {
@@ -1654,9 +1681,25 @@ struct _FlatDisplayStreamView: View {
             if bounds.extents.x > 0 {
                 let currentScaleX = max(sbsEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.3  // Slightly larger for the dialog
+                let desiredLocalWidth: Float = 0.3
                 let scale = desiredLocalWidth / unscaledWidth
                 sbsEnt.scale = [scale, scale, scale]
+            }
+        }
+
+        // HDR panel
+        if let hdrEnt = attachments.entity(for: "hdrPanel") {
+            if hdrEnt.parent !== screen { screen.addChild(hdrEnt) }
+            hdrEnt.position = [0, 0, 0.15]
+            if showHDRPanel {
+                let bounds = hdrEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(hdrEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.70
+                    let scale = desiredLocalWidth / unscaledWidth
+                    hdrEnt.scale = [scale, scale, scale]
+                }
             }
         }
     }
@@ -1753,6 +1796,17 @@ struct _FlatDisplayStreamView: View {
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
     }
     
+    // Live update from HDR panel sliders — overrides preset base values.
+    private func updateHDRParamsFromPanel() {
+        var params = safeHDRSettings.value
+        params.boost      = hdrPanelSettings.brightness
+        params.contrast   = hdrPanelSettings.contrast
+        params.saturation = hdrPanelSettings.saturation
+        params.pqExposure = hdrPanelSettings.pqExposure
+        params.brightness = 0.0
+        safeHDRSettings.value = params
+    }
+
     private func presetName(for preset: Int32) -> String {
         switch preset {
         case 0: return "FILTER: Default"
@@ -2322,7 +2376,7 @@ struct _FlatDisplayStreamView: View {
                             let warmth: Float = viewModel?.streamSettings.enableHdr ?? false ? 0.03 : 0.0
                             return (1.0, 1.0, warmth)
                         },
-                        callbackToRender: { textureQueue, correctedResolution in
+                        callbackToRender: { textureQueue, _, correctedResolution in
                             guard self.renderGateOpen else { return }
                             
                             // 1. Drop frame in mailbox (Zero latency, No blocking)

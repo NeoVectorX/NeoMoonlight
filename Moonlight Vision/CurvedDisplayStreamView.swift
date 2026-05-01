@@ -36,6 +36,7 @@ class HeadPositionStorage {
     var dimmerDome: ModelEntity?
     var dimmerDomePurple: ModelEntity?
     var environmentDome: ModelEntity?
+    var chromosphereHaloEntity: ModelEntity?
     
     // Initialization tracking
     var hasInitializedPosition: Bool = false
@@ -721,6 +722,7 @@ struct _CurvedDisplayStreamView: View {
     
     @State private var showEnvironmentPicker = false
     @State private var showDimmingPicker = false
+    @State private var showHDRPanel = false
     @State private var inputMode: InputMode = .gazeControl // Three-mode input toggle (default: gaze control)
     @State private var isHandGazeInputDisabled = false // Long press on control mode button to disable hand/gaze input
     @State private var gazeController = GazeInputController()
@@ -804,7 +806,13 @@ struct _CurvedDisplayStreamView: View {
     @State private var currentAmbientColor: UIColor = .black
     @State private var targetReactiveColor: UIColor = .black
     @State private var reactiveLerpTimer: Timer?
-    
+    /// Reactive 2 (dim 10): smooth “dial-in” envelope on the purple dome (Digital Crown–style ramp).
+    @State private var reactiveSphereEnvelopeTimer: Timer?
+
+    // ChromaHalo / Chromosphere edge bloom — Reactive 1 only (dimLevel == 2)
+    @State private var chromosphereMeshEntity: ModelEntity? = nil
+    @State private var chromosphereTexture: TextureResource? = nil
+
     let brandPurple = Color(red: 0.7, green: 0.3, blue: 0.9)
     let brandViolet = Color(red: 0.85, green: 0.6, blue: 0.95)
     
@@ -954,38 +962,48 @@ struct _CurvedDisplayStreamView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mainViewWindowClosed)) { _ in
                 self.handleWindowClose()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .ambientAverageColorUpdated)) { notification in
-                guard dimLevel == 2 || dimLevel == 10 || dimLevel == 12 else { return }  // Only process in Reactive V1, V2, and Starfield modes
-                if let r = notification.userInfo?["r"] as? Float,
-                   let g = notification.userInfo?["g"] as? Float,
-                   let b = notification.userInfo?["b"] as? Float {
-                    // Boost saturation and brightness for more dramatic effect (1.3x)
-                    let boostedR = min(1.0, r * 1.3)
-                    let boostedG = min(1.0, g * 1.3)
-                    let boostedB = min(1.0, b * 1.3)
-                    // Set target color - the lerp timer will smoothly interpolate to it
-                    targetReactiveColor = UIColor(red: CGFloat(boostedR), green: CGFloat(boostedG), blue: CGFloat(boostedB), alpha: 1.0)
-                    
-                    // Update particle system for Starfield mode
-                    if dimLevel == 12 {
-                        // Use the "max" channel as a proxy for brightness/loudness
-                        let brightness = max(r, max(g, b))
-                        let uiColor = UIColor(red: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: 1.0)
-                        particleManager.update(color: uiColor, brightness: brightness)
-                    }
+            .onReceive(NotificationCenter.default.publisher(for: .chromaHaloColorsUpdated)) { notification in
+                // Dome / starfield reactive color (Chromaglow-only preset does not drive the purple dome)
+                guard dimLevel == 10 || dimLevel == 12 else { return }
+
+                func uiColor(_ key: String) -> UIColor? {
+                    guard let v = notification.userInfo?[key] as? SIMD3<Float> else { return nil }
+                    let boost: Float = 1.35
+                    return UIColor(red:   CGFloat(min(1, v.x * boost)),
+                                   green: CGFloat(min(1, v.y * boost)),
+                                   blue:  CGFloat(min(1, v.z * boost)),
+                                   alpha: 1.0)
+                }
+
+                if let c = uiColor("center") { targetReactiveColor = c }
+
+                // Starfield compatibility
+                if dimLevel == 12,
+                   let center = notification.userInfo?["center"] as? SIMD3<Float> {
+                    let brightness = max(center.x, max(center.y, center.z))
+                    let uiColor = UIColor(red: CGFloat(center.x), green: CGFloat(center.y), blue: CGFloat(center.z), alpha: 1.0)
+                    particleManager.update(color: uiColor, brightness: brightness)
                 }
             }
         
         let dimChangesApplied = lifecycleApplied
             .onChange(of: dimLevel) { oldValue, newValue in
-                // Tell the decoder whether it needs to run the ambient light engine
-                let isReactive = (newValue == 2 || newValue == 10 || newValue == 12)
-                videoDecoder?.isReactiveDimmingEnabled = isReactive
+                // Ambient analyzer: solid reactive dome + starfield only (not Chromaglow-only)
+                videoDecoder?.isReactiveDimmingEnabled = (newValue == 10 || newValue == 12)
+
+                updateChromosphereMesh()
+                updateDimmerDomesState()
+
+                if newValue == 10 && oldValue != 10 {
+                    beginReactiveSphereEnvelopeIntro()
+                } else if newValue != 10 {
+                    cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
+                }
             }
-            .onChange(of: viewModel.streamSettings.statsOverlay) { oldValue, newValue in 
+            .onChange(of: viewModel.streamSettings.statsOverlay) { oldValue, newValue in
                 handleStatsOverlay(oldValue: oldValue, newValue: newValue)
             }
-            .onChange(of: viewModel.activelyStreaming) { oldValue, newValue in 
+            .onChange(of: viewModel.activelyStreaming) { oldValue, newValue in
                 self.renderGateOpen = true
                 handleActiveStreaming(oldValue: oldValue, newValue: newValue)
             }
@@ -1000,6 +1018,10 @@ struct _CurvedDisplayStreamView: View {
             .onChange(of: viewModel.streamSettings.swapABXYButtons) { _, newValue in
                 controllerSupport?.setSwapABXYButtons(newValue)
             }
+            .onChange(of: hdrPanelSettings.brightness)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.contrast)    { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.saturation)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.pqExposure)  { _, _ in updateHDRParamsFromPanel() }
         
         return stateChangesApplied
     }
@@ -1084,6 +1106,7 @@ struct _CurvedDisplayStreamView: View {
             Attachment(id: "disconnectConfirm") { disconnectConfirmAttachment }
             Attachment(id: "envPicker") { environmentPickerAttachment }
             Attachment(id: "dimPicker") { dimmingPickerAttachment }
+            Attachment(id: "hdrPanel") { hdrPanelAttachment }
             Attachment(id: "stats") { statsAttachment }
             Attachment(id: "tutorial") { tutorialAttachment }
             Attachment(id: "presetPopup") {
@@ -1711,6 +1734,7 @@ struct _CurvedDisplayStreamView: View {
         statsTimer = nil
         stopMoonlightCycle()
         stopReactiveLerp()
+        cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
         viewModel.isStreamViewAlive = false
         
         if !hasPerformedTeardown {
@@ -2041,6 +2065,16 @@ struct _CurvedDisplayStreamView: View {
     }
     
     @ViewBuilder
+    private var hdrPanelAttachment: some View {
+        if showHDRPanel {
+            HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel)
+                .transition(.identity)
+        } else {
+            Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
     private var dimmingPickerAttachment: some View {
         if showDimmingPicker {
             DimmingPickerView(
@@ -2050,18 +2084,16 @@ struct _CurvedDisplayStreamView: View {
                         dimLevel = val
                         viewModel.streamSettings.dimPassthrough = (val != 0)
                         UserDefaults.standard.set(val, forKey: "ambient.dimming.level")
-                        
+
                         // Don't enable dimmer if environment is active - let environment binding handle it after fade
                         if headStorage.environmentDome?.isEnabled != true {
                             updateDimmerDomesState()
                         }
                         
-                        // Handle Reactive modes (V1, V2, and V3)
-                        if val == 2 || val == 10 || val == 13 {
-                            stopMoonlightCycle()
+                        stopMoonlightCycle()
+                        if val == 10 || val == 12 {
                             startReactiveLerp()
                         } else {
-                            stopMoonlightCycle()
                             stopReactiveLerp()
                         }
                     }
@@ -2223,7 +2255,7 @@ struct _CurvedDisplayStreamView: View {
         Group {
             if viewModel.streamSettings.useCollapsedControlsMenu {
                 curvedDynamicControlsBar
-                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.05))))
+                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.05))))
                 .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
                 .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
                 .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
@@ -2272,7 +2304,7 @@ struct _CurvedDisplayStreamView: View {
                 .background {
                     Capsule()
                         .fill(.ultraThinMaterial)
-                        .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.0)))
+                        .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.0)))
                 }
                 .opacity(controlsExpanded ? 1 : 0)
                 .scaleEffect(controlsExpanded ? 1 : 0.88)
@@ -2909,8 +2941,8 @@ struct _CurvedDisplayStreamView: View {
                 // Short press: toggle dimming picker
                 showDimmingPicker.toggle()
                 if showDimmingPicker {
-                    // Close environment picker if it's open
                     showEnvironmentPicker = false
+                    showHDRPanel = false
                     stopMoonlightCycle()
                     stopReactiveLerp()
                 }
@@ -2965,8 +2997,28 @@ struct _CurvedDisplayStreamView: View {
             }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
 
-            // 7. 3D
-            staggeredControl(index: 7) {
+            // 7. HDR
+            if viewModel.streamSettings.enableHdr {
+                staggeredControl(index: 7) {
+                makeControlButton(
+                    label: showHDRPanel ? "Close HDR" : "HDR",
+                    systemImage: "wand.and.stars",
+                    action: {
+                        showHDRPanel.toggle()
+                        if showHDRPanel {
+                            showDimmingPicker = false
+                            showEnvironmentPicker = false
+                        }
+                        startHideTimer()
+                    },
+                    onTapFeedback: { controlTapFeedbackTrigger += 1 }
+                )
+                }
+            }
+
+
+            // 8. 3D
+            staggeredControl(index: 8) {
             makeControlButton(label: videoMode == .standard2D ? "Standard Display" : "3D", systemImage: "view.3d", action: {
                 if videoMode == .standard2D {
                     show3DConfirm = true
@@ -2977,8 +3029,8 @@ struct _CurvedDisplayStreamView: View {
             }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
 
-            // 8. Sphere Environment (Picker)
-            staggeredControl(index: 8) {
+            // 9. Sphere Environment (Picker)
+            staggeredControl(index: 10) {
             LongPressControlBtn(
                 label: environmentSphereButtonTitle,
                 systemImage: "photo",
@@ -2987,14 +3039,10 @@ struct _CurvedDisplayStreamView: View {
                 startHighlightTimer: startHighlightTimer,
                 startHideTimer: startHideTimer,
                 primaryAction: {
-                    // Toggle the picker overlay
                     showEnvironmentPicker.toggle()
-
-                    // If opening, ensure dimming logic is correct
                     if showEnvironmentPicker {
-                        // Close dimming picker if it's open
                         showDimmingPicker = false
-                        // Stop cycling/lerping if it was running
+                        showHDRPanel = false
                         stopMoonlightCycle()
                         stopReactiveLerp()
                     }
@@ -3014,16 +3062,16 @@ struct _CurvedDisplayStreamView: View {
             )
             }
 
-            // 9. Stats
-            staggeredControl(index: 9) {
+            // 10. Stats
+            staggeredControl(index: 11) {
             makeControlButton(label: viewModel.streamSettings.statsOverlay ? "Hide Stats" : "Show Stats", systemImage: "wifi", action: {
                 viewModel.streamSettings.statsOverlay.toggle()
             }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
             
-            // 9.5. Task Manager Button (if enabled)
+            // 10.5. Task Manager Button (if enabled)
             if viewModel.streamSettings.showTaskManagerButton {
-                staggeredControl(index: 10) {
+                staggeredControl(index: 11) {
                 makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle", action: {
                     sendTaskManager()
                     startHighlightTimer()
@@ -3031,8 +3079,8 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
             
-            // 10. Keyboard Toggle
-            staggeredControl(index: 11) {
+            // 11. Keyboard Toggle
+            staggeredControl(index: 12) {
             makeControlButton(
                 label: showVirtualKeyboard ? "Hide Keyboard" : "Show Keyboard",
                 systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard",
@@ -3077,7 +3125,7 @@ struct _CurvedDisplayStreamView: View {
             }
             
             if viewModel.streamSettings.showControllerBattery {
-                staggeredControl(index: 12) {
+                staggeredControl(index: 13) {
                 BatteryIndicatorView(
                     controlsHighlighted: $controlsHighlighted,
                     hideControls: $hideControls,
@@ -3087,9 +3135,9 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
             
-            // 11. Input Mode Toggle (Screen Adjust / Controller / Gaze Control)
+            // 12. Input Mode Toggle (Screen Adjust / Controller / Gaze Control)
             // Long press to disable/enable hand & gaze input
-            staggeredControl(index: 13) {
+            staggeredControl(index: 14) {
             LongPressControlBtn(
                 label: {
                     // Use Touch label if in Gaze Control mode and Touch mode is enabled
@@ -3185,9 +3233,9 @@ struct _CurvedDisplayStreamView: View {
             )
             }
             
-            // 11. Co-op Indicator (if in co-op session)
+            // 13. Co-op Indicator (if in co-op session)
             if viewModel.isCoopSession {
-                staggeredControl(index: 14) {
+                staggeredControl(index: 15) {
                 HStack(spacing: 6) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 16, weight: .semibold))
@@ -3211,19 +3259,19 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
             
-            // 12. Co-op Invite Button (only when hosting and guest is missing)
+            // 14. Co-op Invite Button (only when hosting and guest is missing)
             if viewModel.isCoopSession {
                 let coordinator = CoopSessionCoordinator.shared
                 if coordinator.isHosting && coordinator.participants.count < 2 {
-                    staggeredControl(index: 15) {
+                    staggeredControl(index: 16) {
                     coopInviteButton
                     }
                 }
             }
             
-            // 13. Co-op Disconnect Button (always show when in co-op)
+            // 15. Co-op Disconnect Button (always show when in co-op)
             if viewModel.isCoopSession {
-                staggeredControl(index: 16) {
+                staggeredControl(index: 17) {
                 coopDisconnectButton
                 }
             }
@@ -3242,10 +3290,10 @@ struct _CurvedDisplayStreamView: View {
             Capsule()
                 .fill(.ultraThinMaterial)
                 // Dynamic background opacity: different values for black modes vs reactive
-                .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.0)))
+                .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.0)))
         }
         // Dynamic opacity floor: lower for black modes (Eclipse, Starfield), slightly higher for Reactive V2/V3
-        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : (dimLevel == 10 ? 0.015 : 0.05))))
+        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.05))))
         .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
         .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
         .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
@@ -3385,14 +3433,14 @@ struct _CurvedDisplayStreamView: View {
         switch dimLevel {
         case 0: "Dimming Off"
         case 1: "Night"
-        case 2: "Reactive V1"
+        case 2: "Reactive 1"
         case 4: "Eclipse"
         case 5: "Midnight"
         case 6: "Twilight"
         case 7: "Dawn"
         case 8: "Sunrise"
         case 9: "Woodland"
-        case 10: "Reactive V2"
+        case 10: "Reactive 2"
         case 12: "Starfield"
         case 14: "Desert"
         default: "Dimming Off"
@@ -3596,6 +3644,17 @@ struct _CurvedDisplayStreamView: View {
         }
         safeHDRSettings.value = params
     }
+
+    // Live update from HDR panel sliders — panel overrides take precedence over preset values.
+    private func updateHDRParamsFromPanel() {
+        var params = safeHDRSettings.value
+        params.boost       = hdrPanelSettings.brightness
+        params.contrast    = hdrPanelSettings.contrast
+        params.saturation  = hdrPanelSettings.saturation
+        params.pqExposure  = hdrPanelSettings.pqExposure
+        params.brightness  = 0.0
+        safeHDRSettings.value = params
+    }
     
     private func updateScreenMaterial() {
         if videoMode == .sideBySide3D {
@@ -3753,7 +3812,25 @@ struct _CurvedDisplayStreamView: View {
         screen.position = SIMD3<Float>(0, 0, -1.5)
         
         content.add(screen)
-        
+
+        // Chromosphere: bloom shell must use the **same** curve / aspect topology as the display (updated in updateRealityView).
+        if chromosphereMeshEntity == nil {
+            let curveNow = curvaturePreset.value * curveAnimationMultiplier
+            let haloMesh = (try? makeChromosphereMesh(curveMagnitude: curveNow)) ?? fallbackChromospherePlaneMesh()
+            
+            let haloEntity = ModelEntity(mesh: haloMesh, materials: [])
+            haloEntity.components.set(OpacityComponent(opacity: 0.0))
+            haloEntity.components.set(GroundingShadowComponent(castsShadow: false))
+            screen.addChild(haloEntity)
+            headStorage.chromosphereHaloEntity = haloEntity
+            applyChromosphereHaloLocalZOffset(curveMagnitude: curveNow, entity: haloEntity)
+            DispatchQueue.main.async {
+                self.chromosphereMeshEntity = haloEntity
+                self.replaceChromosphereMeshWithDisplayCurve(curvaturePreset.value * curveAnimationMultiplier)
+                self.updateChromosphereMesh()
+            }
+        }
+
         // DEBUG: Spheres disabled - using corner gaze calibration instead
         // addDebugCalibrationSpheres(to: screen)
 
@@ -3762,7 +3839,7 @@ struct _CurvedDisplayStreamView: View {
         headStorage.headAnchor = head
 
         if !headStorage.hasInitializedPosition {
-            screen.position = SIMD3<Float>(0.0, 1.5, -5.0)
+            screen.position = SIMD3<Float>(0.0, 1.5, -9.0)
             headStorage.hasInitializedPosition = true
             // Defer @State modifications to avoid "Modifying state during view update"
             DispatchQueue.main.async {
@@ -3962,6 +4039,7 @@ struct _CurvedDisplayStreamView: View {
                 micEnt.scale = [scale, scale, scale]
             }
         }
+        
     }
 
     func updateRealityView(content: RealityViewContent, attachments: RealityViewAttachments) {
@@ -3985,6 +4063,16 @@ struct _CurvedDisplayStreamView: View {
             ) {
                 if let model = screen.model {
                     try? model.mesh.replace(with: mesh.contents)
+                }
+
+                if let haloEnt = headStorage.chromosphereHaloEntity,
+                   let haloMesh = try? makeChromosphereMesh(curveMagnitude: currentCurve),
+                   let hm = haloEnt.model {
+                    try? hm.mesh.replace(with: haloMesh.contents)
+                } else if let haloEnt = headStorage.chromosphereHaloEntity,
+                          let hm = haloEnt.model {
+                    let plane = fallbackChromospherePlaneMesh()
+                    try? hm.mesh.replace(with: plane.contents)
                 }
                 
                 // Also update collision mesh for accurate gaze hit detection
@@ -4087,6 +4175,21 @@ struct _CurvedDisplayStreamView: View {
                     let desiredLocalWidth: Float = 0.96
                     let scale = desiredLocalWidth / unscaledWidth
                     dimPickerEnt.scale = [scale, scale, scale]
+                }
+            }
+        }
+
+        if let hdrEnt = attachments.entity(for: "hdrPanel") {
+            if hdrEnt.parent !== screen { screen.addChild(hdrEnt) }
+            hdrEnt.position = [0.0 as Float, 0.0 as Float, Float(0.12)]
+            if showHDRPanel {
+                let bounds = hdrEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(hdrEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = 0.70
+                    let scale = desiredLocalWidth / unscaledWidth
+                    hdrEnt.scale = [scale, scale, scale]
                 }
             }
         }
@@ -4272,6 +4375,10 @@ struct _CurvedDisplayStreamView: View {
                 }
             }
         }
+        
+        if let haloEnt = headStorage.chromosphereHaloEntity {
+            applyChromosphereHaloLocalZOffset(curveMagnitude: currentCurve, entity: haloEnt)
+        }
     }
 
     // MARK: - Stream Management
@@ -4327,13 +4434,32 @@ struct _CurvedDisplayStreamView: View {
                             let warmth: Float = viewModel?.streamSettings.enableHdr ?? false ? 0.03 : 0.0
                             return (1.0, 1.0, warmth)
                         },
-                        callbackToRender: { textureQueue, correctedResolution in
+                        callbackToRender: { textureQueue, haloQueue, correctedResolution in
                             guard self.renderGateOpen else { return }
 
                             // Push frame and UI metadata directly to Main Thread (Bypasses RealityKit traffic jam)
                             DispatchQueue.main.async {
                                 // DIRECT PUSH: Instantly paint the new frame to the curved screen
                                 self.texture.replace(withDrawables: textureQueue)
+
+                                // Chromosphere: wire up the downsampled bloom texture on first frame
+                                if let haloQueue {
+                                    if self.chromosphereTexture == nil {
+                                        let mipShift = 5
+                                        let cw = max(1, Int(self.streamConfig.width) >> mipShift)
+                                        let ch = max(1, Int(self.streamConfig.height) >> mipShift)
+                                        let bpp = self.viewModel.streamSettings.enableHdr ? 8 : 4
+                                        if let tex = try? TextureResource(
+                                            dimensions: .dimensions(width: cw, height: ch),
+                                            format: .raw(pixelFormat: self.viewModel.streamSettings.enableHdr ? .rgba16Float : .bgra8Unorm_srgb),
+                                            contents: .init(mipmapLevels: [.mip(data: Data(count: bpp * cw * ch), bytesPerRow: bpp * cw)])
+                                        ) {
+                                            self.chromosphereTexture = tex
+                                            tex.replace(withDrawables: haloQueue)
+                                            self.updateChromosphereMesh()
+                                        }
+                                    }
+                                }
 
                                 if let correctedResolution {
                                     self.correctedResolution = correctedResolution
@@ -4361,6 +4487,8 @@ struct _CurvedDisplayStreamView: View {
                     // Store the decoder reference for controlling reactive dimming
                     DispatchQueue.main.async {
                         self.videoDecoder = decoder
+                        decoder.isReactiveDimmingEnabled = (self.dimLevel == 10 || self.dimLevel == 12)
+                        self.updateChromosphereMesh()
                     }
                     
                     return decoder
@@ -4457,6 +4585,8 @@ struct _CurvedDisplayStreamView: View {
     private func performCompleteTeardown() {
         guard !hasPerformedTeardown else { return }
         hasPerformedTeardown = true
+
+        cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
         
         print("[CurvedDisplay] 🔴 TEARDOWN START")
         
@@ -4715,6 +4845,14 @@ struct _CurvedDisplayStreamView: View {
     }
 
     // MARK: - Mesh Generation
+    
+    /// Pushes Chromosphere halo behind the panel with a tighter offset when curved vs flat (reduces coplanar z-fighting).
+    private func applyChromosphereHaloLocalZOffset(curveMagnitude: Float, entity: Entity) {
+        let zOffset: Float = abs(curveMagnitude) < 0.002 ? -0.048 : -0.028
+        var pos = entity.position
+        pos.z = zOffset
+        entity.position = pos
+    }
 
     func generateCurvedRoundedPlane(
         width: Float,
@@ -4827,14 +4965,14 @@ struct _CurvedDisplayStreamView: View {
         }
 
         if dimLevel == 2 {
-            // Reactive V1 - Keeps transparency (0.85), so keep .transparent
-            var mat = UnlitMaterial(color: currentAmbientColor.withAlphaComponent(0.85))
+            // Reactive 1 uses Chromosphere only; purple dome hidden (neutral material if ever applied)
+            var mat = UnlitMaterial(color: UIColor.clear)
             mat.blending = .transparent(opacity: 1.0)
             return (mat, nil)
         }
 
         if dimLevel == 10 {
-            // Reactive V2 - SOLID COLOR (reactive)
+            // Reactive 2 — solid full-coverage reactive sphere
             // Use .opaque for proper Z-sorting so UI icons render on top
             var mat = UnlitMaterial(color: currentAmbientColor.withAlphaComponent(1.0))
             mat.blending = .opaque
@@ -4901,12 +5039,16 @@ struct _CurvedDisplayStreamView: View {
 
     private func updateDimmerDomesState() {
         headStorage.dimmerDome?.isEnabled = (dimLevel == 1)
-        headStorage.dimmerDomePurple?.isEnabled = (dimLevel >= 2 && dimLevel <= 14)
-        
+        headStorage.dimmerDomePurple?.isEnabled = (dimLevel >= 2 && dimLevel <= 14 && dimLevel != 2)
+
+        // Chromosphere bloom mesh — Reactive 1 (dim 2) only (halo intensity cleared when leaving preset)
+        chromosphereMeshEntity?.isEnabled = (dimLevel == 2) && firstFrameReceived
+        updateChromosphereMesh()
+
         // Enable particles for Starfield (dimLevel 12) only
         // Add 0.5s warmup delay to prevent initial blink
         let shouldEnableParticles = (dimLevel == 12)
-        
+
         if shouldEnableParticles {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.particleManager.setEnabled(true)
@@ -4919,7 +5061,7 @@ struct _CurvedDisplayStreamView: View {
     private func updateDimmerDomes(content: RealityViewContent) {
         // Only update materials if dimLevel changed, in Reactive mode (needs continuous updates), 
         // or if the preset uses adjustable brightness (Night, Midnight, Twilight, Dawn, Sunrise, Woodland, Desert)
-        let isReactiveMode = (dimLevel == 2 || dimLevel == 10 || dimLevel == 12)
+        let isReactiveMode = (dimLevel == 10 || dimLevel == 12)
         let isAdjustablePreset = [1, 5, 6, 7, 8, 9, 14].contains(dimLevel)
         
         if dimLevel != headStorage.lastAppliedDimLevel || isReactiveMode || isAdjustablePreset {
@@ -5350,6 +5492,66 @@ struct _CurvedDisplayStreamView: View {
         moonlightMaterial = nil
     }
     
+    // MARK: - Reactive 2 sphere envelope (Crown-style dial-in)
+
+    /// Smooth ease-in-out similar to system immersive environment ramps when using the Digital Crown.
+    private func reactiveEnvelopeEaseInOut(_ t: Float) -> Float {
+        if t <= 0 { return 0 }
+        if t >= 1 { return 1 }
+        if t < 0.5 {
+            return 4 * t * t * t
+        }
+        let u = -2 * t + 2
+        return 1 - (u * u * u) / 2
+    }
+
+    private func cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: Bool = true) {
+        reactiveSphereEnvelopeTimer?.invalidate()
+        reactiveSphereEnvelopeTimer = nil
+        guard resetDomeVisuals, let purple = headStorage.dimmerDomePurple else { return }
+        purple.scale = SIMD3<Float>(-1, 1, 1)
+        purple.components.remove(OpacityComponent.self)
+    }
+
+    /// Reactive 2 only: gentle scale + opacity build so the dome “dials in” around the viewer.
+    private func beginReactiveSphereEnvelopeIntro() {
+        guard dimLevel == 10, let purple = headStorage.dimmerDomePurple else { return }
+        cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
+
+        let duration: CFTimeInterval = 1.75
+        /// Slightly tightened sphere at start reads like Crown immersion deepening, not a pop-in.
+        let scaleStart: Float = 0.83
+
+        purple.scale = SIMD3<Float>(-scaleStart, scaleStart, scaleStart)
+        purple.components.set(OpacityComponent(opacity: 0))
+
+        let t0 = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { timer in
+            guard let purple = self.headStorage.dimmerDomePurple, self.dimLevel == 10 else {
+                timer.invalidate()
+                self.reactiveSphereEnvelopeTimer = nil
+                return
+            }
+
+            let rawT = CGFloat((CACurrentMediaTime() - t0) / duration)
+            let clamped = min(1.0, max(0.0, rawT))
+            let eased = self.reactiveEnvelopeEaseInOut(Float(clamped))
+
+            let s = scaleStart + (1.0 - scaleStart) * eased
+            purple.scale = SIMD3<Float>(-s, s, s)
+            purple.components.set(OpacityComponent(opacity: eased))
+
+            if clamped >= 1.0 {
+                timer.invalidate()
+                self.reactiveSphereEnvelopeTimer = nil
+                purple.scale = SIMD3<Float>(-1, 1, 1)
+                purple.components.remove(OpacityComponent.self)
+            }
+        }
+        reactiveSphereEnvelopeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     // MARK: - Reactive Color Lerp
     
     private func startReactiveLerp() {
@@ -5364,26 +5566,28 @@ struct _CurvedDisplayStreamView: View {
         
         // Run at 60fps for buttery smooth interpolation
         reactiveLerpTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
-            guard (self.dimLevel == 2 || self.dimLevel == 10), let purple = self.headStorage.dimmerDomePurple else { return }
-            
+            guard let purple = self.headStorage.dimmerDomePurple else { return }
+            let isReactive = (self.dimLevel == 10 || self.dimLevel == 12)
+            guard isReactive else { return }
+
             // Lerp factor: 0.15 = smooth but responsive (reaches 95% in ~0.2s)
             let lerpFactor: CGFloat = 0.15
-            
+
             var currentR: CGFloat = 0, currentG: CGFloat = 0, currentB: CGFloat = 0, currentA: CGFloat = 0
             self.currentAmbientColor.getRed(&currentR, green: &currentG, blue: &currentB, alpha: &currentA)
-            
+
             var targetR: CGFloat = 0, targetG: CGFloat = 0, targetB: CGFloat = 0, targetA: CGFloat = 0
             self.targetReactiveColor.getRed(&targetR, green: &targetG, blue: &targetB, alpha: &targetA)
-            
-            // Linear interpolation
+
+            // Linear interpolation toward center zone color
             let newR = currentR + (targetR - currentR) * lerpFactor
             let newG = currentG + (targetG - currentG) * lerpFactor
             let newB = currentB + (targetB - currentB) * lerpFactor
-            
+
             DispatchQueue.main.async {
                 self.currentAmbientColor = UIColor(red: newR, green: newG, blue: newB, alpha: 1.0)
             }
-            
+
             // Update material
             let (mat, _) = self.getDimmerMaterial()
             purple.model?.materials = [mat]
@@ -5393,6 +5597,56 @@ struct _CurvedDisplayStreamView: View {
     private func stopReactiveLerp() {
         reactiveLerpTimer?.invalidate()
         reactiveLerpTimer = nil
+    }
+
+    // MARK: - ChromaHalo
+
+    private func makeChromosphereMesh(curveMagnitude: Float) throws -> MeshResource {
+        let haloScale = videoDecoder?.chromaHaloScale ?? 1.55
+        return try generateCurvedRoundedPlane(
+            width: CURVED_MAX_WIDTH_METERS * haloScale,
+            aspectRatio: screenAspect,
+            resolution: (128, 128),
+            curveMagnitude: curveMagnitude,
+            cornerRadiusFraction: cornerRadiusFraction / haloScale
+        )
+    }
+
+    private func fallbackChromospherePlaneMesh() -> MeshResource {
+        let haloScale = videoDecoder?.chromaHaloScale ?? 1.55
+        return MeshResource.generatePlane(
+            width: CURVED_MAX_WIDTH_METERS * haloScale,
+            height: CURVED_MAX_WIDTH_METERS * screenAspect * haloScale
+        )
+    }
+
+    /// Rebuild chromosphere geometry to match the display (`generateCurvedRoundedPlane` halo shell).
+    private func replaceChromosphereMeshWithDisplayCurve(_ curveMagnitude: Float) {
+        guard let haloEnt = chromosphereMeshEntity ?? headStorage.chromosphereHaloEntity, let model = haloEnt.model else { return }
+        let haloResource = (try? makeChromosphereMesh(curveMagnitude: curveMagnitude)) ?? fallbackChromospherePlaneMesh()
+        do {
+            try model.mesh.replace(with: haloResource.contents)
+        } catch {
+            print("⚠️ Chromosphere mesh.replace failed: \(error)")
+        }
+        applyChromosphereHaloLocalZOffset(curveMagnitude: curveMagnitude, entity: haloEnt)
+    }
+
+    /// Chromosphere mesh + halo intensity — Reactive 1 (dim 2) only.
+    private func updateChromosphereMesh() {
+        guard let decoder = videoDecoder else { return }
+        let active = dimLevel == 2
+        decoder.chromaHaloIntensity = active ? 1.0 : 0.0
+
+        guard let entity = chromosphereMeshEntity ?? headStorage.chromosphereHaloEntity,
+              let tex = chromosphereTexture else { return }
+        var mat = UnlitMaterial(texture: tex)
+        mat.blending = .transparent(opacity: 1.0)
+        mat.color.tint = UIColor.white.withAlphaComponent(active ? 1.0 : 0.0)
+        if entity.model != nil {
+            entity.model?.materials = [mat]
+        }
+        entity.components.set(OpacityComponent(opacity: active && firstFrameReceived ? 1.0 : 0.0))
     }
 
     // MARK: - Timers & State Changes

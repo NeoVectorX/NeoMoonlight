@@ -20,14 +20,18 @@ struct ColorEnhancementUniforms {
 };
 
 // Shader-side HDR frame parameters — describes the incoming video signal.
-// Swift side must match this layout exactly (all uint/float, no Bool).
+// Swift side must match this layout exactly (field order + types + padding).
+// The YUV conversion matrix and offsets are computed on the CPU once per format
+// change and passed here, eliminating all branching in the fragment shader.
 struct ShaderHDRParams {
-    uint  is10Bit;          // 1 = 10-bit source, 0 = 8-bit
-    uint  isFullRange;      // 1 = full range (0-255/0-1023), 0 = limited (16-235/64-940)
-    uint  isPQ;             // 1 = SMPTE ST.2084 PQ transfer function
-    uint  matrixType;       // 0 = BT.709, 1 = BT.2020, 2 = BT.601/SMPTE-C
-    uint  primariesType;    // 0 = BT.709, 1 = BT.2020, 2 = SMPTE-C
-    float edrHeadroom;      // Live UIScreen.currentEDRHeadroom — tone map ceiling
+    uint    isPQ;           // 1 = SMPTE ST.2084 PQ transfer function, 0 = SDR
+    uint    primariesType;  // 0 = BT.709/P3, 1 = BT.2020, 2 = SMPTE-C  (gamut map selector)
+    float   edrHeadroom;    // Tone map ceiling (fixed 2.0 on visionOS)
+    float   pad;            // Padding to 16-byte alignment
+    // Precomputed YUV → RGB conversion (column-major, CPU-selected per format).
+    // Eliminates all if/else branching in the fragment shader.
+    float3x3 yuvMatrix;     // Full YUV→RGB matrix (includes range scaling)
+    float3   yuvOffset;     // Subtract before matrix multiply (Y black, UV center)
 };
 
 // User-facing HDR grading parameters.
@@ -36,7 +40,7 @@ struct FullHDRParams {
     float contrast;     // Luma-preserved contrast (1.0 = neutral)
     float saturation;   // Color saturation (1.0 = neutral)
     float brightness;   // Additive brightness offset (0.0 = neutral)
-    float pqExposure;   // PQ-only exposure trim (1.0 = neutral); ignored for SDR
+    float pqExposure;   // Global exposure trim (1.0 = neutral); applies to both HDR and SDR paths
     int   mode;         // Reserved for future use
 };
 
@@ -70,107 +74,21 @@ constant float3x3 SMPTEC_TO_BT709 = float3x3(
 );
 
 // MARK: - SDR Transfer Function
-// Apple's display pipeline applies a 1.961 gamma for Rec.709 video to match
-// AVSampleBufferDisplayLayer behavior. Using this exact value ensures SDR streams
-// look identical to what Apple's own system player would render on Vision Pro.
+// Windows PCs and PC games are mastered for gamma 2.2 / BT.1886.
+// Using 2.2 here matches how content actually looks on the source monitor,
+// giving correct mid-tone punch vs the source PC display.
+// (Apple's own 1.961 is only correct for Rec.709 content in QuickTime/Safari.)
 inline float3 sdrToLinear(float3 c) {
-    return pow(clamp(c, 0.0, 1.0), float3(1.961));
+    return pow(clamp(c, 0.0, 1.0), float3(2.2));
 }
 
-// MARK: - YUV Decode Functions
-// Six variants covering all combinations of (BT.709 / BT.2020 / BT.601) × (limited / full range).
-// 10-bit and 8-bit are handled by the is10Bit flag — scale factors differ.
-// Coefficients derived from ITU-R BT.709-6, BT.2020-2, and BT.601-7.
-
-inline float3 decode709VideoRange(float y, float2 uv, bool is10Bit) {
-    float yOff   = is10Bit ? (64.0  / 1023.0) : (16.0  / 255.0);
-    float uvCtr  = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float yScale = is10Bit ? (1023.0 / 876.0) : (255.0 / 219.0);
-    float luma = max(y - yOff, 0.0) * yScale;
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.79274107 * cr,
-        luma - 0.21324861 * cb - 0.53290933 * cr,
-        luma + 2.11240179 * cb
-    );
-}
-
-inline float3 decode709FullRange(float y, float2 uv, bool is10Bit) {
-    float uvCtr = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float luma  = clamp(y, 0.0, 1.0);
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.5748   * cr,
-        luma - 0.187324 * cb - 0.468124 * cr,
-        luma + 1.8556   * cb
-    );
-}
-
-inline float3 decode2020VideoRange(float y, float2 uv, bool is10Bit) {
-    float yOff   = is10Bit ? (64.0  / 1023.0) : (16.0  / 255.0);
-    float uvCtr  = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float yScale = is10Bit ? (1023.0 / 876.0) : (255.0 / 219.0);
-    float luma = max(y - yOff, 0.0) * yScale;
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.67867411 * cr,
-        luma - 0.18732610 * cb - 0.65042432 * cr,
-        luma + 2.14177232 * cb
-    );
-}
-
-inline float3 decode2020FullRange(float y, float2 uv, bool is10Bit) {
-    float uvCtr = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float luma  = clamp(y, 0.0, 1.0);
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.4746    * cr,
-        luma - 0.164553  * cb - 0.571353  * cr,
-        luma + 1.8814    * cb
-    );
-}
-
-inline float3 decode601VideoRange(float y, float2 uv, bool is10Bit) {
-    float yOff   = is10Bit ? (64.0  / 1023.0) : (16.0  / 255.0);
-    float uvCtr  = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float yScale = is10Bit ? (1023.0 / 876.0) : (255.0 / 219.0);
-    float luma = max(y - yOff, 0.0) * yScale;
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.596027  * cr,
-        luma - 0.391762  * cb - 0.812968  * cr,
-        luma + 2.017232  * cb
-    );
-}
-
-inline float3 decode601FullRange(float y, float2 uv, bool is10Bit) {
-    float uvCtr = is10Bit ? (512.0 / 1023.0) : (128.0 / 255.0);
-    float luma  = clamp(y, 0.0, 1.0);
-    float cb = uv.x - uvCtr;
-    float cr = uv.y - uvCtr;
-    return float3(
-        luma + 1.40200   * cr,
-        luma - 0.344136  * cb - 0.714136  * cr,
-        luma + 1.77200   * cb
-    );
-}
-
-// Dispatch to the correct YUV decoder based on matrix and range flags.
+// MARK: - YUV Decode
+// The conversion matrix and offset were precomputed on the Swift CPU side
+// (selecting the right ITU matrix + range scaling for this frame's format).
+// Zero branching here — one multiply-add covers all six format combinations.
 inline float3 decodeYUV(float y, float2 uv, constant ShaderHDRParams& p) {
-    bool b10  = (p.is10Bit    == 1u);
-    bool full = (p.isFullRange == 1u);
-    if (p.matrixType == 1u) {
-        return full ? decode2020FullRange(y, uv, b10) : decode2020VideoRange(y, uv, b10);
-    } else if (p.matrixType == 2u) {
-        return full ? decode601FullRange(y, uv, b10)  : decode601VideoRange(y, uv, b10);
-    } else {
-        return full ? decode709FullRange(y, uv, b10)  : decode709VideoRange(y, uv, b10);
-    }
+    float3 yuv = float3(y, uv.x, uv.y) - p.yuvOffset;
+    return p.yuvMatrix * yuv;
 }
 
 // MARK: - PQ Inverse Transfer Function (SMPTE ST.2084)
@@ -330,7 +248,7 @@ inline float3 processFrame(
         float3 edr = nits / PQ_REFERENCE_WHITE_NITS;
 
         // 3. Gamut: BT.2020 → Display P3 (or BT.709 → Display P3 if 709 primaries)
-        bool use2020 = (p.primariesType == 1u) || (p.matrixType == 1u);
+        bool use2020 = (p.primariesType == 1u);
         float3 colorP3 = use2020
             ? max(BT2020_TO_DISPLAYP3 * edr, float3(0.0))
             : max(BT709_TO_DISPLAYP3  * edr, float3(0.0));
@@ -341,7 +259,7 @@ inline float3 processFrame(
         float effectiveSat = enh.saturation * full.saturation * radialSat;
         colorP3 = lumaPreservedGrading(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth, lumaW);
 
-        // 5. User exposure trim (PQ only — does not affect SDR streams)
+        // 5. User level trims (HDR path — applied in linear light before tone mapping)
         colorP3 *= max(full.boost, 0.0);
         colorP3 += max(full.brightness, 0.0);
         colorP3 *= max(full.pqExposure, 0.0);
@@ -356,19 +274,24 @@ inline float3 processFrame(
 
     } else {
         // --- SDR path ---
-        // 1. De-gamma using Apple's 1.961 curve (matches AVSampleBufferDisplayLayer)
+        // Writes linear Display P3 into the rgba16Float drawable.
+        // visionOS's UnlitMaterial compositor maps this correctly to the display.
+
+        // 1. Rec.709 gamma → linear light
         float3 linear = sdrToLinear(clamp(rgb_raw, 0.0, 1.0));
 
-        // 2. Gamut map to Display P3 linear
+        // 2. Gamut: source primaries → linear Display P3
         float3 colorP3 = sdrPrimariesToDisplayP3(linear, p);
 
-        // 3. User grading (clamped — SDR must stay in [0, 1])
+        // 3. User grading in linear light (luma-preserved; clamped to SDR range)
         float radialSat = radialSaturationScale(uv);
         float effectiveSat = enh.saturation * full.saturation * radialSat;
         colorP3 = lumaPreservedGradingSDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth);
 
+        // 4. User level trims
         colorP3 *= max(full.boost, 0.0);
         colorP3 += max(full.brightness, 0.0);
+        colorP3 *= max(full.pqExposure, 0.0);
 
         finalColor = clamp(colorP3, 0.0, 1.0);
     }
@@ -461,4 +384,132 @@ fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
 
     float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
     return half4(half3(finalColor), 1.0h);
+}
+
+// MARK: - ChromaHalo Edge Bloom Shader
+//
+// Renders the edge glow layer behind the main video mesh (Chromosphere).
+// Halo mesh is haloScale× wider and taller in meters; videoScale is uniform on both
+// axes so top/bottom pads match left/right in texture space (avoids “side-only” glow).
+// Perimeter samples use an anisotropic blur: more spread along the edge direction.
+//
+// Inputs:
+//   texture(0): sourceTex  — downsampled mip of the current video frame
+//   texture(1): prevTex    — previous ChromaHalo output for temporal smoothing
+//   buffer(1):  haloScale  — physical scale factor of the halo mesh vs screen (e.g. 1.55)
+//   buffer(2):  intensity  — user-controlled brightness scalar (0.0–2.0)
+
+fragment half4 chromaHaloFragment(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> sourceTex [[texture(0)]],
+    texture2d<half> prevTex   [[texture(1)]],
+    constant float  &haloScale [[buffer(1)]],
+    constant float  &intensity [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float w      = max(float(sourceTex.get_width()),  1.0);
+    float h      = max(float(sourceTex.get_height()), 1.0);
+    float aspect = w / h;
+
+    // Map halo render UV back to normalized video rectangle [0,1]^2 (both axes).
+    // Physical halo mesh scales by haloScale in width AND height meters; asymmetric
+    // Y scale here was starving top/bottom in texture space while sides looked rich.
+    float2 videoScale = float2(haloScale);
+    float2 videoUV    = (in.uv - 0.5) * videoScale + 0.5;
+
+    // Distance from video edge: combine fractional x/y excursion with pixel aspect so
+    // corners + top/bottom get similar physical falloff weights.
+    float2 boundaryRaw = max(float2(0.0), abs(videoUV - 0.5) * 2.0 - 1.0);
+    float bx = boundaryRaw.x;
+    float by = boundaryRaw.y;
+    float byScaled = by / aspect;
+    // Euclidean reach for blur spread only — do NOT drive outer alpha (aspect shrinks dy and
+    // leaves normalizedDist < 1 on top/bottom rims → visible “hard shelf” vs sides).
+    float dist = sqrt(bx * bx + byScaled * byScaled);
+
+    // Hollow center — pixels under the video mesh are transparent.
+    // Slight shrink (0.88) ensures the cutout fully hides behind the video's rounded corners.
+    float2 hollowCheck = max(float2(0.0), abs(videoUV - 0.5) * 2.0 - 0.88);
+    if (length(hollowCheck) <= 0.0) { return half4(0.0); }
+
+    // Perimeter zone clamping — clamp to a ring of inset sample points.
+    // 8% inset avoids hardware decoder border artifacts.
+    float2 safeMin = float2(0.08);
+    float2 safeMax = float2(0.92);
+    float2 zoneClamped;
+    zoneClamped.x = clamp(videoUV.x, safeMin.x, safeMax.x);
+    zoneClamped.y = clamp(videoUV.y, safeMin.y, safeMax.y);
+
+    // Dynamic sample spread: pixels further from the screen sample a wider area,
+    // smoothly diffusing color outward without hard bands.
+    float spread  = 1.0 + dist * 6.0;
+    float blurRad = min(0.10 * spread, 0.38);
+
+    // Anisotropic blur: elongate blur along edges so top/bottom smear sideways and
+    // left/right wings smear vertically — reads more like ambient light bleeding.
+    float topBottomDominant = saturate(by - bx);
+    float leftRightDominant = saturate(bx - by);
+    float blurMux = 1.0 + topBottomDominant * 2.95;
+    float blurMvy = 1.0 + leftRightDominant * 2.95;
+
+    // 3x3 Gaussian-weighted color gather from source video mip.
+    half4  color       = half4(0.0);
+    float  totalWeight = 0.0;
+    float  maxLuma     = 0.0;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            float2 offset    = blurRad * float2(float(dx) * blurMux, float(dy) * blurMvy);
+            float2 sampleUV  = clamp(zoneClamped + offset, safeMin, safeMax);
+            half4  sampleCol = sourceTex.sample(s, sampleUV);
+            float  w_g       = exp(-float(dx*dx + dy*dy) * 0.5);
+            color       += sampleCol * half(w_g);
+            totalWeight += w_g;
+            float luma   = dot(float3(sampleCol.rgb), float3(0.2126, 0.7152, 0.0722));
+            maxLuma      = max(maxLuma, luma);
+        }
+    }
+    color /= half(totalWeight);
+
+    // Saturation boost — makes colors vivid against the dark environment.
+    float avgLuma  = dot(float3(color.rgb), float3(0.2126, 0.7152, 0.0722));
+    float satBoost = 2.0;
+    color.rgb = mix(half3(avgLuma), color.rgb, half(satBoost));
+
+    // Soft luminance cap — prevent blown-out whites from washing out the glow.
+    float powerCap = 0.95;
+    if (maxLuma > powerCap) { color.rgb *= half(powerCap / maxLuma); }
+
+    // Emission scalar — controls raw brightness before fade.
+    color.rgb *= half(intensity * 2.2);
+    color.rgb  = max(color.rgb, half3(0.0));
+
+    // Outer fade envelope: per-axis normalization so every rim reaches alpha 0 at the texture edge
+    // (fixes top/bottom “hard shelf” vs smooth sides).
+    float cap               = haloScale - 1.0;
+    float capSafe           = max(cap, 0.001);
+    // Left/right ribbons ~30% narrower than unified cap (1/0.7 ≈ 1.43). Top/bottom unchanged.
+    const float sideTight   = 1.0f / 0.7f;
+    float nxEff             = saturate(bx / max(capSafe / sideTight, 1e-4));
+    // Narrower ribbon above/below screen than lateral wings (>1 ⇒ faster saturation).
+    const float tbTight = 1.42f;
+    float nyEff             = saturate(by / max(capSafe / tbTight, 1e-4));
+    float normalizedDist    = max(nxEff, nyEff);
+    float t                 = 1.0 - normalizedDist;
+    t                       = t * t * (3.0 - 2.0 * t);
+    // Slightly sharper falloff along top/bottom so the band looks thinner — sides stay softer.
+    float gamma             = mix(2.05, 2.55, topBottomDominant);
+    float fade              = pow(max(t, 0.0), gamma);
+
+    // Premultiplied RGBA: avoids dark fringe when RealityKit composites (straight alpha glow smears RGB at low A).
+    half  a                 = half(fade);
+    half3 premul            = color.rgb * a;
+
+    half4 currPM            = half4(premul, a);
+    half4 prevPM            = prevTex.sample(s, in.uv);
+    half4 blended           = mix(prevPM, currPM, 0.12h);
+
+    half softZero           = smoothstep(half(0.0), half(0.004), blended.a);
+    return half4(blended.rgb * softZero, blended.a * softZero);
 }
