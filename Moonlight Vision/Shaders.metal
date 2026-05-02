@@ -285,26 +285,23 @@ inline float3 processFrame(
 
     } else {
         // --- SDR path ---
-        // Writes linear Display P3 into the rgba16Float drawable.
-        // visionOS's UnlitMaterial compositor maps this correctly to the display.
+        // The drawable is bgra8Unorm_sRGB when HDR is off — it expects gamma-encoded
+        // (sRGB) values, NOT linear. The YUV decode already produces gamma-encoded RGB
+        // matching the source PC's gamma 2.2 output. Passing through directly (like the
+        // baseline/TestFlight build) avoids the double-gamma crush that made SDR too dark.
 
-        // 1. Rec.709 gamma → linear light
-        float3 linear = sdrToLinear(clamp(rgb_raw, 0.0, 1.0));
+        float3 colorSDR = clamp(rgb_raw, 0.0, 1.0);
 
-        // 2. Gamut: source primaries → linear Display P3
-        float3 colorP3 = sdrPrimariesToDisplayP3(linear, p);
-
-        // 3. User grading in linear light (luma-preserved; clamped to SDR range)
+        // User grading (gamma-space, matching baseline applyVisionProGrading behavior)
         float radialSat = radialSaturationScale(uv);
         float effectiveSat = enh.saturation * full.saturation * radialSat;
-        colorP3 = lumaPreservedGradingSDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth);
+        colorSDR = lumaPreservedGradingSDR(colorSDR, effectiveSat, enh.contrast * full.contrast, enh.warmth);
 
-        // 4. User level trims — same Exposure × Brightness stacking as legacy (needed for perceptual match on headsets).
-        colorP3 *= max(full.boost, 0.0);
-        colorP3 += max(full.brightness, 0.0);
-        colorP3 *= max(full.pqExposure, 0.0);
+        // User level trims
+        colorSDR *= max(full.boost, 0.0);
+        colorSDR += max(full.brightness, 0.0);
 
-        finalColor = clamp(colorP3, 0.0, 1.0);
+        finalColor = clamp(colorSDR, 0.0, 1.0);
     }
 
     // Safety ceiling — prevents any runaway value from blowing out the display.
