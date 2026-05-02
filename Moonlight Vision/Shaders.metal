@@ -26,10 +26,17 @@ struct ColorEnhancementUniforms {
 // The YUV conversion matrix and offsets are computed on the CPU once per format
 // change and passed here, eliminating all branching in the fragment shader.
 struct ShaderHDRParams {
-    uint    isPQ;           // 1 = SMPTE ST.2084 PQ transfer function, 0 = SDR
+    uint    isPQ;           // 1 = SMPTE ST.2084 PQ transfer function, 0 = SDR / extended
     uint    primariesType;  // 0 = BT.709/P3, 1 = BT.2020, 2 = SMPTE-C  (gamut map selector)
+    uint    extendedScene;  // 1 = Moonlight HDR + non-PQ: extended desktop path in processFrame
+    uint    reserved0;
     float   edrHeadroom;    // Tone map ceiling (fixed 2.0 on visionOS)
-    float   pad;            // Padding to 16-byte alignment
+    float   pad;
+    float2  alignPad;       // Pad to 32 bytes before optional HDR metadata
+    // Sunshine ST 2086 sidecar (LiGetHdrMetadata): maxCLL / maxFALL in nits; 0 = ignore (legacy tone map).
+    float   maxContentNits;
+    float   maxFrameAvgNits;
+    float2  padHdrMeta;     // Pad to 48 bytes before float3x3 (16-byte alignment)
     // Precomputed YUV → RGB conversion (column-major, CPU-selected per format).
     // Eliminates all if/else branching in the fragment shader.
     float3x3 yuvMatrix;     // Full YUV→RGB matrix (includes range scaling)
@@ -43,7 +50,8 @@ struct FullHDRParams {
     float saturation;   // Color saturation (1.0 = neutral)
     float brightness;   // Additive brightness offset (0.0 = neutral)
     float pqExposure;   // Global exposure trim (1.0 = neutral); applies to both HDR and SDR paths
-    int   mode;         // Reserved for future use
+    int   mode;         // UIKit / preset mode (unchanged)
+    uint  hdrGradeFlags;// bit0 = Reference HDR: PQ + gamut + tone map only (no client grade / trims)
 };
 
 struct CopyVertexOut {
@@ -221,11 +229,26 @@ inline float uchimura(float x, float P, float a, float m, float l, float c, floa
     return T * w0 + L * w1 + S * w2;
 }
 
+// Widen Uchimura shoulder P when Sunshine reports modest maxCLL / low maxFALL (typical Windows HDR desktop)
+// so mids/highlights are not flattened; 0 maxContentNits leaves base P unchanged.
+inline float hdrUchimuraShoulderP(float baseP, float maxContentNits, float maxFrameAvgNits) {
+    float P = clamp(baseP, 1.2, 6.0);
+    if (maxContentNits > 1.0) {
+        float peakEdr = clamp(maxContentNits / PQ_REFERENCE_WHITE_NITS, 1.05, 40.0);
+        float target = peakEdr * 1.08;
+        if (maxFrameAvgNits > 1.0) {
+            float fallEdr = clamp(maxFrameAvgNits / PQ_REFERENCE_WHITE_NITS, 0.15, peakEdr);
+            target = max(target, fallEdr * 2.2);
+        }
+        P = clamp(max(P, target), 1.2, 6.0);
+    }
+    return P;
+}
+
 // Apply Uchimura per luma channel to preserve chromaticity (avoids hue twist).
 // edrCeiling is the live display EDR headroom passed from Swift each frame.
-inline float3 uchimuraToneMap(float3 colorP3, float edrCeiling) {
-    // Clamp ceiling to a reasonable range — headroom can spike on some displays.
-    float P = clamp(edrCeiling, 1.2, 6.0);
+inline float3 uchimuraToneMap(float3 colorP3, float edrCeiling, float maxContentNits, float maxFrameAvgNits) {
+    float P = hdrUchimuraShoulderP(clamp(edrCeiling, 1.2, 6.0), maxContentNits, maxFrameAvgNits);
     // Tuned for Vision Pro's ~100-nit effective eye output with micro-OLED infinite black.
     float a = 1.0;   // Linear section contrast
     float m = 0.22;  // Linear section start (matches Reinhard mid-gray)
@@ -236,6 +259,27 @@ inline float3 uchimuraToneMap(float3 colorP3, float edrCeiling) {
     float luma = max(dot(colorP3, kDisplayP3Luma), 1e-6);
     float mappedLuma = uchimura(luma, P, a, m, l, c, b);
     return colorP3 * (mappedLuma / luma);
+}
+
+/// Reference HDR: same Uchimura family but slightly **higher shoulder P** and gentler **toe** so
+/// mids/highlights are not rolled off as aggressively (Enhanced path used to add boost/sat *before* TM).
+/// A small **chroma recovery** after TM offsets perceived desaturation from luma-only scaling.
+inline float3 uchimuraToneMapReference(float3 colorP3, float edrCeiling, float maxContentNits, float maxFrameAvgNits) {
+    float baseP = clamp(max(edrCeiling * 1.18, 2.55), 1.35, 6.0);
+    float P = hdrUchimuraShoulderP(baseP, maxContentNits, maxFrameAvgNits);
+    float a = 1.0;
+    float m = 0.22;
+    float l = 0.42;
+    float c = 1.18;
+    float b = 0.0;
+
+    float luma = max(dot(colorP3, kDisplayP3Luma), 1e-6);
+    float mappedLuma = uchimura(luma, P, a, m, l, c, b);
+    float3 tm = colorP3 * (mappedLuma / luma);
+
+    float L = max(dot(tm, kDisplayP3Luma), 1e-4);
+    const float kRefChromaRecover = 1.065;
+    return max(mix(float3(L), tm, kRefChromaRecover), float3(0.0));
 }
 
 // MARK: - Luma-Preserved Color Grading
@@ -259,25 +303,23 @@ inline float3 lumaPreservedGrading(float3 color, float saturation, float contras
     return max(warmed, float3(0.0));
 }
 
-// HDR: fixed contrast pivot in EDR space so sub-pivot tones respond to contrast != 1.
+// HDR: per-pixel luma pivot for contrast to avoid crushing shadows and black-level drift.
 inline float3 lumaPreservedGradingHDR(float3 color, float saturation, float contrast, float warmth, float3 lumaWeights) {
-    float L = dot(color, lumaWeights);
-    float3 saturated = mix(float3(L), color, saturation);
+    float luma = dot(color, lumaWeights);
 
-    float Lp = (L - kHDRContrastPivot) * contrast + kHDRContrastPivot;
-    Lp = max(Lp, 0.0);
-    float3 contrasted;
-    if (L < 1e-4f) {
-        contrasted = float3(Lp);
-    } else {
-        contrasted = saturated * (Lp / L);
-    }
+    // Saturation: mix toward luma-only
+    float3 saturated = mix(float3(luma), color, saturation);
 
+    // Contrast: scale chroma around luma (not around a fixed pivot)
+    float3 contrasted = (saturated - float3(luma)) * contrast + float3(luma);
+
+    // Warmth: slight red lift / blue reduction
     float3 warmed = contrasted;
     if (abs(warmth) > 0.001) {
         warmed.r = contrasted.r * (1.0 + warmth * 0.5);
         warmed.b = contrasted.b * (1.0 - warmth * 0.5);
     }
+
     return max(warmed, float3(0.0));
 }
 
@@ -320,6 +362,8 @@ inline float3 processFrame(
     constant ColorEnhancementUniforms& enh
 ) {
     float3 finalColor;
+    const uint kHDRGradeReference = 1u;
+    bool referenceHdr = (full.hdrGradeFlags & kHDRGradeReference) != 0u;
 
     if (p.isPQ == 1u) {
         // --- PQ / HDR path ---
@@ -335,43 +379,62 @@ inline float3 processFrame(
             ? max(BT2020_TO_DISPLAYP3 * edr, float3(0.0))
             : max(BT709_TO_DISPLAYP3  * edr, float3(0.0));
 
-        // 4. User grading (luma-preserved, no hard clamp — preserves HDR headroom)
-        float3 lumaW = use2020 ? kRec2020Luma : kDisplayP3Luma;
-        float radialSat = radialSaturationScale(uv);
-        float effectiveSat = enh.saturation * full.saturation * radialSat;
-        colorP3 = lumaPreservedGradingHDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth, lumaW);
+        if (referenceHdr) {
+            // Reference: PQ + gamut + dedicated tone map (no panel sliders). TM tuned slightly
+            // punchier than the Enhanced default map + mild chroma recovery (see uchimuraToneMapReference).
+            finalColor = uchimuraToneMapReference(colorP3, p.edrHeadroom, p.maxContentNits, p.maxFrameAvgNits);
+        } else {
+            // 4. User grading (luma-preserved, no hard clamp — preserves HDR headroom)
+            float3 lumaW = use2020 ? kRec2020Luma : kDisplayP3Luma;
+            float radialSat = radialSaturationScale(uv);
+            float effectiveSat = enh.saturation * full.saturation * radialSat;
+            colorP3 = lumaPreservedGradingHDR(colorP3, effectiveSat, enh.contrast * full.contrast, enh.warmth, lumaW);
 
-        // 5. User level trims (HDR path — applied in linear light before tone mapping)
-        colorP3 *= max(full.boost, 0.0);
-        colorP3 += max(full.brightness, 0.0);
+            // 5. User level trims (HDR path — applied in linear light before tone mapping)
+            colorP3 *= max(full.boost, 0.0);
+            colorP3 += max(full.brightness, 0.0);
+            colorP3 *= max(full.pqExposure, 0.0);
 
-        // 6. Uchimura tone map against live EDR headroom (no display-specific black lift afterward).
-        colorP3 = uchimuraToneMap(colorP3, p.edrHeadroom);
+            // 6. Uchimura tone map against live EDR headroom (no display-specific black lift afterward).
+            colorP3 = uchimuraToneMap(colorP3, p.edrHeadroom, p.maxContentNits, p.maxFrameAvgNits);
 
-        // 7. Exposure trim — applied after tone mapping so the slider has a visible effect.
-        colorP3 *= max(full.pqExposure, 0.0);
-
-        finalColor = colorP3;
+            finalColor = colorP3;
+        }
 
     } else {
-        // --- SDR path ---
-        // The drawable is bgra8Unorm_sRGB when HDR is off — it expects gamma-encoded
-        // (sRGB) values, NOT linear. The YUV decode already produces gamma-encoded RGB
-        // matching the source PC's gamma 2.2 output. Passing through directly (like the
-        // baseline/TestFlight build) avoids the double-gamma crush that made SDR too dark.
+        // --- Non-PQ path (Moonlight HDR on: Windows Advanced Color desktop, scRGB-like, etc.) ---
+        float3 colorSDR;
+        if (p.extendedScene != 0u) {
+            // Do not clamp to SDR [0,1] first — that crushes Windows HDR desktop into a milky veil.
+            // Compress extended peaks with the same Uchimura family used for luma, then allow grading.
+            colorSDR = max(rgb_raw, float3(0.0));
+            float peak = max(max(colorSDR.r, colorSDR.g), colorSDR.b);
+            peak = max(peak, 1e-5);
+            float3 chromaDir = colorSDR / peak;
+            float P = hdrUchimuraShoulderP(clamp(p.edrHeadroom, 1.25, 6.0), p.maxContentNits, p.maxFrameAvgNits);
+            float mappedPeak = uchimura(peak, P, 1.0, 0.22, 0.42, 1.18, 0.0);
+            colorSDR = chromaDir * mappedPeak;
+            colorSDR = min(colorSDR, float3(1.0));
+        } else {
+            // True SDR: gamma-encoded RGB in [0,1] after decode.
+            colorSDR = clamp(rgb_raw, 0.0, 1.0);
+        }
 
-        float3 colorSDR = clamp(rgb_raw, 0.0, 1.0);
+        if (referenceHdr) {
+            finalColor = colorSDR;
+        } else {
+            // User grading (gamma-space, matching baseline applyVisionProGrading behavior)
+            float radialSat = radialSaturationScale(uv);
+            float effectiveSat = enh.saturation * full.saturation * radialSat;
+            colorSDR = lumaPreservedGradingSDR(colorSDR, effectiveSat, enh.contrast * full.contrast, enh.warmth);
 
-        // User grading (gamma-space, matching baseline applyVisionProGrading behavior)
-        float radialSat = radialSaturationScale(uv);
-        float effectiveSat = enh.saturation * full.saturation * radialSat;
-        colorSDR = lumaPreservedGradingSDR(colorSDR, effectiveSat, enh.contrast * full.contrast, enh.warmth);
+            // User level trims (include exposure so the panel matches PQ and SDR-in-unified paths)
+            colorSDR *= max(full.boost, 0.0);
+            colorSDR += max(full.brightness, 0.0);
+            colorSDR *= max(full.pqExposure, 0.0);
 
-        // User level trims
-        colorSDR *= max(full.boost, 0.0);
-        colorSDR += max(full.brightness, 0.0);
-
-        finalColor = clamp(colorSDR, 0.0, 1.0);
+            finalColor = clamp(colorSDR, 0.0, 1.0);
+        }
     }
 
     // Safety ceiling — prevents any runaway value from blowing out the display.

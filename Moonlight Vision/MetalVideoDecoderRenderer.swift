@@ -6,6 +6,7 @@
 
 import AVFoundation
 import CoreFoundation
+import CoreMedia
 import CoreVideo
 import Foundation
 import Metal
@@ -13,6 +14,7 @@ import MetalKit
 import QuartzCore
 import UIKit
 import VideoToolbox
+import simd
 
 // MARK: - Metal Video Decoder Renderer for UIKit (Enhanced HDR 2D Mode)
 
@@ -108,9 +110,14 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
     private struct MetalCopyShaderHDRParams {
         var isPQ: UInt32
         var primariesType: UInt32
-        /// Third field matches Metal `ShaderHDRParams.edrHeadroom` (name here is arbitrary).
+        var extendedScene: UInt32 = 0
+        var reserved0: UInt32 = 0
         var hdrEdrHeadroom: Float
         var pad: Float = 0
+        var alignPad: SIMD2<Float> = .zero
+        var maxContentNits: Float = 0
+        var maxFrameAvgNits: Float = 0
+        var padHdrMeta: SIMD2<Float> = .zero
         var yuvMatrix: simd_float3x3
         var yuvOffset: simd_float3
     }
@@ -122,6 +129,7 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         var brightness: Float
         var pqExposure: Float
         var mode: Int32
+        var hdrGradeFlags: UInt32
     }
 
     private struct MetalCopyLegacySDRFrameParams {
@@ -323,15 +331,13 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         self.frameRate = frameRate
         self.videoWidth = Int(videoWidth)
         self.videoHeight = Int(videoHeight)
-        
         print("MetalVideoDecoderRenderer: Setup with format=\(videoFormat), \(videoWidth)x\(videoHeight)@\(frameRate)fps")
-        
+
         // Configure cache attributes
         let cacheAttributes: [String: Any] = [
             kCVMetalTextureCacheMaximumTextureAgeKey as String: 1,
         ]
-        
-        // Let VideoToolbox choose the best pixel format - don't force anything
+
         let textureAttributes: [String: Any] = {
             var attrs: [String: Any] = [
                 kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -487,7 +493,7 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
                 if hdrEnabled {
                     attributes[kCVPixelBufferPixelFormatTypeKey] = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
                 }
-                
+
                 VTDecompressionSessionCreate(
                     allocator: kCFAllocatorDefault,
                     formatDescription: formatDesc,
@@ -671,7 +677,11 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
         do {
             return try frameData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> CMFormatDescription in
                 var mutableBuffer = UnsafeMutableBufferPointer<UInt8>(mutating: buffer.bindMemory(to: UInt8.self))
-                return try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(mutableBuffer)
+                return try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(
+                    mutableBuffer,
+                    masteringDisplayColorVolume: masteringDisplayColorVolume,
+                    contentLightLevelInfo: contentLightLevelInfo
+                )
             }
         } catch {
             print("MetalVideoDecoderRenderer: AV1 format description creation failed: \(error)")
@@ -1112,28 +1122,46 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         }
         
         // 7. BUFFER 0: ShaderHDRParams — must match Metal struct exactly
-        // Read actual transfer function tag; only fall back to heuristic when metadata is absent.
         var isPQ = false
         if let tfVal = CVBufferCopyAttachment(pb, kCVImageBufferTransferFunctionKey, nil) as? String {
             isPQ = (tfVal == "SMPTE_ST_2084_PQ")
-        } else if hdrEnabled {
-            isPQ = uikitPixelFormatIs10Bit(pixelFormat)
+        }
+        if !isPQ, let fd = formatDesc,
+           let tfAny = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction) {
+            if let s = tfAny as? String {
+                isPQ = (s == "SMPTE_ST_2084_PQ")
+            } else if CFGetTypeID(tfAny) == CFStringGetTypeID() {
+                isPQ = CFEqual(tfAny as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
+            }
         }
 
+        var primariesFromAttachment = false
         var primariesType: UInt32 = 0  // 0=709, 1=2020, 2=SMPTE-C
         if let primVal = CVBufferCopyAttachment(pb, kCVImageBufferColorPrimariesKey, nil) as? String {
+            primariesFromAttachment = true
             if primVal == "ITU_R_2020"  { primariesType = 1 }
             else if primVal == "SMPTE_C" { primariesType = 2 }
         } else {
-            primariesType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat)) ? 1 : 0
+            primariesType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat) && isPQ) ? 1 : 0
         }
 
+        var matrixFromAttachment = false
         var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
         if let mtxVal = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String {
+            matrixFromAttachment = true
             if mtxVal == "ITU_R_2020"   { matrixType = 1 }
             else if mtxVal == "ITU_R_601_4" { matrixType = 2 }
         } else {
-            matrixType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat)) ? 1 : 0
+            matrixType = (hdrEnabled && uikitPixelFormatIs10Bit(pixelFormat) && isPQ) ? 1 : 0
+        }
+
+        if isPQ && hdrEnabled && !matrixFromAttachment && !primariesFromAttachment {
+            isPQ = false
+            matrixType = 0
+            primariesType = 0
+        }
+        if isPQ && primariesFromAttachment && matrixFromAttachment && primariesType == 0 && matrixType == 0 {
+            isPQ = false
         }
 
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
@@ -1148,12 +1176,22 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             #endif
         }()
 
+        let referenceHDR = UserDefaults.standard.bool(forKey: "hdrReferenceMode")
+
         if hdrEnabled {
             let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
+            let extendedScene: UInt32 = (hdrEnabled && !isPQ) ? 1 : 0
             var frameParams = MetalCopyShaderHDRParams(
                 isPQ: isPQ ? 1 : 0,
                 primariesType: primariesType,
+                extendedScene: extendedScene,
+                reserved0: 0,
                 hdrEdrHeadroom: edrHeadroom,
+                pad: 0,
+                alignPad: .zero,
+                maxContentNits: Float(hdrMetadata.maxContentLightLevel),
+                maxFrameAvgNits: Float(hdrMetadata.maxFrameAverageLightLevel),
+                padHdrMeta: .zero,
                 yuvMatrix: yuvMatrix,
                 yuvOffset: yuvOffset
             )
@@ -1165,7 +1203,8 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
                 saturation: hdrSaturation,
                 brightness: 0.0,
                 pqExposure: hdrPqExposure,
-                mode: 0
+                mode: 0,
+                hdrGradeFlags: referenceHDR ? 1 : 0
             )
             renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<MetalCopyFullHDRParams>.size, index: 1)
         } else {
@@ -1193,8 +1232,8 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         }
 
         // BUFFER 2: ColorEnhancementUniforms — hdrSaturation / hdrContrast from properties
-        let sat = hdrEnabled ? max(hdrSaturation, 0.1) : 1.0
-        let con = hdrEnabled ? max(hdrContrast, 0.1) : 1.0
+        let sat = hdrEnabled ? (referenceHDR ? 1.0 : max(hdrSaturation, 0.1)) : 1.0
+        let con = hdrEnabled ? (referenceHDR ? 1.0 : max(hdrContrast, 0.1)) : 1.0
         var enh = MetalCopyColorEnhancementUniforms(saturation: sat, contrast: con, warmth: 0.0, padding1: 0)
         renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<MetalCopyColorEnhancementUniforms>.size, index: 2)
         

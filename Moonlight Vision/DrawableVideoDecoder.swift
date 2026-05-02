@@ -31,6 +31,8 @@ struct HDRParams {
     var brightness: Float
     var pqExposure: Float  // PQ-only exposure trim; 1.0 = neutral
     var mode: Int32
+    /// Bit 0 (`1`): Reference HDR — minimal client grading (PQ + gamut + tone map only). See `Shaders.metal` `FullHDRParams.hdrGradeFlags`.
+    var hdrGradeFlags: UInt32 = 0
 }
 
 private struct ColorEnhancementUniforms {
@@ -43,12 +45,19 @@ private struct ColorEnhancementUniforms {
 // Must match ShaderHDRParams in Shaders.metal exactly (field order + alignment).
 // Metal float3x3 is stored as 3 × float4 columns (48 bytes); float3 is 16 bytes (padded).
 private struct ShaderHDRParams {
-    var isPQ:          UInt32          // 1 = PQ/HDR path, 0 = SDR path
-    var primariesType: UInt32          // 0=709/P3, 1=2020, 2=SMPTE-C (gamut selector)
-    var edrHeadroom:   Float           // Tone map ceiling (2.0 on visionOS)
-    var pad:           Float = 0       // Alignment padding
-    var yuvMatrix:     simd_float3x3   // Precomputed YUV→RGB matrix (CPU-selected)
-    var yuvOffset:     simd_float3     // Subtract before matrix multiply
+    var isPQ:           UInt32         // 1 = PQ/HDR path, 0 = SDR / extended
+    var primariesType: UInt32         // 0=709/P3, 1=2020, 2=SMPTE-C (gamut selector)
+    var extendedScene: UInt32        // 1 = Moonlight HDR + non-PQ (matches `Shaders.metal` ShaderHDRParams.extendedScene)
+    var reserved0:      UInt32 = 0
+    var edrHeadroom:    Float          // Tone map ceiling (2.0 on visionOS)
+    var pad:            Float = 0
+    var alignPad:       SIMD2<Float> = .zero
+    /// Sunshine maxCLL / maxFALL (nits); 0 = omit CLL-driven shoulder (see `Shaders.metal` hdrUchimuraShoulderP).
+    var maxContentNits: Float = 0
+    var maxFrameAvgNits: Float = 0
+    var padHdrMeta:     SIMD2<Float> = .zero
+    var yuvMatrix:      simd_float3x3  // Precomputed YUV→RGB matrix (CPU-selected)
+    var yuvOffset:      simd_float3    // Subtract before matrix multiply
 }
 
 // Build the YUV→RGB matrix and offset for the given format on the CPU.
@@ -121,6 +130,7 @@ private struct ShaderFullHDRParams {
     var brightness:  Float
     var pqExposure:  Float
     var mode:        Int32
+    var hdrGradeFlags: UInt32
 }
 
 /// Buffer 0 for TestFlight SDR fragments (`copyFragmentShaderHDR_EDR` / `_HEVC_EDR`) — matches `LegacySDRFrameParams` in Shaders.metal.
@@ -316,42 +326,60 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         let pf         = CVPixelBufferGetPixelFormatType(imageBuffer)
         let planeCount = CVPixelBufferGetPlaneCount(imageBuffer)
 
-        // --- PQ Detection ---
-        // Read the actual transfer function tag from the decoded pixel buffer.
-        // Only fall back to pixel-format heuristic when metadata is missing.
-        // Never force-PQ just because HDR mode is on — that was decoding SDR
-        // content through pqToNits() and producing completely wrong output.
+        // --- PQ detection (ST.2084) ---
+        // 1) Prefer attachment on the decoded pixel buffer.
+        // 2) Else use transfer from CMVideoFormatDescription (must match AV1 sequence header — see AV1Parser tcMap).
+        //    VideoToolbox often omits kCVImageBufferTransferFunctionKey on the buffer even when the format desc is correct.
         var isPQ = false
         if let tfVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(tfVal) == CFStringGetTypeID() {
             isPQ = CFEqual(tfVal as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
-        } else if hdrEnabled {
-            isPQ = pixelFormatIs10Bit(pf)
+        }
+        if !isPQ, let fd = formatDesc,
+           let tfAny = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction) {
+            if CFGetTypeID(tfAny) == CFStringGetTypeID() {
+                isPQ = CFEqual(tfAny as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
+            }
         }
 
         // --- Primaries Detection ---
+        var primariesFromAttachment = false
         var primariesType: UInt32 = 0  // 0=709, 1=2020, 2=SMPTE-C
         if let primVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferColorPrimariesKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(primVal) == CFStringGetTypeID() {
+            primariesFromAttachment = true
             let prim = primVal as! CFString
             if      CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_2020)  { primariesType = 1 }
             else if CFEqual(prim, "SMPTE_C" as CFString)                    { primariesType = 2 }
             // else stays 0 (BT.709)
         } else {
-            // Hosts often omit primaries tags on 10‑bit SDR; do not infer BT.2020 unless HDR is on.
-            primariesType = (hdrEnabled && pixelFormatIs10Bit(pf)) ? 1 : 0
+            // Infer BT.2020 only for PQ HDR without tags; 10‑bit SDR without primaries stays 709 (avoids green cast).
+            primariesType = (hdrEnabled && pixelFormatIs10Bit(pf) && isPQ) ? 1 : 0
         }
 
         // --- Matrix Detection ---
+        var matrixFromAttachment = false
         var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
         if let mtxVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(mtxVal) == CFStringGetTypeID() {
+            matrixFromAttachment = true
             let mtx = mtxVal as! CFString
             if      CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_2020)  { matrixType = 1 }
             else if CFEqual(mtx, "ITU_R_601_4" as CFString)             { matrixType = 2 }
             // else stays 0 (BT.709)
         } else {
-            matrixType = (hdrEnabled && pixelFormatIs10Bit(pf)) ? 1 : 0
+            matrixType = (hdrEnabled && pixelFormatIs10Bit(pf) && isPQ) ? 1 : 0
+        }
+
+        // PQ tag but no colorimetry attachments is common for Windows HDR desktop in Moonlight — treat as non-PQ.
+        if isPQ && hdrEnabled && !matrixFromAttachment && !primariesFromAttachment {
+            isPQ = false
+            matrixType = 0
+            primariesType = 0
+        }
+        // PQ with explicit BT.709 primaries + 709 matrix is usually SDR-in-HDR container, not PQ code values.
+        if isPQ && primariesFromAttachment && matrixFromAttachment && primariesType == 0 && matrixType == 0 {
+            isPQ = false
         }
 
         let is10Bit    = pixelFormatIs10Bit(pf)    ? UInt32(1) : 0
@@ -381,7 +409,16 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
         if !firstFrameEmitted {
             let fmtStr = CVMetalHelpers.coreVideoPixelFormatToStr[pf] ?? "\(pf)"
-            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), isPQ=\(isPQ), fullRange=\(isFullRange==1), 10bit=\(is10Bit==1), matrix=\(matrixType), primaries=\(primariesType)")
+            let tfDesc: String = {
+                guard let fd = formatDesc,
+                      let tfAny = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction)
+                else { return "-" }
+                if let s = tfAny as? String { return s }
+                if CFGetTypeID(tfAny) == CFStringGetTypeID() { return (tfAny as! CFString) as String }
+                return "-"
+            }()
+            let cllLog = hdrEnabled ? " maxCLL=\(hdrMetadata.maxContentLightLevel) maxFALL=\(hdrMetadata.maxFrameAverageLightLevel)" : ""
+            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), isPQ=\(isPQ), tfDesc=\(tfDesc), fullRange=\(isFullRange==1), 10bit=\(is10Bit==1), matrix=\(matrixType), primaries=\(primariesType)\(cllLog)")
         }
 
         guard let drawable = try? drawableQueue?.nextDrawable() else {
@@ -486,12 +523,20 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             let is10BitBool = is10Bit == 1
             let isFullRangeBool = isFullRange == 1
             let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
+            let extendedScene: UInt32 = (hdrEnabled && !isPQ) ? 1 : 0
             var shaderHDR = ShaderHDRParams(
-                isPQ:          isPQ ? 1 : 0,
-                primariesType: primariesType,
-                edrHeadroom:   edrHeadroom,
-                yuvMatrix:     yuvMatrix,
-                yuvOffset:     yuvOffset
+                isPQ:              isPQ ? 1 : 0,
+                primariesType:     primariesType,
+                extendedScene:     extendedScene,
+                reserved0:         0,
+                edrHeadroom:       edrHeadroom,
+                pad:               0,
+                alignPad:          .zero,
+                maxContentNits:    Float(hdrMetadata.maxContentLightLevel),
+                maxFrameAvgNits:   Float(hdrMetadata.maxFrameAverageLightLevel),
+                padHdrMeta:        .zero,
+                yuvMatrix:         yuvMatrix,
+                yuvOffset:         yuvOffset
             )
             renderEncoder.setFragmentBytes(&shaderHDR, length: MemoryLayout<ShaderHDRParams>.size, index: 0)
 
@@ -501,7 +546,8 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 saturation: userParams.saturation,
                 brightness: userParams.brightness,
                 pqExposure: userParams.pqExposure,
-                mode:       userParams.mode
+                mode:       userParams.mode,
+                hdrGradeFlags: userParams.hdrGradeFlags
             )
             renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
         } else {
@@ -665,9 +711,30 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
              kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarFullRange,
              kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
             return true
+        // Studio (limited) range is fixed by the OSType. Some streams incorrectly set FullRangeVideo on the
+        // CMFormatDescription; trusting that here used full-range YUV offsets on limited buffers → lifted blacks
+        // and the milky HDR desktop look (PQ path and extended path both start from the same decode).
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10PackedBiPlanarVideoRange:
+            return false
         default:
-            // For formats not in the list, check the format description if available.
-            return (formatDesc != nil) ? CVMetalHelpers.getIsFullRangeForVideoFormat(formatDesc!) : false
+            // Match MetalVideoDecoderRenderer: unknown layouts default to studio (limited) range.
+            // Relying on CMFormatDescription FullRangeVideo has produced false positives for Moonlight HDR
+            // (washed desktop); only OSTypes in the explicit `true` branch above are treated as full range.
+            return false
         }
     }
 
@@ -874,7 +941,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                     kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
                 ]
                 
-                // Don’t force a pixel format for HDR; allow native YUV bi-planar output
+                // HDR: request 10-bit bi-planar YUV. AV1 HDR: also tag the decoder pixel pool (original fork parity).
                 var attributes: [CFString: Any] = [
                     kCVPixelBufferMetalCompatibilityKey: true,
                     kCVPixelBufferPoolMinimumBufferCountKey: 3
@@ -1024,7 +1091,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         do {
             return try frameData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> CMVideoFormatDescription in
                 var mutableBuffer = UnsafeMutableBufferPointer<UInt8>(mutating: buffer.bindMemory(to: UInt8.self))
-                let fd = try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(mutableBuffer)
+                let fd = try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(
+                    mutableBuffer,
+                    masteringDisplayColorVolume: masteringDisplayColorVolume,
+                    contentLightLevelInfo: contentLightLevelInfo
+                )
                 return fd as CMVideoFormatDescription
             }
         } catch {

@@ -851,7 +851,9 @@ struct _FlatDisplayStreamView: View {
                         }
                         Attachment(id: "hdrPanel") {
                             if showHDRPanel {
-                                HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel)
+                                HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel, onLiveUpdate: {
+                                    updateHDRParamsFromPanel()
+                                })
                                     .transition(.identity)
                             } else {
                                 Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
@@ -1055,6 +1057,7 @@ struct _FlatDisplayStreamView: View {
             .onChange(of: hdrPanelSettings.contrast)    { _, _ in updateHDRParamsFromPanel() }
             .onChange(of: hdrPanelSettings.saturation)  { _, _ in updateHDRParamsFromPanel() }
             .onChange(of: hdrPanelSettings.pqExposure)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.referenceHDR) { _, _ in updateHDRParamsFromPanel() }
             .onReceive(NotificationCenter.default.publisher(for: .resumeStreamFromMenu)) { _ in
                 handleResume()
             }
@@ -1803,6 +1806,7 @@ struct _FlatDisplayStreamView: View {
             }
         }
         params.pqExposure = hdrPanelSettings.pqExposure
+        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
         
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
@@ -1816,6 +1820,7 @@ struct _FlatDisplayStreamView: View {
         params.saturation  = hdrPanelSettings.saturation
         params.pqExposure  = hdrPanelSettings.pqExposure
         params.brightness = 0.0
+        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
     }
 

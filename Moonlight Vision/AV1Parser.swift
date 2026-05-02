@@ -103,7 +103,13 @@ let MC_ICTCP = 14
 
 /// Create a CMVideo/CMFormatDescription for AV1 from concatenated OBUs,
 /// building and attaching an `av1C` payload into the SampleDescriptionExtensionAtoms.
-public func CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(_ obuData: UnsafeMutableBufferPointer<UInt8>) throws -> CMFormatDescription {
+/// Optional `masteringDisplayColorVolume` / `contentLightLevelInfo` are ST 2086 / CLL payloads from Sunshine
+/// (`LiGetHdrMetadata` → `HDRParsingUtils`), matching `CMVideoFormatDescriptionCreateFromHEVCParameterSets` extensions.
+public func CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(
+    _ obuData: UnsafeMutableBufferPointer<UInt8>,
+    masteringDisplayColorVolume: Data? = nil,
+    contentLightLevelInfo: Data? = nil
+) throws -> CMFormatDescription {
     guard let seqRange = findSequenceHeaderOBURange(in: obuData) else {
         throw AV1FormatDescriptionError.sequenceHeaderNotFound
     }
@@ -140,12 +146,17 @@ public func CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(_ obu
         CP_BT_2020 : kCVImageBufferColorPrimaries_ITU_R_2020,
         CP_BT_601 : kCVImageBufferColorPrimaries_DCI_P3,
     ]
+    // ISO/IEC 23091-4 / AV1 color_config.transfer_characteristics. PQ (16) and HLG (18) must be present
+    // or CMVideoFormatDescription defaults to 709 transfer and VideoToolbox + the client mis-handle HDR.
     let tcMap: [Int: CFString] = [
-        TC_BT_709 : kCVImageBufferTransferFunction_ITU_R_709_2,
-        TC_BT_2020_10_BIT : kCVImageBufferTransferFunction_ITU_R_2020,
-        TC_BT_2020_12_BIT : kCVImageBufferTransferFunction_ITU_R_2020,
-        TC_BT_601 : kCVImageBufferTransferFunction_sRGB,
-        TC_SRGB : kCVImageBufferTransferFunction_sRGB,
+        TC_BT_709: kCVImageBufferTransferFunction_ITU_R_709_2,
+        TC_BT_2020_10_BIT: kCVImageBufferTransferFunction_ITU_R_2020,
+        TC_BT_2020_12_BIT: kCVImageBufferTransferFunction_ITU_R_2020,
+        TC_BT_601: kCVImageBufferTransferFunction_sRGB,
+        TC_SRGB: kCVImageBufferTransferFunction_sRGB,
+        TC_LINEAR: kCVImageBufferTransferFunction_Linear,
+        TC_SMPTE_2084: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+        TC_HLG: kCVImageBufferTransferFunction_ITU_R_2100_HLG,
     ]
     let mMap: [Int: CFString] = [
         MC_BT_709 : kCVImageBufferYCbCrMatrix_ITU_R_709_2,
@@ -165,6 +176,12 @@ public func CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(_ obu
     extensions[kCMFormatDescriptionExtension_Depth] = (seqInfo.bitsPerComponent * 3) as NSNumber
     extensions[kCMFormatDescriptionExtension_FormatName] = "av01" as NSString
     extensions[kCMFormatDescriptionExtension_FullRangeVideo] = seqInfo.isFullRange as NSNumber
+    if let masteringDisplayColorVolume {
+        extensions[kCMFormatDescriptionExtension_MasteringDisplayColorVolume as NSString] = masteringDisplayColorVolume as NSData
+    }
+    if let contentLightLevelInfo {
+        extensions[kCMFormatDescriptionExtension_ContentLightLevelInfo as NSString] = contentLightLevelInfo as NSData
+    }
     extensions[kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms] = atomsDict as CFDictionary
 
     let status = CMVideoFormatDescriptionCreate(

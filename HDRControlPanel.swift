@@ -11,6 +11,8 @@ import SwiftUI
 struct HDRControlPanel: View {
     @ObservedObject var settings: HDRSettings
     @Binding var isPresented: Bool
+    /// Pushed on every slider tick from this panel (RealityKit attachments do not always propagate parent `onChange`).
+    var onLiveUpdate: (() -> Void)? = nil
 
     private let brandNavy   = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
@@ -66,6 +68,24 @@ struct HDRControlPanel: View {
 
             dividerLine
 
+            VStack(alignment: .leading, spacing: 12) {
+                sectionLabel("Accuracy")
+                Toggle(isOn: $settings.referenceHDR) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Reference HDR")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.white)
+                        Text("PQ → gamut → tone map with a fixed, mild punch preset (no brightness/sat/contrast sliders).")
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.45))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(brandOrange)
+            }
+
+            dividerLine
+
             // Reset
             HStack {
                 Spacer()
@@ -105,10 +125,16 @@ struct HDRControlPanel: View {
                 )
         )
         .scaleEffect(0.6)
-        .onChange(of: settings.brightness)  { _, _ in settings.save() }
-        .onChange(of: settings.contrast)    { _, _ in settings.save() }
-        .onChange(of: settings.saturation)  { _, _ in settings.save() }
-        .onChange(of: settings.pqExposure)  { _, _ in settings.save() }
+        .onChange(of: settings.brightness)  { _, _ in notifyPanelValueChanged() }
+        .onChange(of: settings.contrast)    { _, _ in notifyPanelValueChanged() }
+        .onChange(of: settings.saturation)  { _, _ in notifyPanelValueChanged() }
+        .onChange(of: settings.pqExposure)  { _, _ in notifyPanelValueChanged() }
+        .onChange(of: settings.referenceHDR) { _, _ in notifyPanelValueChanged() }
+    }
+
+    private func notifyPanelValueChanged() {
+        settings.save()
+        onLiveUpdate?()
     }
 
     private var dividerLine: some View {

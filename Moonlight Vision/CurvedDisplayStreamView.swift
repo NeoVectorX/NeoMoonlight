@@ -1022,6 +1022,7 @@ struct _CurvedDisplayStreamView: View {
             .onChange(of: hdrPanelSettings.contrast)    { _, _ in updateHDRParamsFromPanel() }
             .onChange(of: hdrPanelSettings.saturation)  { _, _ in updateHDRParamsFromPanel() }
             .onChange(of: hdrPanelSettings.pqExposure)  { _, _ in updateHDRParamsFromPanel() }
+            .onChange(of: hdrPanelSettings.referenceHDR) { _, _ in updateHDRParamsFromPanel() }
         
         return stateChangesApplied
     }
@@ -2063,7 +2064,9 @@ struct _CurvedDisplayStreamView: View {
     @ViewBuilder
     private var hdrPanelAttachment: some View {
         if showHDRPanel {
-            HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel)
+            HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel, onLiveUpdate: {
+                updateHDRParamsFromPanel()
+            })
                 .transition(.identity)
         } else {
             Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
@@ -3631,6 +3634,7 @@ struct _CurvedDisplayStreamView: View {
             }
         }
         params.pqExposure = hdrPanelSettings.pqExposure
+        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
         
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
@@ -3646,7 +3650,8 @@ struct _CurvedDisplayStreamView: View {
             saturation: viewModel.streamSettings.saturation,
             brightness: 0.0,
             pqExposure: hdrPanelSettings.pqExposure,
-            mode: hdrParams.mode
+            mode: hdrParams.mode,
+            hdrGradeFlags: hdrPanelSettings.referenceHDR ? 1 : 0
         )
         if viewModel.streamSettings.enableHdr {
             let hrBoost = hdrHeadroomBoost()
@@ -3664,6 +3669,7 @@ struct _CurvedDisplayStreamView: View {
         params.saturation  = hdrPanelSettings.saturation
         params.pqExposure  = hdrPanelSettings.pqExposure
         params.brightness  = 0.0
+        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
     }
     

@@ -32,6 +32,11 @@ class HDRSettings: ObservableObject {
         didSet { UserDefaults.standard.set(pqExposure, forKey: "hdrPqExposure") }
     }
 
+    /// Minimal client grading: PQ + gamut + one tone map (no panel boost/sat/con/radial in shader).
+    @Published var referenceHDR: Bool {
+        didSet { UserDefaults.standard.set(referenceHDR, forKey: "hdrReferenceMode") }
+    }
+
     init() {
         // Match pre-overhaul defaults (NeoMoonlight Vision): strong SDR/headset match without flat “clinical” mids.
         let defaultsBrightness: Float = 1.35
@@ -58,6 +63,7 @@ class HDRSettings: ObservableObject {
         self.contrast = contrastIn
         self.saturation = saturationIn
         self.pqExposure = UserDefaults.standard.object(forKey: "hdrPqExposure") as? Float ?? 1.0
+        self.referenceHDR = UserDefaults.standard.bool(forKey: "hdrReferenceMode")
     }
 
     func save() {
@@ -69,5 +75,6 @@ class HDRSettings: ObservableObject {
         contrast    = 1.15
         saturation  = 1.40
         pqExposure  = 1.0
+        // Intentionally leave referenceHDR unchanged — user toggles a pipeline mode, not a trim.
     }
 }
