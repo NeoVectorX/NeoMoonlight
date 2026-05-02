@@ -51,6 +51,74 @@ struct CopyVertexOut {
     float2 uv;
 };
 
+// MARK: - SDR / TestFlight-only (8798705) — buffers for `copyFragmentShaderHDR_EDR` when HDR is OFF
+// Declared before any HDR-unified code so SDR fragments never depend on ShaderHDRParams / processFrame.
+
+constant float LEGACY_SDR_REFERENCE_WHITE_NITS = 200.0;
+
+struct LegacySDRFrameParams {
+    uint presetIndex;
+    uint isPQ;
+    uint isBT2020Matrix;
+    uint isBT2020Primaries;
+};
+
+struct LegacySDRFullParams {
+    float boost;
+    float contrast;
+    float saturation;
+    float brightness;
+    int   mode;
+};
+
+inline float legacy_sdr_pq_inv(float p) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    p = clamp(p, 0.0, 1.0);
+    float n   = pow(p, 1.0 / m2);
+    float num = max(n - c1, 0.0);
+    float den = max(c2 - c3 * n, 1e-4);
+    return pow(num / den, 1.0 / m1) * 10000.0;
+}
+
+inline float3 legacy_sdr_pq_inv(float3 p) {
+    return float3(legacy_sdr_pq_inv(p.r), legacy_sdr_pq_inv(p.g), legacy_sdr_pq_inv(p.b));
+}
+
+inline float legacy_sdr_expand_y(float y) {
+    return clamp((y - 0.06256) * 1.16780, 0.0, 1.0);
+}
+
+inline float2 legacy_sdr_expand_uv(float2 uv) {
+    return (uv - float2(0.5, 0.5)) * 1.14170;
+}
+
+inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, ColorEnhancementUniforms params) {
+    if (abs(params.saturation - 1.0) < 0.001 &&
+        abs(params.contrast   - 1.0) < 0.001 &&
+        abs(params.warmth)    < 0.001) {
+        return clamp(color, 0.0, 1.0);
+    }
+    float luma = dot(color, kRec709Luma);
+    float3 saturated = mix(float3(luma), color, params.saturation);
+    float3 contrasted = (saturated - 0.5) * params.contrast + 0.5;
+    float3 warmed = contrasted;
+    if (abs(params.warmth) > 0.001) {
+        warmed.r = contrasted.r * (1.0 + params.warmth * 0.5);
+        warmed.b = contrasted.b * (1.0 - params.warmth * 0.5);
+        warmed = clamp(warmed, 0.0, 1.0);
+    }
+    return clamp(warmed, 0.0, 1.0);
+}
+
+inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, constant ColorEnhancementUniforms& paramsConst) {
+    ColorEnhancementUniforms local = paramsConst;
+    return legacy_sdr_apply_vision_pro_grading(color, local);
+}
+
 // MARK: - Gamut Conversion Matrices
 // Column-major, linear light, D65 white point. Derived from ICC chromaticity coordinates.
 
@@ -308,162 +376,45 @@ inline float3 processFrame(
     return min(finalColor, float3(20.0));
 }
 
-// MARK: - RealityKit Fragment Shaders (Curved + Flat renderers)
+// MARK: - HDR-only unified path (app HDR ON — never bound for SDR)
+
+fragment half4 copyFragmentShaderHDR_HDRUnified(
+    CopyVertexOut in [[stage_in]],
+    texture2d<float> yTex   [[texture(0)]],
+    texture2d<float> uvTex  [[texture(1)]],
+    constant ShaderHDRParams         &params [[buffer(0)]],
+    constant FullHDRParams           &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float  ySample  = yTex.sample(s, in.uv).r;
+    float2 uvSample = uvTex.sample(s, in.uv).rg;
+
+    float3 rgb = decodeYUV(ySample, uvSample, params);
+
+    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
+    return half4(half3(finalColor), 1.0h);
+}
+
+fragment half4 copyFragmentShaderHEVC_HDRUnified(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> rgbTex [[texture(0)]],
+    constant ShaderHDRParams         &params [[buffer(0)]],
+    constant FullHDRParams           &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float3 rgb = float3(rgbTex.sample(s, in.uv).rgb);
+
+    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
+    return half4(half3(finalColor), 1.0h);
+}
+
+// MARK: - SDR / TestFlight RealityKit (`8798705` — no decodeYUV / processFrame)
 
 fragment half4 copyFragmentShaderHDR_EDR(
-    CopyVertexOut in [[stage_in]],
-    texture2d<float> yTex   [[texture(0)]],
-    texture2d<float> uvTex  [[texture(1)]],
-    constant ShaderHDRParams         &params [[buffer(0)]],
-    constant FullHDRParams           &full   [[buffer(1)]],
-    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
-) {
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-
-    float  ySample  = yTex.sample(s, in.uv).r;
-    float2 uvSample = uvTex.sample(s, in.uv).rg;
-
-    float3 rgb = decodeYUV(ySample, uvSample, params);
-
-    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
-    return half4(half3(finalColor), 1.0h);
-}
-
-fragment half4 copyFragmentShaderHEVC_EDR(
-    CopyVertexOut in [[stage_in]],
-    texture2d<half> rgbTex [[texture(0)]],
-    constant ShaderHDRParams         &params [[buffer(0)]],
-    constant FullHDRParams           &full   [[buffer(1)]],
-    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
-) {
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-
-    float3 rgb = float3(rgbTex.sample(s, in.uv).rgb);
-
-    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
-    return half4(half3(finalColor), 1.0h);
-}
-
-// MARK: - UIKit Fragment Shaders (Classic renderer — with shader-based rounded corners)
-
-fragment half4 copyFragmentShaderHDR_EDR_UIKit(
-    CopyVertexOut in [[stage_in]],
-    texture2d<float> yTex   [[texture(0)]],
-    texture2d<float> uvTex  [[texture(1)]],
-    constant ShaderHDRParams         &params [[buffer(0)]],
-    constant FullHDRParams           &full   [[buffer(1)]],
-    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
-) {
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-
-    // Shader-based rounded corner clipping (UIKit renderer has no SwiftUI clipShape).
-    float2 texSize  = float2(yTex.get_width(), yTex.get_height());
-    float2 pixPos   = in.uv * texSize;
-    float2 center   = pixPos - (texSize * 0.5);
-    float  dist     = roundedRectSDF(center, texSize * 0.5, 16.0);
-    if (dist > 0.0) { discard_fragment(); }
-
-    float  ySample  = yTex.sample(s, in.uv).r;
-    float2 uvSample = uvTex.sample(s, in.uv).rg;
-
-    float3 rgb = decodeYUV(ySample, uvSample, params);
-
-    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
-    return half4(half3(finalColor), 1.0h);
-}
-
-fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
-    CopyVertexOut in [[stage_in]],
-    texture2d<half> rgbTex [[texture(0)]],
-    constant ShaderHDRParams         &params [[buffer(0)]],
-    constant FullHDRParams           &full   [[buffer(1)]],
-    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
-) {
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
-
-    // Shader-based rounded corner clipping.
-    float2 texSize = float2(rgbTex.get_width(), rgbTex.get_height());
-    float2 pixPos  = in.uv * texSize;
-    float2 center  = pixPos - (texSize * 0.5);
-    float  dist    = roundedRectSDF(center, texSize * 0.5, 16.0);
-    if (dist > 0.0) { discard_fragment(); }
-
-    float3 rgb = float3(rgbTex.sample(s, in.uv).rgb);
-
-    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
-    return half4(half3(finalColor), 1.0h);
-}
-
-// MARK: - Legacy SDR (pre–HDR overhaul / TestFlight-era shaders)
-// Used only when the app HDR toggle is OFF. Matches `8798705` YUV expand + grading path
-// so SDR looks identical to that build; HDR mode keeps the unified PQ pipeline above.
-
-constant float LEGACY_SDR_REFERENCE_WHITE_NITS = 200.0;
-
-struct LegacySDRFrameParams {
-    uint presetIndex;
-    uint isPQ;
-    uint isBT2020Matrix;
-    uint isBT2020Primaries;
-};
-
-struct LegacySDRFullParams {
-    float boost;
-    float contrast;
-    float saturation;
-    float brightness;
-    int   mode;
-};
-
-inline float legacy_sdr_pq_inv(float p) {
-    const float m1 = 0.1593017578125;
-    const float m2 = 78.84375;
-    const float c1 = 0.8359375;
-    const float c2 = 18.8515625;
-    const float c3 = 18.6875;
-    p = clamp(p, 0.0, 1.0);
-    float n   = pow(p, 1.0 / m2);
-    float num = max(n - c1, 0.0);
-    float den = max(c2 - c3 * n, 1e-4);
-    return pow(num / den, 1.0 / m1) * 10000.0;
-}
-
-inline float3 legacy_sdr_pq_inv(float3 p) {
-    return float3(legacy_sdr_pq_inv(p.r), legacy_sdr_pq_inv(p.g), legacy_sdr_pq_inv(p.b));
-}
-
-inline float legacy_sdr_expand_y(float y) {
-    return clamp((y - 0.06256) * 1.16780, 0.0, 1.0);
-}
-
-inline float2 legacy_sdr_expand_uv(float2 uv) {
-    return (uv - float2(0.5, 0.5)) * 1.14170;
-}
-
-inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, ColorEnhancementUniforms params) {
-    if (abs(params.saturation - 1.0) < 0.001 &&
-        abs(params.contrast   - 1.0) < 0.001 &&
-        abs(params.warmth)    < 0.001) {
-        return clamp(color, 0.0, 1.0);
-    }
-    float luma = dot(color, kRec709Luma);
-    float3 saturated = mix(float3(luma), color, params.saturation);
-    float3 contrasted = (saturated - 0.5) * params.contrast + 0.5;
-    float3 warmed = contrasted;
-    if (abs(params.warmth) > 0.001) {
-        warmed.r = contrasted.r * (1.0 + params.warmth * 0.5);
-        warmed.b = contrasted.b * (1.0 - params.warmth * 0.5);
-        warmed = clamp(warmed, 0.0, 1.0);
-    }
-    return clamp(warmed, 0.0, 1.0);
-}
-
-inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, constant ColorEnhancementUniforms& paramsConst) {
-    ColorEnhancementUniforms local = paramsConst;
-    return legacy_sdr_apply_vision_pro_grading(color, local);
-}
-
-fragment half4 copyFragmentShaderHDR_EDR_SDRLegacy(
     CopyVertexOut in [[stage_in]],
     texture2d<float> yTex   [[texture(0)]],
     texture2d<float> uvTex  [[texture(1)]],
@@ -508,7 +459,7 @@ fragment half4 copyFragmentShaderHDR_EDR_SDRLegacy(
     return half4(half3(finalColor), 1.0h);
 }
 
-fragment half4 copyFragmentShaderHEVC_EDR_SDRLegacy(
+fragment half4 copyFragmentShaderHEVC_EDR(
     CopyVertexOut in [[stage_in]],
     texture2d<half> rgbTex [[texture(0)]],
     constant LegacySDRFrameParams      &params [[buffer(0)]],
@@ -539,7 +490,55 @@ fragment half4 copyFragmentShaderHEVC_EDR_SDRLegacy(
     return half4(half3(finalColor), 1.0h);
 }
 
-fragment half4 copyFragmentShaderHDR_EDR_UIKit_SDRLegacy(
+// MARK: - UIKit (HDR unified vs TestFlight SDR)
+
+fragment half4 copyFragmentShaderHDR_HDRUnified_UIKit(
+    CopyVertexOut in [[stage_in]],
+    texture2d<float> yTex   [[texture(0)]],
+    texture2d<float> uvTex  [[texture(1)]],
+    constant ShaderHDRParams         &params [[buffer(0)]],
+    constant FullHDRParams           &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float2 texSize  = float2(yTex.get_width(), yTex.get_height());
+    float2 pixPos   = in.uv * texSize;
+    float2 center   = pixPos - (texSize * 0.5);
+    float  dist     = roundedRectSDF(center, texSize * 0.5, 16.0);
+    if (dist > 0.0) { discard_fragment(); }
+
+    float  ySample  = yTex.sample(s, in.uv).r;
+    float2 uvSample = uvTex.sample(s, in.uv).rg;
+
+    float3 rgb = decodeYUV(ySample, uvSample, params);
+
+    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
+    return half4(half3(finalColor), 1.0h);
+}
+
+fragment half4 copyFragmentShaderHEVC_HDRUnified_UIKit(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> rgbTex [[texture(0)]],
+    constant ShaderHDRParams         &params [[buffer(0)]],
+    constant FullHDRParams           &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms &enh   [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float2 texSize = float2(rgbTex.get_width(), rgbTex.get_height());
+    float2 pixPos  = in.uv * texSize;
+    float2 center  = pixPos - (texSize * 0.5);
+    float  dist    = roundedRectSDF(center, texSize * 0.5, 16.0);
+    if (dist > 0.0) { discard_fragment(); }
+
+    float3 rgb = float3(rgbTex.sample(s, in.uv).rgb);
+
+    float3 finalColor = processFrame(rgb, in.uv, params, full, enh);
+    return half4(half3(finalColor), 1.0h);
+}
+
+fragment half4 copyFragmentShaderHDR_EDR_UIKit(
     CopyVertexOut in [[stage_in]],
     texture2d<float> yTex   [[texture(0)]],
     texture2d<float> uvTex  [[texture(1)]],
@@ -592,7 +591,7 @@ fragment half4 copyFragmentShaderHDR_EDR_UIKit_SDRLegacy(
     return half4(half3(finalColor), half(alpha));
 }
 
-fragment half4 copyFragmentShaderHEVC_EDR_UIKit_SDRLegacy(
+fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
     CopyVertexOut in [[stage_in]],
     texture2d<half> rgbTex [[texture(0)]],
     constant LegacySDRFrameParams      &params [[buffer(0)]],

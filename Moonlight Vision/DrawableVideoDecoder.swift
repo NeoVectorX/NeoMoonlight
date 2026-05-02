@@ -123,7 +123,7 @@ private struct ShaderFullHDRParams {
     var mode:        Int32
 }
 
-/// Buffer 0 for `copyFragmentShader*_SDRLegacy` — matches `LegacySDRFrameParams` in Shaders.metal.
+/// Buffer 0 for TestFlight SDR fragments (`copyFragmentShaderHDR_EDR` / `_HEVC_EDR`) — matches `LegacySDRFrameParams` in Shaders.metal.
 private struct LegacySDRFrameParams {
     var presetIndex: UInt32 = 0
     var isPQ: UInt32
@@ -389,11 +389,12 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             return
         }
 
+        // SDR uses default TestFlight entry points; HDR uses separate Metal symbols (never shares SDR shader body).
         let fragment: String = {
             if hdrEnabled {
-                return isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+                return isBiPlanar ? "copyFragmentShaderHDR_HDRUnified" : "copyFragmentShaderHEVC_HDRUnified"
             }
-            return isBiPlanar ? "copyFragmentShaderHDR_EDR_SDRLegacy" : "copyFragmentShaderHEVC_EDR_SDRLegacy"
+            return isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
         }()
 
         if isBiPlanar {

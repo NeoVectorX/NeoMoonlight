@@ -1038,9 +1038,9 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         // 4. Setup Pipeline — HDR uses unified shader; SDR uses TestFlight-era legacy fragments.
         let fragmentName: String = {
             if hdrEnabled {
-                return isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit" : "copyFragmentShaderHEVC_EDR_UIKit"
+                return isBiPlanar ? "copyFragmentShaderHDR_HDRUnified_UIKit" : "copyFragmentShaderHEVC_HDRUnified_UIKit"
             }
-            return isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit_SDRLegacy" : "copyFragmentShaderHEVC_EDR_UIKit_SDRLegacy"
+            return isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit" : "copyFragmentShaderHEVC_EDR_UIKit"
         }()
         
         if isBiPlanar {
