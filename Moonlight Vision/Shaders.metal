@@ -344,10 +344,12 @@ inline float3 processFrame(
         // 5. User level trims (HDR path — applied in linear light before tone mapping)
         colorP3 *= max(full.boost, 0.0);
         colorP3 += max(full.brightness, 0.0);
-        colorP3 *= max(full.pqExposure, 0.0);
 
         // 6. Uchimura tone map against live EDR headroom (no display-specific black lift afterward).
         colorP3 = uchimuraToneMap(colorP3, p.edrHeadroom);
+
+        // 7. Exposure trim — applied after tone mapping so the slider has a visible effect.
+        colorP3 *= max(full.pqExposure, 0.0);
 
         finalColor = colorP3;
 
