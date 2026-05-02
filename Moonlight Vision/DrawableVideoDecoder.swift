@@ -470,14 +470,17 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0
         )
 
-        if hdrEnabled {
+        // Always compute once so first-frame logging (and HDR shader params) share the same binding.
+        let edrHeadroom: Float = {
             #if os(visionOS)
-            let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range (~100-200 nit eye brightness)
+            return 2.0
             #else
-            let rawHeadroom = UIScreen.main.currentEDRHeadroom
-            let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+            let raw = UIScreen.main.currentEDRHeadroom
+            return Float(raw > 1.0 ? raw : UIScreen.main.potentialEDRHeadroom)
             #endif
+        }()
 
+        if hdrEnabled {
             let is10BitBool = is10Bit == 1
             let isFullRangeBool = isFullRange == 1
             let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
