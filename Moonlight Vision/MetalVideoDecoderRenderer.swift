@@ -1090,8 +1090,8 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
         let isFullRangeBool: Bool = uikitPixelFormatIsFullRange(pixelFormat)
 
-        // Single binding — Swift does not always merge `let` across `#if` / `#else` for name lookup after `#endif`.
-        let edrHeadroom: Float = {
+        // Renamed to avoid shadowing `ShaderHDRParamsUIKit.edrHeadroom` (Swift can lose the outer binding after the `if`).
+        let shaderEDRHeadroom: Float = {
             #if os(visionOS)
             return 2.0
             #else
@@ -1114,7 +1114,7 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             var frameParams = ShaderHDRParamsUIKit(
                 isPQ:          isPQ ? 1 : 0,
                 primariesType: primariesType,
-                edrHeadroom:   edrHeadroom,
+                edrHeadroom:   shaderEDRHeadroom,
                 yuvMatrix:     yuvMatrix,
                 yuvOffset:     yuvOffset
             )
@@ -1171,7 +1171,7 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
 
         logCounter += 1
         if logCounter % 120 == 0 {
-            print("MetalVideoDecoderRenderer: isPQ=\(isPQ), matrix=\(matrixType), primaries=\(primariesType), edrHeadroom=\(edrHeadroom)")
+            print("MetalVideoDecoderRenderer: isPQ=\(isPQ), matrix=\(matrixType), primaries=\(primariesType), edrHeadroom=\(shaderEDRHeadroom)")
         }
 
         // BUFFER 2: ColorEnhancementUniforms — hdrSaturation / hdrContrast from properties
