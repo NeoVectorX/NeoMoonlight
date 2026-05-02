@@ -1090,12 +1090,15 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
         let isFullRangeBool: Bool = uikitPixelFormatIsFullRange(pixelFormat)
 
-        #if os(visionOS)
-        let edrHeadroom: Float = 2.0
-        #else
-        let rawHeadroom = UIScreen.main.currentEDRHeadroom
-        let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
-        #endif
+        // Single binding — Swift does not always merge `let` across `#if` / `#else` for name lookup after `#endif`.
+        let edrHeadroom: Float = {
+            #if os(visionOS)
+            return 2.0
+            #else
+            let raw = UIScreen.main.currentEDRHeadroom
+            return Float(raw > 1.0 ? raw : UIScreen.main.potentialEDRHeadroom)
+            #endif
+        }()
 
         if hdrEnabled {
             // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
