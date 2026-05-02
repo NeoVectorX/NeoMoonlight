@@ -123,6 +123,23 @@ private struct ShaderFullHDRParams {
     var mode:        Int32
 }
 
+/// Buffer 0 for `copyFragmentShader*_SDRLegacy` — matches `LegacySDRFrameParams` in Shaders.metal.
+private struct LegacySDRFrameParams {
+    var presetIndex: UInt32 = 0
+    var isPQ: UInt32
+    var isBT2020Matrix: UInt32
+    var isBT2020Primaries: UInt32
+}
+
+/// Buffer 1 for legacy SDR fragments — matches `LegacySDRFullParams` in Shaders.metal (no pqExposure).
+private struct LegacySDRFullParams {
+    var boost: Float
+    var contrast: Float
+    var saturation: Float
+    var brightness: Float
+    var mode: Int32
+}
+
 let kCVImageBufferYCbCrMatrix_ITU_R_2020 = "ITU_R_2020" as CFString
 let kCVImageBufferColorPrimaries_ITU_R_2020 = "ITU_R_2020" as CFString
 let kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ = "SMPTE_ST_2084_PQ" as CFString
@@ -372,7 +389,12 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             return
         }
 
-        let fragment: String = isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+        let fragment: String = {
+            if hdrEnabled {
+                return isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+            }
+            return isBiPlanar ? "copyFragmentShaderHDR_EDR_SDRLegacy" : "copyFragmentShaderHEVC_EDR_SDRLegacy"
+        }()
 
         if isBiPlanar {
             if copyPipelineStateYUV == nil || lastCopyFragment != fragment {
@@ -444,38 +466,57 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         // Buffer 0: ShaderHDRParams — frame signal description
         // visionOS has fixed EDR headroom (Vision Pro's micro-OLED peak capability).
         // On other platforms, query UIScreen dynamically.
-        #if os(visionOS)
-        let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range (~100-200 nit eye brightness)
-        #else
-        let rawHeadroom = UIScreen.main.currentEDRHeadroom
-        let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
-        #endif
-
-        let is10BitBool    = is10Bit    == 1
-        let isFullRangeBool = isFullRange == 1
-        let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
-        var shaderHDR = ShaderHDRParams(
-            isPQ:          isPQ ? 1 : 0,
-            primariesType: primariesType,
-            edrHeadroom:   edrHeadroom,
-            yuvMatrix:     yuvMatrix,
-            yuvOffset:     yuvOffset
-        )
-        renderEncoder.setFragmentBytes(&shaderHDR, length: MemoryLayout<ShaderHDRParams>.size, index: 0)
-
-        // Buffer 1: FullHDRParams — user grading
         let userParams = hdrSettingsProvider?() ?? HDRParams(
             boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0
         )
-        var fullParams = ShaderFullHDRParams(
-            boost:      userParams.boost,
-            contrast:   userParams.contrast,
-            saturation: userParams.saturation,
-            brightness: userParams.brightness,
-            pqExposure: userParams.pqExposure,
-            mode:       userParams.mode
-        )
-        renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
+
+        if hdrEnabled {
+            #if os(visionOS)
+            let edrHeadroom: Float = 2.0  // Vision Pro effective EDR range (~100-200 nit eye brightness)
+            #else
+            let rawHeadroom = UIScreen.main.currentEDRHeadroom
+            let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+            #endif
+
+            let is10BitBool = is10Bit == 1
+            let isFullRangeBool = isFullRange == 1
+            let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
+            var shaderHDR = ShaderHDRParams(
+                isPQ:          isPQ ? 1 : 0,
+                primariesType: primariesType,
+                edrHeadroom:   edrHeadroom,
+                yuvMatrix:     yuvMatrix,
+                yuvOffset:     yuvOffset
+            )
+            renderEncoder.setFragmentBytes(&shaderHDR, length: MemoryLayout<ShaderHDRParams>.size, index: 0)
+
+            var fullParams = ShaderFullHDRParams(
+                boost:      userParams.boost,
+                contrast:   userParams.contrast,
+                saturation: userParams.saturation,
+                brightness: userParams.brightness,
+                pqExposure: userParams.pqExposure,
+                mode:       userParams.mode
+            )
+            renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
+        } else {
+            var legacyFrame = LegacySDRFrameParams(
+                presetIndex: 0,
+                isPQ: isPQ ? 1 : 0,
+                isBT2020Matrix: matrixType == 1 ? 1 : 0,
+                isBT2020Primaries: primariesType == 1 ? 1 : 0
+            )
+            renderEncoder.setFragmentBytes(&legacyFrame, length: MemoryLayout<LegacySDRFrameParams>.size, index: 0)
+
+            var legacyFull = LegacySDRFullParams(
+                boost: userParams.boost,
+                contrast: userParams.contrast,
+                saturation: userParams.saturation,
+                brightness: userParams.brightness,
+                mode: userParams.mode
+            )
+            renderEncoder.setFragmentBytes(&legacyFull, length: MemoryLayout<LegacySDRFullParams>.size, index: 1)
+        }
 
         // Buffer 2: ColorEnhancementUniforms — warmth / per-renderer adjustments
         let satConWarm = enhancementsProvider?() ?? (1.0, 1.0, 0.0)

@@ -394,6 +394,243 @@ fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
     return half4(half3(finalColor), 1.0h);
 }
 
+// MARK: - Legacy SDR (pre–HDR overhaul / TestFlight-era shaders)
+// Used only when the app HDR toggle is OFF. Matches `8798705` YUV expand + grading path
+// so SDR looks identical to that build; HDR mode keeps the unified PQ pipeline above.
+
+constant float LEGACY_SDR_REFERENCE_WHITE_NITS = 200.0;
+
+struct LegacySDRFrameParams {
+    uint presetIndex;
+    uint isPQ;
+    uint isBT2020Matrix;
+    uint isBT2020Primaries;
+};
+
+struct LegacySDRFullParams {
+    float boost;
+    float contrast;
+    float saturation;
+    float brightness;
+    int   mode;
+};
+
+inline float legacy_sdr_pq_inv(float p) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    p = clamp(p, 0.0, 1.0);
+    float n   = pow(p, 1.0 / m2);
+    float num = max(n - c1, 0.0);
+    float den = max(c2 - c3 * n, 1e-4);
+    return pow(num / den, 1.0 / m1) * 10000.0;
+}
+
+inline float3 legacy_sdr_pq_inv(float3 p) {
+    return float3(legacy_sdr_pq_inv(p.r), legacy_sdr_pq_inv(p.g), legacy_sdr_pq_inv(p.b));
+}
+
+inline float legacy_sdr_expand_y(float y) {
+    return clamp((y - 0.06256) * 1.16780, 0.0, 1.0);
+}
+
+inline float2 legacy_sdr_expand_uv(float2 uv) {
+    return (uv - float2(0.5, 0.5)) * 1.14170;
+}
+
+inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, ColorEnhancementUniforms params) {
+    if (abs(params.saturation - 1.0) < 0.001 &&
+        abs(params.contrast   - 1.0) < 0.001 &&
+        abs(params.warmth)    < 0.001) {
+        return clamp(color, 0.0, 1.0);
+    }
+    float luma = dot(color, kRec709Luma);
+    float3 saturated = mix(float3(luma), color, params.saturation);
+    float3 contrasted = (saturated - 0.5) * params.contrast + 0.5;
+    float3 warmed = contrasted;
+    if (abs(params.warmth) > 0.001) {
+        warmed.r = contrasted.r * (1.0 + params.warmth * 0.5);
+        warmed.b = contrasted.b * (1.0 - params.warmth * 0.5);
+        warmed = clamp(warmed, 0.0, 1.0);
+    }
+    return clamp(warmed, 0.0, 1.0);
+}
+
+inline float3 legacy_sdr_apply_vision_pro_grading(float3 color, constant ColorEnhancementUniforms& paramsConst) {
+    ColorEnhancementUniforms local = paramsConst;
+    return legacy_sdr_apply_vision_pro_grading(color, local);
+}
+
+fragment half4 copyFragmentShaderHDR_EDR_SDRLegacy(
+    CopyVertexOut in [[stage_in]],
+    texture2d<float> yTex   [[texture(0)]],
+    texture2d<float> uvTex  [[texture(1)]],
+    constant LegacySDRFrameParams      &params [[buffer(0)]],
+    constant LegacySDRFullParams        &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms   &enhancements [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float  ySample  = yTex.sample(s, in.uv).r;
+    float2 uvSample = uvTex.sample(s, in.uv).rg;
+
+    float y  = legacy_sdr_expand_y(ySample);
+    float2 uv = legacy_sdr_expand_uv(uvSample);
+    float cb = uv.x;
+    float cr = uv.y;
+
+    float3 rgb_nl;
+    if (params.isBT2020Matrix == 1u) {
+        rgb_nl = float3(y + 1.4746 * cr, y - 0.16455 * cb - 0.57135 * cr, y + 1.8814 * cb);
+    } else {
+        rgb_nl = float3(y + 1.5748 * cr, y - 0.1873 * cb - 0.4681 * cr, y + 1.8556 * cb);
+    }
+
+    float3 finalColor;
+    if (params.isPQ == 1u) {
+        float3 linearNits = legacy_sdr_pq_inv(clamp(rgb_nl, 0.0, 1.0));
+        finalColor = linearNits / LEGACY_SDR_REFERENCE_WHITE_NITS;
+    } else {
+        finalColor = rgb_nl;
+    }
+
+    finalColor *= max(full.boost, 0.0);
+    finalColor += max(full.brightness, 0.0);
+
+    ColorEnhancementUniforms eff = enhancements;
+    eff.saturation = enhancements.saturation * full.saturation;
+    eff.contrast   = enhancements.contrast   * full.contrast;
+
+    finalColor = legacy_sdr_apply_vision_pro_grading(finalColor, eff);
+    finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
+    return half4(half3(finalColor), 1.0h);
+}
+
+fragment half4 copyFragmentShaderHEVC_EDR_SDRLegacy(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> rgbTex [[texture(0)]],
+    constant LegacySDRFrameParams      &params [[buffer(0)]],
+    constant LegacySDRFullParams        &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms   &enhancements [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float3 rgb_nl = float3(rgbTex.sample(s, in.uv).rgb);
+
+    float3 finalColor;
+    if (params.isPQ == 1u) {
+        float3 linearNits = legacy_sdr_pq_inv(clamp(rgb_nl, 0.0, 1.0));
+        finalColor = linearNits / LEGACY_SDR_REFERENCE_WHITE_NITS;
+    } else {
+        finalColor = rgb_nl;
+    }
+
+    finalColor *= max(full.boost, 0.0);
+    finalColor += max(full.brightness, 0.0);
+
+    ColorEnhancementUniforms eff = enhancements;
+    eff.saturation = enhancements.saturation * full.saturation;
+    eff.contrast   = enhancements.contrast   * full.contrast;
+
+    finalColor = legacy_sdr_apply_vision_pro_grading(finalColor, eff);
+    finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
+    return half4(half3(finalColor), 1.0h);
+}
+
+fragment half4 copyFragmentShaderHDR_EDR_UIKit_SDRLegacy(
+    CopyVertexOut in [[stage_in]],
+    texture2d<float> yTex   [[texture(0)]],
+    texture2d<float> uvTex  [[texture(1)]],
+    constant LegacySDRFrameParams      &params [[buffer(0)]],
+    constant LegacySDRFullParams        &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms   &enhancements [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float2 texSize   = float2(yTex.get_width(), yTex.get_height());
+    float2 pixelPos  = in.uv * texSize;
+    float2 centerPos = pixelPos - (texSize * 0.5);
+    float  cornerRadius = 16.0;
+    float  dist = roundedRectSDF(centerPos, texSize * 0.5, cornerRadius);
+    float  alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+
+    float  ySample  = yTex.sample(s, in.uv).r;
+    float2 uvSample = uvTex.sample(s, in.uv).rg;
+
+    float y  = legacy_sdr_expand_y(ySample);
+    float2 uv = legacy_sdr_expand_uv(uvSample);
+    float cb = uv.x;
+    float cr = uv.y;
+
+    float3 rgb_nl;
+    if (params.isBT2020Matrix == 1u) {
+        rgb_nl = float3(y + 1.4746 * cr, y - 0.16455 * cb - 0.57135 * cr, y + 1.8814 * cb);
+    } else {
+        rgb_nl = float3(y + 1.5748 * cr, y - 0.1873 * cb - 0.4681 * cr, y + 1.8556 * cb);
+    }
+
+    float3 finalColor;
+    if (params.isPQ == 1u) {
+        float3 linearNits = legacy_sdr_pq_inv(clamp(rgb_nl, 0.0, 1.0));
+        finalColor = linearNits / LEGACY_SDR_REFERENCE_WHITE_NITS;
+    } else {
+        finalColor = rgb_nl;
+    }
+
+    finalColor *= max(full.boost, 0.0);
+    finalColor += max(full.brightness, 0.0);
+
+    ColorEnhancementUniforms eff = enhancements;
+    eff.saturation = enhancements.saturation * full.saturation;
+    eff.contrast   = enhancements.contrast   * full.contrast;
+
+    finalColor = legacy_sdr_apply_vision_pro_grading(finalColor, eff);
+    finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
+
+    return half4(half3(finalColor), half(alpha));
+}
+
+fragment half4 copyFragmentShaderHEVC_EDR_UIKit_SDRLegacy(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> rgbTex [[texture(0)]],
+    constant LegacySDRFrameParams      &params [[buffer(0)]],
+    constant LegacySDRFullParams        &full   [[buffer(1)]],
+    constant ColorEnhancementUniforms   &enhancements [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+
+    float2 texSize   = float2(rgbTex.get_width(), rgbTex.get_height());
+    float2 pixelPos  = in.uv * texSize;
+    float2 centerPos = pixelPos - (texSize * 0.5);
+    float  cornerRadius = 16.0;
+    float  dist = roundedRectSDF(centerPos, texSize * 0.5, cornerRadius);
+    float  alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+
+    float3 rgb_nl = float3(rgbTex.sample(s, in.uv).rgb);
+
+    float3 finalColor;
+    if (params.isPQ == 1u) {
+        float3 linearNits = legacy_sdr_pq_inv(clamp(rgb_nl, 0.0, 1.0));
+        finalColor = linearNits / LEGACY_SDR_REFERENCE_WHITE_NITS;
+    } else {
+        finalColor = rgb_nl;
+    }
+
+    finalColor *= max(full.boost, 0.0);
+    finalColor += max(full.brightness, 0.0);
+
+    ColorEnhancementUniforms eff = enhancements;
+    eff.saturation = enhancements.saturation * full.saturation;
+    eff.contrast   = enhancements.contrast   * full.contrast;
+
+    finalColor = legacy_sdr_apply_vision_pro_grading(finalColor, eff);
+    finalColor = (params.isPQ == 1u) ? min(finalColor, float3(20.0)) : clamp(finalColor, 0.0, 1.0);
+
+    return half4(half3(finalColor), half(alpha));
+}
+
 // MARK: - ChromaHalo Edge Bloom Shader
 //
 // Renders the edge glow layer behind the main video mesh (Chromosphere).

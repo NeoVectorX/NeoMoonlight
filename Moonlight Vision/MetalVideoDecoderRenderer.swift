@@ -991,8 +991,13 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             isBiPlanar = (planeCount >= 2) && (cbcrFormat != .invalid)
         }
         
-        // 4. Setup Pipeline - Use UIKit-specific sharpened shaders
-        let fragmentName = isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit" : "copyFragmentShaderHEVC_EDR_UIKit"
+        // 4. Setup Pipeline — HDR uses unified shader; SDR uses TestFlight-era legacy fragments.
+        let fragmentName: String = {
+            if hdrEnabled {
+                return isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit" : "copyFragmentShaderHEVC_EDR_UIKit"
+            }
+            return isBiPlanar ? "copyFragmentShaderHDR_EDR_UIKit_SDRLegacy" : "copyFragmentShaderHEVC_EDR_UIKit_SDRLegacy"
+        }()
         
         if isBiPlanar {
             if copyPipelineStateYUV == nil || lastCopyFragment != fragmentName {
@@ -1085,51 +1090,81 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
         let isFullRangeBool: Bool = uikitPixelFormatIsFullRange(pixelFormat)
 
-        #if os(visionOS)
-        let edrHeadroom: Float = 2.0
-        #else
-        let rawHeadroom = UIScreen.main.currentEDRHeadroom
-        let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
-        #endif
+        if hdrEnabled {
+            #if os(visionOS)
+            let edrHeadroom: Float = 2.0
+            #else
+            let rawHeadroom = UIScreen.main.currentEDRHeadroom
+            let edrHeadroom = Float(rawHeadroom > 1.0 ? rawHeadroom : UIScreen.main.potentialEDRHeadroom)
+            #endif
 
-        // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
-        // Metal float3x3 = 3 × float4 columns (48 bytes); float3 = 16 bytes padded.
-        struct ShaderHDRParamsUIKit {
-            var isPQ:          UInt32
-            var primariesType: UInt32
-            var edrHeadroom:   Float
-            var pad:           Float = 0
-            var yuvMatrix:     simd_float3x3
-            var yuvOffset:     simd_float3
-        }
-        let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
-        var frameParams = ShaderHDRParamsUIKit(
-            isPQ:          isPQ ? 1 : 0,
-            primariesType: primariesType,
-            edrHeadroom:   edrHeadroom,
-            yuvMatrix:     yuvMatrix,
-            yuvOffset:     yuvOffset
-        )
-        renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<ShaderHDRParamsUIKit>.size, index: 0)
+            // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
+            struct ShaderHDRParamsUIKit {
+                var isPQ:          UInt32
+                var primariesType: UInt32
+                var edrHeadroom:   Float
+                var pad:           Float = 0
+                var yuvMatrix:     simd_float3x3
+                var yuvOffset:     simd_float3
+            }
+            let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
+            var frameParams = ShaderHDRParamsUIKit(
+                isPQ:          isPQ ? 1 : 0,
+                primariesType: primariesType,
+                edrHeadroom:   edrHeadroom,
+                yuvMatrix:     yuvMatrix,
+                yuvOffset:     yuvOffset
+            )
+            renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<ShaderHDRParamsUIKit>.size, index: 0)
 
-        // BUFFER 1: FullHDRParams — user grading (maps to FullHDRParams in Metal)
-        struct FullHDRParamsUIKit {
-            var boost:       Float
-            var contrast:    Float
-            var saturation:  Float
-            var brightness:  Float
-            var pqExposure:  Float
-            var mode:        Int32
+            struct FullHDRParamsUIKit {
+                var boost:       Float
+                var contrast:    Float
+                var saturation:  Float
+                var brightness:  Float
+                var pqExposure:  Float
+                var mode:        Int32
+            }
+            var fullParams = FullHDRParamsUIKit(
+                boost:      1.0,
+                contrast:   1.0,
+                saturation: 1.0,
+                brightness: 0.0,
+                pqExposure: 1.0,
+                mode:       0
+            )
+            renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<FullHDRParamsUIKit>.size, index: 1)
+        } else {
+            struct LegacySDRFrameParamsUIKit {
+                var presetIndex: UInt32 = 0
+                var isPQ: UInt32
+                var isBT2020Matrix: UInt32
+                var isBT2020Primaries: UInt32
+            }
+            var legacyFrame = LegacySDRFrameParamsUIKit(
+                presetIndex: 0,
+                isPQ: isPQ ? 1 : 0,
+                isBT2020Matrix: matrixType == 1 ? 1 : 0,
+                isBT2020Primaries: primariesType == 1 ? 1 : 0
+            )
+            renderEncoder.setFragmentBytes(&legacyFrame, length: MemoryLayout<LegacySDRFrameParamsUIKit>.size, index: 0)
+
+            struct LegacySDRFullParamsUIKit {
+                var boost: Float
+                var contrast: Float
+                var saturation: Float
+                var brightness: Float
+                var mode: Int32
+            }
+            var legacyFull = LegacySDRFullParamsUIKit(
+                boost: 1.0,
+                contrast: 1.0,
+                saturation: 1.0,
+                brightness: 0.0,
+                mode: 0
+            )
+            renderEncoder.setFragmentBytes(&legacyFull, length: MemoryLayout<LegacySDRFullParamsUIKit>.size, index: 1)
         }
-        var fullParams = FullHDRParamsUIKit(
-            boost:      1.0,
-            contrast:   1.0,
-            saturation: 1.0,
-            brightness: 0.0,
-            pqExposure: 1.0,
-            mode:       0
-        )
-        renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<FullHDRParamsUIKit>.size, index: 1)
 
         logCounter += 1
         if logCounter % 120 == 0 {
