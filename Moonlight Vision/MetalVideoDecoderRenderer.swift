@@ -90,6 +90,11 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
             print("MetalVideoDecoderRenderer: hdrContrast changed to \(hdrContrast)")
         }
     }
+    @objc dynamic public var hdrPqExposure: Float = 1.0 {
+        didSet {
+            print("MetalVideoDecoderRenderer: hdrPqExposure changed to \(hdrPqExposure)")
+        }
+    }
     @objc dynamic public var hdrLuminosity: Float = 1.0
     @objc dynamic public var hdrGamma: Float = 1.0
     @objc dynamic public var presetActive: Bool = false
@@ -1155,11 +1160,11 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
             renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<MetalCopyShaderHDRParams>.size, index: 0)
 
             var fullParams = MetalCopyFullHDRParams(
-                boost: 1.0,
-                contrast: 1.0,
-                saturation: 1.0,
+                boost:      hdrBrightness,
+                contrast:   hdrContrast,
+                saturation: hdrSaturation,
                 brightness: 0.0,
-                pqExposure: 1.0,
+                pqExposure: hdrPqExposure,
                 mode: 0
             )
             renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<MetalCopyFullHDRParams>.size, index: 1)
