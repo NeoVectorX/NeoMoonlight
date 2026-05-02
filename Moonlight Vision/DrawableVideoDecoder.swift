@@ -467,9 +467,10 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         // Buffer 0: ShaderHDRParams — frame signal description
         // visionOS has fixed EDR headroom (Vision Pro's micro-OLED peak capability).
         // On other platforms, query UIScreen dynamically.
-        let userParams = hdrSettingsProvider?() ?? HDRParams(
-            boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0
-        )
+        // Only use HDR slider values when HDR is actually enabled.
+        let userParams: HDRParams = hdrEnabled
+            ? (hdrSettingsProvider?() ?? HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0))
+            : HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
 
         // Always compute once so first-frame logging (and HDR shader params) share the same binding.
         let edrHeadroom: Float = {

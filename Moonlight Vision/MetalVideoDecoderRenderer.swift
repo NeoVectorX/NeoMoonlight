@@ -1188,8 +1188,8 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         }
 
         // BUFFER 2: ColorEnhancementUniforms — hdrSaturation / hdrContrast from properties
-        let sat = max(hdrSaturation, 0.1)
-        let con = max(hdrContrast, 0.1)
+        let sat = hdrEnabled ? max(hdrSaturation, 0.1) : 1.0
+        let con = hdrEnabled ? max(hdrContrast, 0.1) : 1.0
         var enh = MetalCopyColorEnhancementUniforms(saturation: sat, contrast: con, warmth: 0.0, padding1: 0)
         renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<MetalCopyColorEnhancementUniforms>.size, index: 2)
         
