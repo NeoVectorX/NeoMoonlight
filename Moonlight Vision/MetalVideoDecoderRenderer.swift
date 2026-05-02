@@ -96,7 +96,51 @@ class MetalVideoDecoderRenderer: NSObject, AnyVideoDecoderRenderer {
     @objc dynamic public var presetMode: Int32 = 0 // 0=Power Curve, 1=ACES, 2=ACES+Vibrance
     
     private var logCounter: Int = 0
-    
+
+    // Fragment buffer layouts for `draw(in:)` — must match `Shaders.metal`.
+    // Declared on the class (not inside `draw`) so local `let` names never collide with
+    // struct property names (Swift otherwise reports “Cannot find … in scope” after the `if`).
+    private struct MetalCopyShaderHDRParams {
+        var isPQ: UInt32
+        var primariesType: UInt32
+        /// Third field matches Metal `ShaderHDRParams.edrHeadroom` (name here is arbitrary).
+        var hdrEdrHeadroom: Float
+        var pad: Float = 0
+        var yuvMatrix: simd_float3x3
+        var yuvOffset: simd_float3
+    }
+
+    private struct MetalCopyFullHDRParams {
+        var boost: Float
+        var contrast: Float
+        var saturation: Float
+        var brightness: Float
+        var pqExposure: Float
+        var mode: Int32
+    }
+
+    private struct MetalCopyLegacySDRFrameParams {
+        var presetIndex: UInt32 = 0
+        var isPQ: UInt32
+        var isBT2020Matrix: UInt32
+        var isBT2020Primaries: UInt32
+    }
+
+    private struct MetalCopyLegacySDRFullParams {
+        var boost: Float
+        var contrast: Float
+        var saturation: Float
+        var brightness: Float
+        var mode: Int32
+    }
+
+    private struct MetalCopyColorEnhancementUniforms {
+        var saturation: Float
+        var contrast: Float
+        var warmth: Float
+        var padding1: Float
+    }
+
     // MARK: - Initialization
     
     @objc(initWithView:callbacks:streamAspectRatio:useFramePacing:enableHDR:)
@@ -1090,8 +1134,7 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         let is10BitBool:     Bool = uikitPixelFormatIs10Bit(pixelFormat)
         let isFullRangeBool: Bool = uikitPixelFormatIsFullRange(pixelFormat)
 
-        // Renamed to avoid shadowing `ShaderHDRParamsUIKit.edrHeadroom` (Swift can lose the outer binding after the `if`).
-        let shaderEDRHeadroom: Float = {
+        let edrHeadroom: Float = {
             #if os(visionOS)
             return 2.0
             #else
@@ -1101,85 +1144,54 @@ extension MetalVideoDecoderRenderer: MTKViewDelegate {
         }()
 
         if hdrEnabled {
-            // ShaderHDRParams layout must exactly mirror Metal struct in Shaders.metal.
-            struct ShaderHDRParamsUIKit {
-                var isPQ:          UInt32
-                var primariesType: UInt32
-                var edrHeadroom:   Float
-                var pad:           Float = 0
-                var yuvMatrix:     simd_float3x3
-                var yuvOffset:     simd_float3
-            }
             let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
-            var frameParams = ShaderHDRParamsUIKit(
-                isPQ:          isPQ ? 1 : 0,
+            var frameParams = MetalCopyShaderHDRParams(
+                isPQ: isPQ ? 1 : 0,
                 primariesType: primariesType,
-                edrHeadroom:   shaderEDRHeadroom,
-                yuvMatrix:     yuvMatrix,
-                yuvOffset:     yuvOffset
+                hdrEdrHeadroom: edrHeadroom,
+                yuvMatrix: yuvMatrix,
+                yuvOffset: yuvOffset
             )
-            renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<ShaderHDRParamsUIKit>.size, index: 0)
+            renderEncoder.setFragmentBytes(&frameParams, length: MemoryLayout<MetalCopyShaderHDRParams>.size, index: 0)
 
-            struct FullHDRParamsUIKit {
-                var boost:       Float
-                var contrast:    Float
-                var saturation:  Float
-                var brightness:  Float
-                var pqExposure:  Float
-                var mode:        Int32
-            }
-            var fullParams = FullHDRParamsUIKit(
-                boost:      1.0,
-                contrast:   1.0,
+            var fullParams = MetalCopyFullHDRParams(
+                boost: 1.0,
+                contrast: 1.0,
                 saturation: 1.0,
                 brightness: 0.0,
                 pqExposure: 1.0,
-                mode:       0
+                mode: 0
             )
-            renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<FullHDRParamsUIKit>.size, index: 1)
+            renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<MetalCopyFullHDRParams>.size, index: 1)
         } else {
-            struct LegacySDRFrameParamsUIKit {
-                var presetIndex: UInt32 = 0
-                var isPQ: UInt32
-                var isBT2020Matrix: UInt32
-                var isBT2020Primaries: UInt32
-            }
-            var legacyFrame = LegacySDRFrameParamsUIKit(
+            var legacyFrame = MetalCopyLegacySDRFrameParams(
                 presetIndex: 0,
                 isPQ: isPQ ? 1 : 0,
                 isBT2020Matrix: matrixType == 1 ? 1 : 0,
                 isBT2020Primaries: primariesType == 1 ? 1 : 0
             )
-            renderEncoder.setFragmentBytes(&legacyFrame, length: MemoryLayout<LegacySDRFrameParamsUIKit>.size, index: 0)
+            renderEncoder.setFragmentBytes(&legacyFrame, length: MemoryLayout<MetalCopyLegacySDRFrameParams>.size, index: 0)
 
-            struct LegacySDRFullParamsUIKit {
-                var boost: Float
-                var contrast: Float
-                var saturation: Float
-                var brightness: Float
-                var mode: Int32
-            }
-            var legacyFull = LegacySDRFullParamsUIKit(
+            var legacyFull = MetalCopyLegacySDRFullParams(
                 boost: 1.0,
                 contrast: 1.0,
                 saturation: 1.0,
                 brightness: 0.0,
                 mode: 0
             )
-            renderEncoder.setFragmentBytes(&legacyFull, length: MemoryLayout<LegacySDRFullParamsUIKit>.size, index: 1)
+            renderEncoder.setFragmentBytes(&legacyFull, length: MemoryLayout<MetalCopyLegacySDRFullParams>.size, index: 1)
         }
 
         logCounter += 1
         if logCounter % 120 == 0 {
-            print("MetalVideoDecoderRenderer: isPQ=\(isPQ), matrix=\(matrixType), primaries=\(primariesType), edrHeadroom=\(shaderEDRHeadroom)")
+            print("MetalVideoDecoderRenderer: isPQ=\(isPQ), matrix=\(matrixType), primaries=\(primariesType), hdr=\(hdrEnabled), edrHeadroom=\(edrHeadroom)")
         }
 
         // BUFFER 2: ColorEnhancementUniforms — hdrSaturation / hdrContrast from properties
-        struct ColorEnhancementUniformsUIKit { var saturation: Float; var contrast: Float; var warmth: Float; var padding1: Float }
         let sat = max(hdrSaturation, 0.1)
-        let con = max(hdrContrast,   0.1)
-        var enh = ColorEnhancementUniformsUIKit(saturation: sat, contrast: con, warmth: 0.0, padding1: 0)
-        renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniformsUIKit>.size, index: 2)
+        let con = max(hdrContrast, 0.1)
+        var enh = MetalCopyColorEnhancementUniforms(saturation: sat, contrast: con, warmth: 0.0, padding1: 0)
+        renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<MetalCopyColorEnhancementUniforms>.size, index: 2)
         
         // 9. Draw
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
