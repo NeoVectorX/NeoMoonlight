@@ -970,8 +970,9 @@ struct _CurvedDisplayStreamView: View {
                 self.handleWindowClose()
             }
             .onReceive(NotificationCenter.default.publisher(for: .chromaHaloColorsUpdated)) { notification in
-                // Dome / starfield reactive color (Chromaglow-only preset does not drive the purple dome)
-                guard dimLevel == 10 || dimLevel == 12 else { return }
+                // Reactive 1 (Chromosphere): keep zone payloads in sync with decoder analysis.
+                // Reactive 2 + Starfield: dome tint / particles from center samples.
+                guard dimLevel == 2 || dimLevel == 10 || dimLevel == 12 else { return }
 
                 func uiColor(_ key: String) -> UIColor? {
                     guard let v = notification.userInfo?[key] as? SIMD3<Float> else { return nil }
@@ -995,8 +996,8 @@ struct _CurvedDisplayStreamView: View {
         
         let dimChangesApplied = lifecycleApplied
             .onChange(of: dimLevel) { oldValue, newValue in
-                // Ambient analyzer: solid reactive dome + starfield only (not Chromaglow-only)
-                videoDecoder?.isReactiveDimmingEnabled = (newValue == 10 || newValue == 12)
+                // Decoder zone analyzer — include Reactive V1 (dim 2) so Chromosphere matches pre-regression cadence.
+                videoDecoder?.isReactiveDimmingEnabled = (newValue == 2 || newValue == 10 || newValue == 12)
 
                 updateChromosphereMesh()
                 updateDimmerDomesState()
@@ -4632,7 +4633,7 @@ struct _CurvedDisplayStreamView: View {
                     // Store the decoder reference for controlling reactive dimming
                     DispatchQueue.main.async {
                         self.videoDecoder = decoder
-                        decoder.isReactiveDimmingEnabled = (self.dimLevel == 10 || self.dimLevel == 12)
+                        decoder.isReactiveDimmingEnabled = (self.dimLevel == 2 || self.dimLevel == 10 || self.dimLevel == 12)
                         let reachIdx = Reactive1ChromosphereReach.clampedSavedIndex()
                         decoder.chromaHaloScale = Reactive1ChromosphereReach.haloScale(forIndex: reachIdx)
                         if self.headStorage.chromosphereHaloEntity != nil {
