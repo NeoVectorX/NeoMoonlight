@@ -475,7 +475,7 @@ struct ComputersTabView: View {
                 header
                     .padding(.horizontal, 24)
                 
-                Text("PLATO EDITION V12.0")
+                Text("PLATO EDITION V12.1")
                     .font(.custom("Fredoka-Medium", size: 14))
                     .kerning(2.0)
                     .foregroundColor(Color(red: 0.482, green: 0.502, blue: 0.863))

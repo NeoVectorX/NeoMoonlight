@@ -2654,13 +2654,7 @@ struct _CurvedDisplayStreamView: View {
             viewModel.streamSettings.uikitPreset = next
             applyCurvedUIKitPreset(next)
             presetCooldownUntil = Date().addingTimeInterval(0.3)
-            presetOverlayText = presetName(for: next)
-            presetOverlayIcon = "camera.filters"
-            showInlinePresetOverlay = true
-            presetOverlayTimer?.invalidate()
-            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                DispatchQueue.main.async { withAnimation(.easeOut(duration: 0.15)) { self.showInlinePresetOverlay = false } }
-            }
+            presentFilterPresetCenterPopup(selectedPreset: next)
             startHideTimer()
         }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
     }
@@ -3108,19 +3102,7 @@ struct _CurvedDisplayStreamView: View {
                 applyCurvedUIKitPreset(next)
                 
                 presetCooldownUntil = Date().addingTimeInterval(0.3)
-                
-                presetOverlayText = presetName(for: next)
-                presetOverlayIcon = "camera.filters"
-                showInlinePresetOverlay = true
-                
-                presetOverlayTimer?.invalidate()
-                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            self.showInlinePresetOverlay = false
-                        }
-                    }
-                }
+                presentFilterPresetCenterPopup(selectedPreset: next)
                 startHideTimer()
             }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
@@ -5863,6 +5845,43 @@ struct _CurvedDisplayStreamView: View {
         }
     }
 
+    /// Center toast for FILTER selection; if Reference HDR blocks preset grading, follows with a short hint.
+    private func presentFilterPresetCenterPopup(selectedPreset: Int32) {
+        presetOverlayText = presetName(for: selectedPreset)
+        presetOverlayIcon = "camera.filters"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        
+        let needsReferenceHdrOffHint = selectedPreset != 0
+            && viewModel.streamSettings.enableHdr
+            && hdrPanelSettings.referenceHDR
+        
+        if needsReferenceHdrOffHint {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    self.presetOverlayText = "DISABLE REFERENCE HDR TO USE FILTER PRESETS"
+                    self.presetOverlayIcon = "wand.and.stars"
+                    self.presetOverlayTimer?.invalidate()
+                    self.presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 2.1, repeats: false) { _ in
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                self.showInlinePresetOverlay = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        self.showInlinePresetOverlay = false
+                    }
+                }
+            }
+        }
+    }
+    
     private func presetName(for preset: Int32) -> String {
         switch preset {
         case 0: "FILTER: Default"

@@ -1212,13 +1212,7 @@ struct _FlatDisplayStreamView: View {
                 viewModel.streamSettings.uikitPreset = next
                 applyCurvedUIKitPreset(next)
                 presetCooldownUntil = Date().addingTimeInterval(0.3)
-                presetOverlayText = presetName(for: next)
-                presetOverlayIcon = "camera.filters"
-                showInlinePresetOverlay = true
-                presetOverlayTimer?.invalidate()
-                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
-                }
+                presentFilterPresetCenterPopup(selectedPreset: next)
                 startHideTimer()
             }
             if viewModel.streamSettings.enableHdr {
@@ -1831,6 +1825,42 @@ struct _FlatDisplayStreamView: View {
         params.brightness = 0.0
         params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
+    }
+
+    private func presentFilterPresetCenterPopup(selectedPreset: Int32) {
+        presetOverlayText = presetName(for: selectedPreset)
+        presetOverlayIcon = "camera.filters"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        
+        let needsReferenceHdrOffHint = selectedPreset != 0
+            && viewModel.streamSettings.enableHdr
+            && hdrPanelSettings.referenceHDR
+        
+        if needsReferenceHdrOffHint {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    self.presetOverlayText = "DISABLE REFERENCE HDR TO USE FILTER PRESETS"
+                    self.presetOverlayIcon = "wand.and.stars"
+                    self.presetOverlayTimer?.invalidate()
+                    self.presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 2.1, repeats: false) { _ in
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                self.showInlinePresetOverlay = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        self.showInlinePresetOverlay = false
+                    }
+                }
+            }
+        }
     }
 
     private func presetName(for preset: Int32) -> String {
