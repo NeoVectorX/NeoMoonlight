@@ -135,7 +135,7 @@ struct DimmingPickerView: View {
                             minimumHoldDuration: 0.48
                         ))
                     } else if item.dimLevel == 10 {
-                        // Reactive 2 — full solid reactive sphere (no Chromaglow).
+                        // Reactive 2 — legacy translucent tinted dome (0.85α, transparent blend), no Chromaglow; curated toolbar readability.
                         Button {
                             selectItem(item)
                         } label: {

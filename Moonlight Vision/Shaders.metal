@@ -737,6 +737,13 @@ fragment half4 chromaHaloFragment(
     // leaves normalizedDist < 1 on top/bottom rims → visible “hard shelf” vs sides).
     float dist = sqrt(bx * bx + byScaled * byScaled);
 
+    // Reactive V1 reach tiers > 1.55: slightly wider blur + softer temporal mix (reduces “muddy” rim at large scale).
+    const float kChromaHaloScaleBase = 1.55f;
+    const float kChromaHaloScaleSpan = 1.93f; // maxScale(3.48) − kChromaHaloScaleBase; sync with Reactive1ChromosphereReach haloScales.last
+    float haloReachT = saturate((haloScale - kChromaHaloScaleBase) / max(kChromaHaloScaleSpan, 1e-4f));
+    float blurReachMul   = 1.0f + haloReachT * 0.17f;
+    float temporalReachB = haloReachT * 0.055f;
+
     // Hollow center — pixels under the video mesh are transparent.
     // Slight shrink (0.88) ensures the cutout fully hides behind the video's rounded corners.
     float2 hollowCheck = max(float2(0.0), abs(videoUV - 0.5) * 2.0 - 0.88);
@@ -753,7 +760,7 @@ fragment half4 chromaHaloFragment(
     // Dynamic sample spread: pixels further from the screen sample a wider area,
     // smoothly diffusing color outward without hard bands.
     float spread  = 1.0 + dist * 6.0;
-    float blurRad = min(0.10 * spread, 0.38);
+    float blurRad = min(0.10 * spread * blurReachMul, 0.38 * blurReachMul);
 
     // Anisotropic blur: elongate blur along edges so top/bottom smear sideways and
     // left/right wings smear vertically — reads more like ambient light bleeding.
@@ -781,9 +788,9 @@ fragment half4 chromaHaloFragment(
     }
     color /= half(totalWeight);
 
-    // Saturation boost — makes colors vivid against the dark environment.
+    // Saturation boost — pushes chroma vs luma so the rim reads against passthrough (lower = truer dull sand/mud, less “orange crush”).
     float avgLuma  = dot(float3(color.rgb), float3(0.2126, 0.7152, 0.0722));
-    float satBoost = 2.0;
+    float satBoost = 1.62f;
     color.rgb = mix(half3(avgLuma), color.rgb, half(satBoost));
 
     // Soft luminance cap — prevent blown-out whites from washing out the glow.
@@ -817,7 +824,8 @@ fragment half4 chromaHaloFragment(
 
     half4 currPM            = half4(premul, a);
     half4 prevPM            = prevTex.sample(s, in.uv);
-    half4 blended           = mix(prevPM, currPM, 0.12h);
+    float frameMix          = 0.12f + temporalReachB;
+    half4 blended           = mix(prevPM, currPM, half(frameMix));
 
     half softZero           = smoothstep(half(0.0), half(0.004), blended.a);
     return half4(blended.rgb * softZero, blended.a * softZero);

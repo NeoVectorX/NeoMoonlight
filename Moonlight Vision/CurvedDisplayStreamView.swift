@@ -808,9 +808,6 @@ struct _CurvedDisplayStreamView: View {
     @State private var currentAmbientColor: UIColor = .black
     @State private var targetReactiveColor: UIColor = .black
     @State private var reactiveLerpTimer: Timer?
-    /// Reactive 2 (dim 10): smooth “dial-in” envelope on the purple dome (Digital Crown–style ramp).
-    @State private var reactiveSphereEnvelopeTimer: Timer?
-
     // ChromaHalo / Chromosphere edge bloom — Reactive 1 only (dimLevel == 2)
     @State private var chromosphereMeshEntity: ModelEntity? = nil
     @State private var chromosphereTexture: TextureResource? = nil
@@ -996,9 +993,8 @@ struct _CurvedDisplayStreamView: View {
                 updateChromosphereMesh()
                 updateDimmerDomesState()
 
-                if newValue == 10 && oldValue != 10 {
-                    beginReactiveSphereEnvelopeIntro()
-                } else if newValue != 10 {
+                // Reactive 2 uses the legacy translucent dome (no solid-sphere “dial-in” intro).
+                if oldValue == 10 || newValue == 10 {
                     cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
                 }
             }
@@ -2267,20 +2263,122 @@ struct _CurvedDisplayStreamView: View {
     private let collapsedMenuCollapseStep: Double = 0.04
     /// Wait for accordion collapse to finish before fading single icon (maxDist*0.04 + spring settle).
     private let collapsedMenuHideDelay: Double = 0.8
+    /// Reactive V1 Chromosphere washes the periphery — lift faded control chrome (~+20%).
+    private var reactiveV1ControlOpacityInactiveBoost: CGFloat { 0.1 } // 0.5 × 20% rounded for clarity vs glow
+    private var reactiveV1ControlOpacityDormantFloor: CGFloat { 0.20 } // +20 percentage points on near-zero dormant alpha
+    /// Reactive V1 reach tiers 2–4 (chromosphere scales > standard): brighten top bar/chips ~20% more vs tier 1.
+    private let reactiveV1ExpandedReachChromeMul: CGFloat = 1.2
     
     /// Pass-through for original bar (when dynamic menu is off). No animation; keeps curvedControlsBarContent compiling.
     @ViewBuilder
     private func staggeredControl<Content: View>(index: Int, @ViewBuilder content: () -> Content) -> some View {
         content()
     }
+
+    private func reactive1UsesExpandedReachChromeBoost() -> Bool {
+        dimLevel == 2 && Reactive1ChromosphereReach.clampedSavedIndex() >= 1
+    }
+
+    /// Reactive V1 (Chromosphere) or V2 (translucent dome): wash periphery → same stronger top chrome as Chromosphere tier 1.
+    private func usesReactiveAmbientControlChromeLift() -> Bool {
+        dimLevel == 2 || dimLevel == 10
+    }
+
+    /// Reactive V2 uses a translucent world-space dome (`Unlit transparent`) that can composite poorly with Attachment UI — keep bars nearer full opacity.
+    private func reactiveV2TranslucentDomeInactiveBarOpacityFloor() -> CGFloat { 0.93 }
+    private func reactiveV2TranslucentDomeDormantBarOpacityFloor() -> CGFloat { 0.55 }
+    private func reactiveV2TranslucentDomeDormantCapsuleOpacityFloor() -> CGFloat { 0.62 }
+
+    private func applyReactiveV2TopChromeFloors(barOpacity: CGFloat) -> CGFloat {
+        guard dimLevel == 10 else { return barOpacity }
+        return min(1.0, max(barOpacity, reactiveV2TranslucentDomeInactiveBarOpacityFloor()))
+    }
+
+    private func applyReactiveV2DormantBarFloor(_ opacity: CGFloat) -> CGFloat {
+        guard dimLevel == 10 else { return opacity }
+        return min(1.0, max(opacity, reactiveV2TranslucentDomeDormantBarOpacityFloor()))
+    }
+
+    private func applyReactiveV2DormantCapsuleFloor(_ opacity: CGFloat) -> CGFloat {
+        guard dimLevel == 10 else { return opacity }
+        return min(1.0, max(opacity, reactiveV2TranslucentDomeDormantCapsuleOpacityFloor()))
+    }
+
+    /// `ultraThinMaterial` capsule behind the toolbar when controls are visible (not the faded-dormant state).
+    private func topControlsUltraThinCapsuleOpacityWhenChromeVisible() -> CGFloat {
+        if hideControls {
+            return topControlsCapsuleBackgroundDormantOpacity()
+        }
+        if darkControlsMode {
+            return dimLevel == 10 ? 0.58 : 0.15
+        }
+        return dimLevel == 10 ? 0.94 : 0.7
+    }
+
+    /// Drives `.animation` when cycling Reactive V1 reach so bar opacity snaps smoothly per tier.
+    private var reactiveV1TopChromeAnimationAnchor: Int {
+        dimLevel == 2 ? Reactive1ChromosphereReach.clampedSavedIndex() : -1
+    }
+
+    /// Top bar when visible but idle (Reactive V1 / V2 peripheral wash → lift faded chrome vs default 0.5).
+    private func fadedTopControlsInactiveOpacity() -> CGFloat {
+        if darkControlsMode {
+            if usesReactiveAmbientControlChromeLift() {
+                var o = min(1, 0.12 + reactiveV1ControlOpacityInactiveBoost * (0.12 / 0.5))
+                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+                return applyReactiveV2TopChromeFloors(barOpacity: o)
+            }
+            return 0.12
+        }
+        if usesReactiveAmbientControlChromeLift() {
+            var o = min(1, 0.5 + reactiveV1ControlOpacityInactiveBoost)
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            return applyReactiveV2TopChromeFloors(barOpacity: o)
+        }
+        return 0.5
+    }
+
+    /// Top bar almost hidden (Reactive peripheral wash: dormant floor lifted; Chromosphere tiers 2–4 multiply further).
+    private func fadedTopControlsDormantOpacity() -> CGFloat {
+        if darkControlsMode {
+            if usesReactiveAmbientControlChromeLift() {
+                var o = min(1, 0.01 + reactiveV1ControlOpacityDormantFloor)
+                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+                return applyReactiveV2DormantBarFloor(o)
+            }
+            return 0.01
+        }
+        switch dimLevel {
+        case 4, 12: return 0.005
+        case 2, 10:
+            var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            return applyReactiveV2DormantBarFloor(o)
+        default: return 0.05
+        }
+    }
+
+    /// Glass pill behind icons when dormant — match bar floor so glyphs don’t flatten before the capsule.
+    private func topControlsCapsuleBackgroundDormantOpacity() -> CGFloat {
+        switch dimLevel {
+        case 4, 12: return 0.005
+        case 2, 10:
+            var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            return applyReactiveV2DormantCapsuleFloor(o)
+        default: return 0
+        }
+    }
     
     var topControlsBar: some View {
         Group {
             if viewModel.streamSettings.useCollapsedControlsMenu {
                 curvedDynamicControlsBar
-                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.05))))
+                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : fadedTopControlsInactiveOpacity()) : fadedTopControlsDormantOpacity())
                 .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
                 .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
+                .animation(Animation.easeInOut(duration: 0.35), value: reactiveV1TopChromeAnimationAnchor)
+                .animation(Animation.easeInOut(duration: 0.35), value: dimLevel)
                 .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
                 .allowsHitTesting(true)
             } else {
@@ -2327,7 +2425,7 @@ struct _CurvedDisplayStreamView: View {
                 .background {
                     Capsule()
                         .fill(.ultraThinMaterial)
-                        .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.0)))
+                        .opacity(topControlsUltraThinCapsuleOpacityWhenChromeVisible())
                 }
                 .opacity(controlsExpanded ? 1 : 0)
                 .scaleEffect(controlsExpanded ? 1 : 0.88)
@@ -3312,13 +3410,14 @@ struct _CurvedDisplayStreamView: View {
         .background {
             Capsule()
                 .fill(.ultraThinMaterial)
-                // Dynamic background opacity: different values for black modes vs reactive
-                .opacity(!hideControls ? (darkControlsMode ? 0.15 : 0.7) : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.0)))
+                .opacity(topControlsUltraThinCapsuleOpacityWhenChromeVisible())
         }
-        // Dynamic opacity floor: lower for black modes (Eclipse, Starfield), slightly higher for Reactive V2/V3
-        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : (dimLevel == 4 || dimLevel == 12 ? 0.005 : ((dimLevel == 10 || dimLevel == 2) ? 0.015 : 0.05))))
+        // Dynamic opacity floor: lower for black modes (Eclipse, Starfield); Reactive V1 gets a readability lift vs glow
+        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : fadedTopControlsInactiveOpacity()) : fadedTopControlsDormantOpacity())
         .animation(Animation.easeInOut(duration: 0.35), value: controlsHighlighted)
         .animation(Animation.easeInOut(duration: 0.35), value: hideControls)
+        .animation(Animation.easeInOut(duration: 0.35), value: reactiveV1TopChromeAnimationAnchor)
+        .animation(Animation.easeInOut(duration: 0.35), value: dimLevel)
         .sensoryFeedback(.impact(weight: .medium), trigger: controlTapFeedbackTrigger)
         .allowsHitTesting(true)
     }
@@ -3899,8 +3998,9 @@ struct _CurvedDisplayStreamView: View {
             headStorage.controlsEntity = controls
             if controls.parent !== screen { screen.addChild(controls) }
             let screenHeight = CURVED_MAX_WIDTH_METERS * screenAspect
-            // Restore controls to original 0.05 position
-            controls.position = [0.0 as Float, (screenHeight / 2.0) + Float(0.03), Float(0.05)]
+            // Reactive V2 translucent dome: pull toolbar slightly toward the viewer vs mesh sorting with the hemisphere.
+            let controlsZLocal: Float = (dimLevel == 10) ? 0.16 : 0.05
+            controls.position = [0.0 as Float, (screenHeight / 2.0) + Float(0.03), controlsZLocal]
         }
         
         if let inputEnt = attachments.entity(for: "inputOverlay") {
@@ -5024,10 +5124,10 @@ struct _CurvedDisplayStreamView: View {
         }
 
         if dimLevel == 10 {
-            // Reactive 2 — solid full-coverage reactive sphere
-            // Use .opaque for proper Z-sorting so UI icons render on top
-            var mat = UnlitMaterial(color: currentAmbientColor.withAlphaComponent(1.0))
-            mat.blending = .opaque
+            // Reactive 2 — legacy pre–Chromosphere preset: translucent tinted dome (historical Reactive V1 parity).
+            // Note: transparent domes composite differently than opaque spheres; Attachment toolbar uses stronger floors (`reactiveV2*` helpers).
+            var mat = UnlitMaterial(color: currentAmbientColor.withAlphaComponent(0.85))
+            mat.blending = .transparent(opacity: 1.0)
             return (mat, nil)
         }
         
@@ -5570,64 +5670,11 @@ struct _CurvedDisplayStreamView: View {
         moonlightMaterial = nil
     }
     
-    // MARK: - Reactive 2 sphere envelope (Crown-style dial-in)
-
-    /// Smooth ease-in-out similar to system immersive environment ramps when using the Digital Crown.
-    private func reactiveEnvelopeEaseInOut(_ t: Float) -> Float {
-        if t <= 0 { return 0 }
-        if t >= 1 { return 1 }
-        if t < 0.5 {
-            return 4 * t * t * t
-        }
-        let u = -2 * t + 2
-        return 1 - (u * u * u) / 2
-    }
-
+    /// Resets purple reactive dome transform if a prior build left non-identity envelope state.
     private func cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: Bool = true) {
-        reactiveSphereEnvelopeTimer?.invalidate()
-        reactiveSphereEnvelopeTimer = nil
         guard resetDomeVisuals, let purple = headStorage.dimmerDomePurple else { return }
         purple.scale = SIMD3<Float>(-1, 1, 1)
         purple.components.remove(OpacityComponent.self)
-    }
-
-    /// Reactive 2 only: gentle scale + opacity build so the dome “dials in” around the viewer.
-    private func beginReactiveSphereEnvelopeIntro() {
-        guard dimLevel == 10, let purple = headStorage.dimmerDomePurple else { return }
-        cancelReactiveSphereEnvelopeIntro(resetDomeVisuals: true)
-
-        let duration: CFTimeInterval = 1.75
-        /// Slightly tightened sphere at start reads like Crown immersion deepening, not a pop-in.
-        let scaleStart: Float = 0.83
-
-        purple.scale = SIMD3<Float>(-scaleStart, scaleStart, scaleStart)
-        purple.components.set(OpacityComponent(opacity: 0))
-
-        let t0 = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { timer in
-            guard let purple = self.headStorage.dimmerDomePurple, self.dimLevel == 10 else {
-                timer.invalidate()
-                self.reactiveSphereEnvelopeTimer = nil
-                return
-            }
-
-            let rawT = CGFloat((CACurrentMediaTime() - t0) / duration)
-            let clamped = min(1.0, max(0.0, rawT))
-            let eased = self.reactiveEnvelopeEaseInOut(Float(clamped))
-
-            let s = scaleStart + (1.0 - scaleStart) * eased
-            purple.scale = SIMD3<Float>(-s, s, s)
-            purple.components.set(OpacityComponent(opacity: eased))
-
-            if clamped >= 1.0 {
-                timer.invalidate()
-                self.reactiveSphereEnvelopeTimer = nil
-                purple.scale = SIMD3<Float>(-1, 1, 1)
-                purple.components.remove(OpacityComponent.self)
-            }
-        }
-        reactiveSphereEnvelopeTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
     }
 
     // MARK: - Reactive Color Lerp

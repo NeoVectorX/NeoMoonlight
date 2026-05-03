@@ -12,6 +12,7 @@ enum Reactive1ChromosphereReach {
     static let userDefaultsKey = "ambient.reactive1.reach.variant"
 
     /// Isotropic halo scale (`DrawableVideoDecoder.chromaHaloScale` / Chromosphere mesh). Index 0 matches historical default `1.55`.
+    /// If `haloScales.last` changes, update `Shaders.metal` `kChromaHaloScaleSpan` to `(last − 1.55)` so reach-tier blur ramps correctly.
     static let haloScales: [Float] = [1.55, 2.08, 2.72, 3.48]
 
     static var tierCount: Int { haloScales.count }
