@@ -8,7 +8,6 @@ struct CenterPresetPopup: View {
     var body: some View {
         let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
         let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
-        let babyBlue = Color(red: 0.72, green: 0.85, blue: 1.0)
         let radius: CGFloat = 24
         
         HStack(spacing: 12) {
@@ -41,20 +40,20 @@ struct CenterPresetPopup: View {
         .padding(.vertical, 16)
         .background(
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(brandNavy.opacity(0.92))
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
+                .fill(brandNavy.opacity(0.4))
+                .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.3), .white.opacity(0.1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
                 )
         )
-        .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 16)
         .allowsHitTesting(false)
     }
 }
