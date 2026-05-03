@@ -39,6 +39,11 @@ private enum SBSConfirmPanelMetrics {
     static func pt(_ base: CGFloat) -> CGFloat { base * scale }
 }
 
+/// Flat HDR menu is SwiftUI ornament; SBS/other center dialogs live on RK attachments `position.z ≈ 0.15`. This pushes the ornament forward in pts so perceived depth matches.
+private enum FlatHDRPanelMetrics {
+    static let ornamentForwardOffsetZPts: CGFloat = 150
+}
+
 // MARK: - Frame Mailbox (Thread-Safe Handoff) - Flat Display Version
 // Uses OSAllocatedUnfairLock for nanosecond-level access - critical for 120Hz M5 support.
 final class FlatFrameMailbox: @unchecked Sendable {
@@ -855,16 +860,6 @@ struct _FlatDisplayStreamView: View {
                                 Color.clear.frame(width: 1, height: 1)
                             }
                         }
-                        Attachment(id: "hdrPanel") {
-                            if showHDRPanel {
-                                HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel, onLiveUpdate: {
-                                    updateHDRParamsFromPanel()
-                                })
-                                    .transition(.identity)
-                            } else {
-                                Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
-                            }
-                        }
                     }
                     .frame(width: fitSize.width, height: fitSize.height)
                     
@@ -952,6 +947,17 @@ struct _FlatDisplayStreamView: View {
                         }
                     }
                 }
+                // HDR ornament centered on window + offset(z:) toward viewer to match RK dialogs (e.g. sbsConfirm at entity z ≈ 0.15), which sit visibly off the texture plane.
+                .ornament(visibility: showHDRPanel ? .visible : .hidden, attachmentAnchor: OrnamentAttachmentAnchor.scene(UnitPoint.center), contentAlignment: .center) {
+                    HDRControlPanel(
+                        settings: hdrPanelSettings,
+                        isPresented: $showHDRPanel,
+                        onLiveUpdate: { updateHDRParamsFromPanel() },
+                        attachmentLayoutScale: 1.0,
+                        dimInactiveGradingControlsWhenReferenceHDR: true
+                    )
+                    .offset(z: FlatHDRPanelMetrics.ornamentForwardOffsetZPts)
+                }
         )
         
         let withLifecycle: AnyView = AnyView(
@@ -972,7 +978,7 @@ struct _FlatDisplayStreamView: View {
                 }
         )
         
-        return withLifecycle
+        withLifecycle
             .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
                 if shouldClose && !hasPerformedTeardown {
                     DispatchQueue.main.async { triggerCloseSequence() }
@@ -1619,10 +1625,6 @@ struct _FlatDisplayStreamView: View {
             }
         }
 
-        if let hdrEnt = attachments.entity(for: "hdrPanel") {
-            screen.addChild(hdrEnt)
-            hdrEnt.position = [0, 0, 0.15]
-        }
     }
     
     private func updateAttachments(attachments: RealityViewAttachments, width: Float, height: Float) {
@@ -1690,21 +1692,6 @@ struct _FlatDisplayStreamView: View {
             }
         }
 
-        // HDR panel
-        if let hdrEnt = attachments.entity(for: "hdrPanel") {
-            if hdrEnt.parent !== screen { screen.addChild(hdrEnt) }
-            hdrEnt.position = [0, 0, 0.15]
-            if showHDRPanel {
-                let bounds = hdrEnt.visualBounds(relativeTo: screen)
-                if bounds.extents.x > 0 {
-                    let currentScaleX = max(hdrEnt.scale.x, 0.0001)
-                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                    let desiredLocalWidth: Float = 0.70
-                    let scale = desiredLocalWidth / unscaledWidth
-                    hdrEnt.scale = [scale, scale, scale]
-                }
-            }
-        }
     }
     
     private func rebindScreenMaterial() {

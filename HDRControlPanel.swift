@@ -13,6 +13,10 @@ struct HDRControlPanel: View {
     @Binding var isPresented: Bool
     /// Pushed on every slider tick from this panel (RealityKit attachments do not always propagate parent `onChange`).
     var onLiveUpdate: (() -> Void)? = nil
+    /// Curved-display attachment uses `0.6`; flat display passes `1.0` where the panel is not embedded as a shrunk attachment.
+    var attachmentLayoutScale: CGFloat = 0.6
+    /// Flat-only UX: darken and disable sliders when Reference HDR is on. Curved leaves this `false` so behavior matches the shipped curved panel.
+    var dimInactiveGradingControlsWhenReferenceHDR: Bool = false
 
     private let brandNavy   = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
@@ -57,6 +61,8 @@ struct HDRControlPanel: View {
                 }
                 HDRSlider(title: "Saturation",  value: $settings.saturation, range: 0.0...2.0, defaultValue: 1.40, icon: "paintpalette.fill",       brandOrange: brandOrange)
             }
+            .disabled(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR)
+            .opacity(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR ? 0.42 : 1)
 
             dividerLine
 
@@ -65,6 +71,8 @@ struct HDRControlPanel: View {
                 sectionLabel("Exposure")
                 HDRSlider(title: "Exposure", value: $settings.pqExposure, range: 0.5...2.0, defaultValue: 1.0, icon: "dial.medium.fill", brandOrange: brandOrange)
             }
+            .disabled(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR)
+            .opacity(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR ? 0.42 : 1)
 
             dividerLine
 
@@ -124,7 +132,7 @@ struct HDRControlPanel: View {
                     lineWidth: 1.5
                 )
         )
-        .scaleEffect(0.6)
+        .scaleEffect(attachmentLayoutScale)
         .onChange(of: settings.brightness)  { _, _ in notifyPanelValueChanged() }
         .onChange(of: settings.contrast)    { _, _ in notifyPanelValueChanged() }
         .onChange(of: settings.saturation)  { _, _ in notifyPanelValueChanged() }
