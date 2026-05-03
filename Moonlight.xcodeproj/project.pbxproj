@@ -127,6 +127,7 @@
 		DDEDDEA62ED4A2F0008A337C /* UserGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEDDEA52ED4A2F0008A337C /* UserGuideView.swift */; };
 		DDEDDEC42ED5F954008A337C /* HDRTestStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEDDEC32ED5F954008A337C /* HDRTestStreamView.swift */; };
 		DDF84E7A2EE3BE9000FACAA3 /* CurvedDisplayStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF84E792EE3BE9000FACAA3 /* CurvedDisplayStreamView.swift */; };
+		E7C001002EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */; };
 		DDF84E922EE7B1C100FACAA3 /* Quicksand-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DDF84E912EE7B1C100FACAA3 /* Quicksand-Light.ttf */; };
 		DDF84E942EE7B43800FACAA3 /* Quicksand-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DDF84E932EE7B43800FACAA3 /* Quicksand-Medium.ttf */; };
 		DDF84E962EE7C50800FACAA3 /* HDRSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF84E952EE7C50800FACAA3 /* HDRSettings.swift */; };
@@ -486,6 +487,7 @@
 		DDEDDEA52ED4A2F0008A337C /* UserGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserGuideView.swift; sourceTree = "<group>"; };
 		DDEDDEC32ED5F954008A337C /* HDRTestStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRTestStreamView.swift; sourceTree = "<group>"; };
 		DDF84E792EE3BE9000FACAA3 /* CurvedDisplayStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CurvedDisplayStreamView.swift; path = "Moonlight Vision/CurvedDisplayStreamView.swift"; sourceTree = SOURCE_ROOT; };
+		E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reactive1ChromosphereReach.swift; sourceTree = "<group>"; };
 		DDF84E912EE7B1C100FACAA3 /* Quicksand-Light.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Quicksand-Light.ttf"; sourceTree = "<group>"; };
 		DDF84E932EE7B43800FACAA3 /* Quicksand-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Quicksand-Medium.ttf"; sourceTree = "<group>"; };
 		DDF84E952EE7C50800FACAA3 /* HDRSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRSettings.swift; sourceTree = "<group>"; };
@@ -864,6 +866,7 @@
 				DD2563532F1AEC82008F8B66 /* ParticleManager.swift */,
 				DD8A202E2F16CE8B00230746 /* SplashView.swift */,
 				DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */,
+				E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */,
 				DD8A1F282F14023C00230746 /* CoopConnectingPopup.swift */,
 				DD8A1F242F11ADF900230746 /* CoopHostView.swift */,
 				DD8A1F252F11ADF900230746 /* CoopModeSelectionView.swift */,
@@ -1584,6 +1587,7 @@
 				F7A1190C2B5DDF73001E8686 /* Limelight.xcdatamodeld in Sources */,
 				F7A1190D2B5DDF73001E8686 /* AbsoluteTouchHandler.m in Sources */,
 				DD8A1FEE2F15EA7600230746 /* DimmingPickerView.swift in Sources */,
+				E7C001002EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift in Sources */,
 				F7A1190E2B5DDF73001E8686 /* RelativeTouchHandler.m in Sources */,
 				F7A1190F2B5DDF73001E8686 /* KeyboardSupport.m in Sources */,
 				F7A119102B5DDF73001E8686 /* VideoDecoderRenderer.m in Sources */,

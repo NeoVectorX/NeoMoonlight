@@ -18,6 +18,9 @@ struct DimmingPickerView: View {
     var onStarfieldLongPress: (() -> Void)? = nil
     /// When set, called when the user releases after a Starfield long-press (e.g. stop cycling).
     var onStarfieldLongPressEnd: (() -> Void)? = nil
+    /// Reactive 1 (Chromosphere): long-press advances glow reach tiers. Curved display only.
+    var onReactive1LongPress: (() -> Void)? = nil
+    var onReactive1LongPressEnd: (() -> Void)? = nil
     
     // Dimming preset items
     struct DimItem: Identifiable {
@@ -91,8 +94,8 @@ struct DimmingPickerView: View {
                             isPickerOpen: isPresented,
                             onSelect: { selectItem(item) }
                         )
-                    } else if item.dimLevel == 2 || item.dimLevel == 10 {
-                        // Reactive 1 = Chromaglow edge only; Reactive 2 = full solid reactive sphere (no Chromaglow).
+                    } else if item.dimLevel == 2, onReactive1LongPress != nil {
+                        // Reactive 1 — tap selects; hold cycles chromosphere reach (curved / Chromosphere).
                         Button {
                             selectItem(item)
                         } label: {
@@ -110,13 +113,53 @@ struct DimmingPickerView: View {
                                     Circle()
                                         .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
                                 )
-                                
+
                                 HStack(spacing: 3) {
                                     Text(item.displayName)
                                         .font(.system(size: 14, weight: .medium))
                                         .foregroundColor(isSelected(item) ? brandOrange : .white)
                                         .lineLimit(1)
-                                    Image(systemName: item.dimLevel == 2 ? "rays" : "circle.fill")
+                                    Image(systemName: "rays")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(HoldablePlainButtonStyle(
+                            onHold: {
+                                selectItem(item)
+                                onReactive1LongPress?()
+                            },
+                            onRelease: { onReactive1LongPressEnd?() },
+                            minimumHoldDuration: 0.48
+                        ))
+                    } else if item.dimLevel == 10 {
+                        // Reactive 2 — full solid reactive sphere (no Chromaglow).
+                        Button {
+                            selectItem(item)
+                        } label: {
+                            VStack(spacing: 8) {
+                                DimmingThumbnailView(
+                                    displayName: item.displayName,
+                                    dimLevel: item.dimLevel,
+                                    isPickerOpen: isPresented,
+                                    brightness: nil,
+                                    isCycling: false
+                                )
+                                .frame(height: 80)
+                                .clipShape(Circle())
+                                .overlay(
+                                    Circle()
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                )
+
+                                HStack(spacing: 3) {
+                                    Text(item.displayName)
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                        .lineLimit(1)
+                                    Image(systemName: "circle.fill")
                                         .font(.system(size: 9))
                                         .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                                 }
@@ -204,7 +247,7 @@ struct DimmingPickerView: View {
                 Image(systemName: "lightbulb.circle")
                     .font(.system(size: 10))
                     .foregroundColor(.white.opacity(0.5))
-                Text("Dimmable Preset: Long press (pinch hold) on preset to adjust dimming.")
+                Text("Long press on dimmable presets adjusts brightness; Reactive 1 cycles glow reach; Starfield cycles star distance.")
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.5))
             }

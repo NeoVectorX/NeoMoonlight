@@ -795,6 +795,8 @@ struct _CurvedDisplayStreamView: View {
     @State private var presetOverlayIcon: String = "camera.filters"
     @State private var presetOverlayTimer: Timer?
     @State private var starDistanceCycleTimer: Timer?
+    /// Reactive 1 Chromosphere reach tiers — repeats while picker button held (same pattern as Starfield star distance).
+    @State private var reactive1ReachCycleTimer: Timer?
     @State private var presetCooldownUntil: Date? = nil
     
     // Co-op invite button state
@@ -2166,6 +2168,28 @@ struct _CurvedDisplayStreamView: View {
                 onStarfieldLongPressEnd: {
                     starDistanceCycleTimer?.invalidate()
                     starDistanceCycleTimer = nil
+                },
+                onReactive1LongPress: {
+                    Task { @MainActor in
+                        reactive1ReachCycleTimer?.invalidate()
+
+                        func advanceChromosphereReach() {
+                            Reactive1ChromosphereReach.advanceWrappedAndSave()
+                            applySavedReactive1ReachToChromospherePipeline()
+                            presentReactive1ReachTierOverlay()
+                        }
+
+                        advanceChromosphereReach()
+                        reactive1ReachCycleTimer = Timer.scheduledTimer(withTimeInterval: 1.45, repeats: true) { _ in
+                            Task { @MainActor in
+                                advanceChromosphereReach()
+                            }
+                        }
+                    }
+                },
+                onReactive1LongPressEnd: {
+                    reactive1ReachCycleTimer?.invalidate()
+                    reactive1ReachCycleTimer = nil
                 }
             )
             .transition(.identity)
@@ -4511,6 +4535,11 @@ struct _CurvedDisplayStreamView: View {
                     DispatchQueue.main.async {
                         self.videoDecoder = decoder
                         decoder.isReactiveDimmingEnabled = (self.dimLevel == 10 || self.dimLevel == 12)
+                        let reachIdx = Reactive1ChromosphereReach.clampedSavedIndex()
+                        decoder.chromaHaloScale = Reactive1ChromosphereReach.haloScale(forIndex: reachIdx)
+                        if self.headStorage.chromosphereHaloEntity != nil {
+                            self.replaceChromosphereMeshWithDisplayCurve(self.curvaturePreset.value * self.curveAnimationMultiplier)
+                        }
                         self.updateChromosphereMesh()
                     }
                     
@@ -5058,6 +5087,31 @@ struct _CurvedDisplayStreamView: View {
             mat = fallback
         }
         return (mat, selectedTex)
+    }
+
+    /// Persisted Reactive 1 tier → updates Metal chroma halo + Chromosphere curved shell scale.
+    private func applySavedReactive1ReachToChromospherePipeline() {
+        let idx = Reactive1ChromosphereReach.clampedSavedIndex()
+        let scale = Reactive1ChromosphereReach.haloScale(forIndex: idx)
+        videoDecoder?.chromaHaloScale = scale
+        guard chromosphereMeshEntity != nil || headStorage.chromosphereHaloEntity != nil else { return }
+        replaceChromosphereMeshWithDisplayCurve(curvaturePreset.value * curveAnimationMultiplier)
+    }
+
+    private func presentReactive1ReachTierOverlay() {
+        let idx = Reactive1ChromosphereReach.clampedSavedIndex()
+        let tierName = Reactive1ChromosphereReach.overlayDisplayName(forIndex: idx)
+        presetOverlayText = "REACTIVE GLOW: \(tierName.uppercased())"
+        presetOverlayIcon = "rays"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { _ in
+            DispatchQueue.main.async {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    self.showInlinePresetOverlay = false
+                }
+            }
+        }
     }
 
     private func updateDimmerDomesState() {
