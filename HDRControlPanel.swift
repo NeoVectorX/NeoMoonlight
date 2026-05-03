@@ -71,15 +71,15 @@ struct HDRControlPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 sectionLabel("Accuracy")
                 Toggle(isOn: $settings.referenceHDR) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    (
                         Text("Reference HDR")
                             .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.white)
-                        Text("PQ → gamut → tone map with a fixed, mild punch preset (no brightness/sat/contrast sliders).")
+                        + Text(" – Adjustments via sliders or filters do not apply when enabled.")
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.45))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .tint(brandOrange)
             }

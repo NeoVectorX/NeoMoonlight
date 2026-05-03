@@ -21,6 +21,12 @@ final class ThreadSafeHDRSettings: @unchecked Sendable {
     }
 }
 
+/// SBS 3D confirmation card — proportional sizing (default × 0.8 = −20%).
+private enum SBSConfirmPanelMetrics {
+    static let scale: CGFloat = 0.8
+    static func pt(_ base: CGFloat) -> CGFloat { base * scale }
+}
+
 class HeadPositionStorage {
     var positionInScreenSpace: SIMD3<Float> = .zero
     var lastHeadWorldPos: SIMD3<Float> = .zero
@@ -852,6 +858,8 @@ struct _CurvedDisplayStreamView: View {
     var allowedScaleMax: Float { 8.0 }
     var cornerRadiusFraction: Float { removeRoundedCorners ? 0.0 : 0.018 }
     var swapCardWidthMeters: Float { 0.55 }
+    /// SBS confirmation card only — −20% vs swap/disconnect dialogs (matches ``SBSConfirmPanelMetrics``).
+    var sbsConfirmCardWidthMeters: Float { swapCardWidthMeters * Float(SBSConfirmPanelMetrics.scale) }
     
     var screenAspect: Float {
         if let (w, h) = correctedResolution {
@@ -1507,9 +1515,8 @@ struct _CurvedDisplayStreamView: View {
         if show3DConfirm {
             let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
             let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
-            let babyBlue = Color(red: 0.72, green: 0.85, blue: 1.0)
 
-            VStack(spacing: 24) {
+            VStack(spacing: SBSConfirmPanelMetrics.pt(24)) {
                 ZStack {
                     Circle()
                         .fill(
@@ -1519,39 +1526,39 @@ struct _CurvedDisplayStreamView: View {
                                 endPoint: .bottomTrailing
                             )
                         )
-                        .frame(width: 64, height: 64)
-                        .shadow(color: brandOrange.opacity(0.5), radius: 18, x: 0, y: 10)
+                        .frame(width: SBSConfirmPanelMetrics.pt(64), height: SBSConfirmPanelMetrics.pt(64))
+                        .shadow(color: brandOrange.opacity(0.5), radius: SBSConfirmPanelMetrics.pt(18), x: 0, y: SBSConfirmPanelMetrics.pt(10))
                     Image(systemName: "view.3d")
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(28), weight: .bold))
                         .foregroundStyle(.white)
                 }
 
-                VStack(spacing: 8) {
+                VStack(spacing: SBSConfirmPanelMetrics.pt(8)) {
                     Text("Enable SBS 3D")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(22), weight: .bold))
                         .foregroundStyle(.white)
                     Text("Use software such as ReShade + Depth3D on your host PC to utilize SBS mode.")
-                        .font(.system(size: 15, weight: .regular))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(15), weight: .regular))
                         .foregroundStyle(.white.opacity(0.75))
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, SBSConfirmPanelMetrics.pt(8))
                 }
 
-                VStack(spacing: 12) {
+                VStack(spacing: SBSConfirmPanelMetrics.pt(12)) {
                     Button {
                         show3DConfirm = false
                         videoMode = .sideBySide3D
                         updateScreenMaterial()
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: SBSConfirmPanelMetrics.pt(10)) {
                             Text("Enable SBS 3D")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: SBSConfirmPanelMetrics.pt(17), weight: .semibold))
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, SBSConfirmPanelMetrics.pt(14))
                         .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                 .fill(
                                     LinearGradient(
                                         colors: [brandOrange, brandOrange.opacity(0.85)],
@@ -1561,17 +1568,17 @@ struct _CurvedDisplayStreamView: View {
                                 )
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                 .stroke(
                                     LinearGradient(
                                         colors: [.white.opacity(0.4), .white.opacity(0.1)],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     ),
-                                    lineWidth: 1.5
+                                    lineWidth: SBSConfirmPanelMetrics.pt(1.5)
                                 )
                         )
-                        .shadow(color: brandOrange.opacity(0.5), radius: 18, x: 0, y: 10)
+                        .shadow(color: brandOrange.opacity(0.5), radius: SBSConfirmPanelMetrics.pt(18), x: 0, y: SBSConfirmPanelMetrics.pt(10))
                     }
                     .buttonStyle(.plain)
 
@@ -1579,22 +1586,22 @@ struct _CurvedDisplayStreamView: View {
                         show3DConfirm = false
                     } label: {
                         Text("Cancel")
-                            .font(.system(size: 17, weight: .medium))
+                            .font(.system(size: SBSConfirmPanelMetrics.pt(17), weight: .medium))
                             .foregroundStyle(.white.opacity(0.75))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, SBSConfirmPanelMetrics.pt(14))
                             .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                     .fill(.ultraThinMaterial)
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                             .stroke(
                                                 LinearGradient(
                                                     colors: [.white.opacity(0.15), .white.opacity(0.05)],
                                                     startPoint: .topLeading,
                                                     endPoint: .bottomTrailing
                                                 ),
-                                                lineWidth: 1
+                                                lineWidth: SBSConfirmPanelMetrics.pt(1)
                                             )
                                     )
                             )
@@ -1602,24 +1609,24 @@ struct _CurvedDisplayStreamView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(28)
+            .padding(SBSConfirmPanelMetrics.pt(28))
             .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(brandNavy.opacity(0.92))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
+                RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(24), style: .continuous)
+                    .fill(brandNavy.opacity(0.4))
+                    .shadow(color: .black.opacity(0.3), radius: SBSConfirmPanelMetrics.pt(20), x: 0, y: SBSConfirmPanelMetrics.pt(10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(24), style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [.white.opacity(0.3), .white.opacity(0.1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: SBSConfirmPanelMetrics.pt(1.5)
                     )
             )
-            .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 16)
-            .frame(width: 420)
+            .frame(width: SBSConfirmPanelMetrics.pt(420))
             .allowsHitTesting(true)
         }
     }
@@ -3756,6 +3763,9 @@ struct _CurvedDisplayStreamView: View {
                 params.saturation = Swift.min(Swift.max(params.saturation, 0.85), 1.15)
             }
         }
+        if viewModel.streamSettings.enableHdr {
+            params.mode = hdrParams.mode
+        }
         params.pqExposure = hdrPanelSettings.pqExposure
         params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
@@ -4070,7 +4080,7 @@ struct _CurvedDisplayStreamView: View {
             if bounds.extents.x > 0 {
                 let currentScaleX = max(sbsEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth = swapCardWidthMeters
+                let desiredLocalWidth = sbsConfirmCardWidthMeters
                 let scale = desiredLocalWidth / unscaledWidth
                 sbsEnt.scale = [scale, scale, scale]
             }
@@ -4319,7 +4329,7 @@ struct _CurvedDisplayStreamView: View {
                 if bounds.extents.x > 0 {
                     let currentScaleX = max(dimPickerEnt.scale.x, 0.0001)
                     let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                    let desiredLocalWidth: Float = 0.96
+                    let desiredLocalWidth = DimmingPickerView.curvedDesiredLocalWidth
                     let scale = desiredLocalWidth / unscaledWidth
                     dimPickerEnt.scale = [scale, scale, scale]
                 }
@@ -4398,7 +4408,7 @@ struct _CurvedDisplayStreamView: View {
                 if bounds.extents.x > 0 {
                     let currentScaleX = max(sbsEnt.scale.x, 0.0001)
                     let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                    let desiredLocalWidth = swapCardWidthMeters
+                    let desiredLocalWidth = sbsConfirmCardWidthMeters
                     let scale = desiredLocalWidth / unscaledWidth
                     sbsEnt.scale = [scale, scale, scale]
                 }
@@ -4578,8 +4588,14 @@ struct _CurvedDisplayStreamView: View {
                         enableHDR: self.viewModel.streamSettings.enableHdr,
                         hdrSettingsProvider: { [safeHDRSettings] in safeHDRSettings.value },
                         enhancementsProvider: {
-                            // Neutral path: enhancement buffer does not tint or multiply grading.
-                            (1.0, 1.0, 0.0)
+                            let p = self.viewModel.streamSettings.uikitPreset
+                            switch p {
+                            case 0: return (1.0, 1.0, 0.0)
+                            case 1: return (1.15, 1.0, 0.0)
+                            case 2: return (1.25, 1.0, 0.0)
+                            case 3: return (0.90, 1.05, 0.0)
+                            default: return (1.0, 1.0, 0.0)
+                            }
                         },
                         callbackToRender: { textureQueue, haloQueue, correctedResolution in
                             guard self.renderGateOpen else { return }

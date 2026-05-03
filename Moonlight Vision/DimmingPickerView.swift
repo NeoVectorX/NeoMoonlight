@@ -7,6 +7,13 @@
 
 import SwiftUI
 
+/// Baseline sizing for the lighting preset sheet; multiply with ``pt(_:)`` for uniform layout/fonts.
+private enum DimmingPickerMetrics {
+    /// 30% smaller than original design (`1 − 0.30`).
+    static let scale: CGFloat = 0.7
+    static func pt(_ base: CGFloat) -> CGFloat { base * scale }
+}
+
 struct DimmingPickerView: View {
     @Binding var dimLevel: Int
     @Binding var isPresented: Bool
@@ -58,11 +65,11 @@ struct DimmingPickerView: View {
     @State private var cyclingPresetLevel: Int? = nil
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DimmingPickerMetrics.pt(20)) {
             // Header
             HStack {
                 Text("Select Lighting Preset")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: DimmingPickerMetrics.pt(24), weight: .bold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -71,15 +78,15 @@ struct DimmingPickerView: View {
                     withAnimation { isPresented = false }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 32))
+                        .font(.system(size: DimmingPickerMetrics.pt(32)))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, DimmingPickerMetrics.pt(8))
             
             // Grid (6 columns × 2 rows)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 20) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: DimmingPickerMetrics.pt(20)) {
                 ForEach(allItems) { item in
                     if item.supportsAdjustment {
                         // Adjustable preset with long-press for brightness cycling
@@ -99,7 +106,7 @@ struct DimmingPickerView: View {
                         Button {
                             selectItem(item)
                         } label: {
-                            VStack(spacing: 8) {
+                            VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -107,20 +114,20 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
+                                .frame(height: DimmingPickerMetrics.pt(80))
                                 .clipShape(Circle())
                                 .overlay(
                                     Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                                 )
 
-                                HStack(spacing: 3) {
+                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
                                     Text(item.displayName)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                         .foregroundColor(isSelected(item) ? brandOrange : .white)
                                         .lineLimit(1)
                                     Image(systemName: "rays")
-                                        .font(.system(size: 9))
+                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
                                         .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                                 }
                             }
@@ -139,7 +146,7 @@ struct DimmingPickerView: View {
                         Button {
                             selectItem(item)
                         } label: {
-                            VStack(spacing: 8) {
+                            VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -147,20 +154,20 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
+                                .frame(height: DimmingPickerMetrics.pt(80))
                                 .clipShape(Circle())
                                 .overlay(
                                     Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                                 )
 
-                                HStack(spacing: 3) {
+                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
                                     Text(item.displayName)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                         .foregroundColor(isSelected(item) ? brandOrange : .white)
                                         .lineLimit(1)
                                     Image(systemName: "circle.fill")
-                                        .font(.system(size: 9))
+                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
                                         .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                                 }
                             }
@@ -172,7 +179,7 @@ struct DimmingPickerView: View {
                         Button {
                             selectItem(item)
                         } label: {
-                            VStack(spacing: 8) {
+                            VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -180,20 +187,20 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
+                                .frame(height: DimmingPickerMetrics.pt(80))
                                 .clipShape(Circle())
                                 .overlay(
                                     Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                                 )
                                 
-                                HStack(spacing: 3) {
+                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
                                     Text(item.displayName)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                         .foregroundColor(isSelected(item) ? brandOrange : .white)
                                         .lineLimit(1)
                                     Image(systemName: "lightbulb.circle")
-                                        .font(.system(size: 9))
+                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
                                         .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                                 }
                             }
@@ -214,7 +221,7 @@ struct DimmingPickerView: View {
                         Button {
                             selectItem(item)
                         } label: {
-                            VStack(spacing: 8) {
+                            VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -222,15 +229,15 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
+                                .frame(height: DimmingPickerMetrics.pt(80))
                                 .clipShape(Circle())
                                 .overlay(
                                     Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                                 )
                                 
                                 Text(item.displayName)
-                                    .font(.system(size: 14, weight: .medium))
+                                    .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                     .foregroundColor(isSelected(item) ? brandOrange : .white)
                                     .lineLimit(1)
                             }
@@ -240,30 +247,37 @@ struct DimmingPickerView: View {
                     }
                 }
             }
-            .frame(minHeight: 220)
+            .frame(minHeight: DimmingPickerMetrics.pt(220))
             
             // Hint for adjustable presets
-            HStack(spacing: 4) {
+            HStack(spacing: DimmingPickerMetrics.pt(4)) {
                 Image(systemName: "lightbulb.circle")
-                    .font(.system(size: 10))
+                    .font(.system(size: DimmingPickerMetrics.pt(10)))
                     .foregroundColor(.white.opacity(0.5))
                 Text("Long press on dimmable presets adjusts brightness; Reactive 1 cycles glow reach; Starfield cycles star distance.")
-                    .font(.system(size: 11))
+                    .font(.system(size: DimmingPickerMetrics.pt(11)))
                     .foregroundColor(.white.opacity(0.5))
             }
-            .padding(.top, 4)
+            .padding(.top, DimmingPickerMetrics.pt(4))
         }
-        .padding(32)
+        .padding(DimmingPickerMetrics.pt(32))
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(brandNavy.opacity(0.95))
-                .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+            RoundedRectangle(cornerRadius: DimmingPickerMetrics.pt(24), style: .continuous)
+                .fill(brandNavy.opacity(0.4))
+                .shadow(color: .black.opacity(0.3), radius: DimmingPickerMetrics.pt(20), x: 0, y: DimmingPickerMetrics.pt(10))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+            RoundedRectangle(cornerRadius: DimmingPickerMetrics.pt(24), style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.3), .white.opacity(0.1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: DimmingPickerMetrics.pt(1.5)
+                )
         )
-        .frame(width: 700)
+        .frame(width: DimmingPickerMetrics.pt(700))
     }
     
     private func isSelected(_ item: DimItem) -> Bool {
@@ -311,7 +325,7 @@ private struct AdjustableDimItemView: View {
                 onSelect()
             }
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: DimmingPickerMetrics.pt(8)) {
                 DimmingThumbnailView(
                     displayName: item.displayName,
                     dimLevel: item.dimLevel,
@@ -319,26 +333,26 @@ private struct AdjustableDimItemView: View {
                     brightness: currentBrightness,
                     isCycling: isCycling
                 )
-                .frame(height: 80)
+                .frame(height: DimmingPickerMetrics.pt(80))
                 .clipShape(Circle())
                 .overlay(
                     Circle()
-                        .stroke(isSelected ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected ? 3 : 1)
+                        .stroke(isSelected ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                 )
                 // Glow effect during cycling
-                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.8 : 0.0), radius: isCycling ? 12 : 0)
-                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.4 : 0.0), radius: isCycling ? 24 : 0)
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.8 : 0.0), radius: isCycling ? DimmingPickerMetrics.pt(12) : 0)
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.4 : 0.0), radius: isCycling ? DimmingPickerMetrics.pt(24) : 0)
                 .animation(.easeInOut(duration: 0.15), value: currentBrightness)
                 .animation(.easeOut(duration: 0.4), value: isCycling)
                 
-                HStack(spacing: 3) {
+                HStack(spacing: DimmingPickerMetrics.pt(3)) {
                     Text(item.displayName)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                         .foregroundColor(isSelected ? brandOrange : .white)
                         .lineLimit(1)
                     
                     Image(systemName: "lightbulb.circle")
-                        .font(.system(size: 9))
+                        .font(.system(size: DimmingPickerMetrics.pt(9)))
                         .foregroundColor(isSelected ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                 }
             }
@@ -417,20 +431,20 @@ private struct DimmingThumbnailView: View {
                 Image("starfield")
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 80, height: 80)
+                    .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
                     .clipShape(Circle())
             } else {
                 // Use gradient for all other presets
                 Circle()
                     .fill(gradientForPreset())
-                    .frame(width: 80, height: 80)
+                    .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
                     // Apply brightness to thumbnail opacity for adjustable presets
                     .opacity(thumbnailOpacity)
                     .overlay(
                         Group {
                             if dimLevel == 0 {
                                 Image(systemName: "slash.circle")
-                                    .font(.system(size: 40))
+                                    .font(.system(size: DimmingPickerMetrics.pt(40)))
                                     .foregroundColor(.white.opacity(0.8))
                             }
                         }
@@ -729,6 +743,11 @@ private struct DimmingThumbnailView: View {
             )
         }
     }
+}
+
+extension DimmingPickerView {
+    /// Curved-display RealityKit sizing: historically `0.96` screen fraction at 1.0 UI scale; scale with ``DimmingPickerMetrics`` so spatial size matches SwiftUI shrink.
+    static var curvedDesiredLocalWidth: Float { 0.96 * Float(DimmingPickerMetrics.scale) }
 }
 
 // MARK: - Holdable Plain Button Style (tap = native sound + select; hold = start cycle; release = stop cycle)

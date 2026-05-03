@@ -158,12 +158,19 @@ struct EnvironmentPickerView: View {
         .padding(32)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(brandNavy.opacity(0.95))
+                .fill(brandNavy.opacity(0.4))
                 .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.3), .white.opacity(0.1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
         )
         .frame(width: 700)
         .onAppear {
