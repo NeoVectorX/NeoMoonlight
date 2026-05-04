@@ -21,13 +21,10 @@ struct DimmingPickerView: View {
     @Binding var newsetLevel: Int
     @Binding var presetBrightness: [Int: Double]
     let defaultPresetBrightness: [Int: Double]
-    /// When set, long-pressing the Starfield preset calls this when hold starts (e.g. start cycling star distance). Curved display only.
-    var onStarfieldLongPress: (() -> Void)? = nil
-    /// When set, called when the user releases after a Starfield long-press (e.g. stop cycling).
-    var onStarfieldLongPressEnd: (() -> Void)? = nil
-    /// Reactive 1 (Chromosphere): long-press advances glow reach tiers. Curved display only.
-    var onReactive1LongPress: (() -> Void)? = nil
-    var onReactive1LongPressEnd: (() -> Void)? = nil
+    /// Starfield: each tap selects preset and advances star distance one step (curved display only).
+    var onStarfieldTapCycle: (() -> Void)? = nil
+    /// Reactive 1 (Chromosphere): each tap advances glow reach tier (curved display only).
+    var onReactive1TapCycle: (() -> Void)? = nil
     
     // Dimming preset items
     struct DimItem: Identifiable {
@@ -101,10 +98,11 @@ struct DimmingPickerView: View {
                             isPickerOpen: isPresented,
                             onSelect: { selectItem(item) }
                         )
-                    } else if item.dimLevel == 2, onReactive1LongPress != nil {
-                        // Reactive 1 — tap selects; hold cycles chromosphere reach (curved / Chromosphere).
+                    } else if item.dimLevel == 2, onReactive1TapCycle != nil {
+                        // Reactive 1 — each tap selects preset and advances chromosphere reach one tier (curved).
                         Button {
                             selectItem(item)
+                            onReactive1TapCycle?()
                         } label: {
                             VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
@@ -133,14 +131,7 @@ struct DimmingPickerView: View {
                             }
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(HoldablePlainButtonStyle(
-                            onHold: {
-                                selectItem(item)
-                                onReactive1LongPress?()
-                            },
-                            onRelease: { onReactive1LongPressEnd?() },
-                            minimumHoldDuration: 0.48
-                        ))
+                        .buttonStyle(.plain)
                     } else if item.dimLevel == 10 {
                         // Reactive 2 — legacy translucent tinted dome (0.85α, transparent blend), no Chromaglow; curated toolbar readability.
                         Button {
@@ -174,10 +165,11 @@ struct DimmingPickerView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                    } else if item.dimLevel == 12, onStarfieldLongPress != nil {
-                        // Starfield preset: tap selects, long-press cycles star distance (curved display)
+                    } else if item.dimLevel == 12, onStarfieldTapCycle != nil {
+                        // Starfield — each tap selects preset and advances star distance one step (curved).
                         Button {
                             selectItem(item)
+                            onStarfieldTapCycle?()
                         } label: {
                             VStack(spacing: DimmingPickerMetrics.pt(8)) {
                                 DimmingThumbnailView(
@@ -206,16 +198,7 @@ struct DimmingPickerView: View {
                             }
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(HoldablePlainButtonStyle(
-                            onHold: {
-                                selectItem(item)
-                                onStarfieldLongPress?()
-                            },
-                            onRelease: {
-                                onStarfieldLongPressEnd?()
-                            },
-                            minimumHoldDuration: 0.2
-                        ))
+                        .buttonStyle(.plain)
                     } else {
                         // Non-adjustable preset (tap only)
                         Button {
@@ -254,7 +237,7 @@ struct DimmingPickerView: View {
                 Image(systemName: "lightbulb.circle")
                     .font(.system(size: DimmingPickerMetrics.pt(10)))
                     .foregroundColor(.white.opacity(0.5))
-                Text("Long press on dimmable presets adjusts brightness; Reactive 1 cycles glow reach; Starfield cycles star distance.")
+                Text("Long press on dimmable presets adjusts brightness. Tap Reactive 1 to cycle glow reach tiers. Tap Starfield to cycle star distance.")
                     .font(.system(size: DimmingPickerMetrics.pt(11)))
                     .foregroundColor(.white.opacity(0.5))
             }

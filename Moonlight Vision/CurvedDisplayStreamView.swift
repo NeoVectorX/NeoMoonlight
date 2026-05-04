@@ -800,9 +800,6 @@ struct _CurvedDisplayStreamView: View {
     @State private var presetOverlayText: String = ""
     @State private var presetOverlayIcon: String = "camera.filters"
     @State private var presetOverlayTimer: Timer?
-    @State private var starDistanceCycleTimer: Timer?
-    /// Reactive 1 Chromosphere reach tiers — repeats while picker button held (same pattern as Starfield star distance).
-    @State private var reactive1ReachCycleTimer: Timer?
     @State private var presetCooldownUntil: Date? = nil
     
     // Co-op invite button state
@@ -2140,60 +2137,26 @@ struct _CurvedDisplayStreamView: View {
                     }
                 ),
                 defaultPresetBrightness: defaultPresetBrightness,
-                onStarfieldLongPress: {
-                    Task { @MainActor in
-                        starDistanceCycleTimer?.invalidate()
-                        func advanceStarDistance() {
-                            let nextPreset = starDistancePreset.next()
-                            starDistancePresetRawValue = nextPreset.rawValue
-                            MainActor.assumeIsolated {
-                                particleManager.updateDistancePreset(nextPreset)
-                            }
-                            presetOverlayText = "STAR DISTANCE: \(nextPreset.displayName.uppercased())"
-                            presetOverlayIcon = "moon.stars.fill"
-                            showInlinePresetOverlay = true
-                            presetOverlayTimer?.invalidate()
-                            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                                DispatchQueue.main.async {
-                                    withAnimation(.easeOut(duration: 0.15)) {
-                                        self.showInlinePresetOverlay = false
-                                    }
-                                }
-                            }
-                        }
-                        advanceStarDistance()
-                        starDistanceCycleTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: true) { _ in
-                            Task { @MainActor in
-                                advanceStarDistance()
+                onStarfieldTapCycle: {
+                    let nextPreset = starDistancePreset.next()
+                    starDistancePresetRawValue = nextPreset.rawValue
+                    particleManager.updateDistancePreset(nextPreset)
+                    presetOverlayText = "STAR DISTANCE: \(nextPreset.displayName.uppercased())"
+                    presetOverlayIcon = "moon.stars.fill"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                self.showInlinePresetOverlay = false
                             }
                         }
                     }
                 },
-                onStarfieldLongPressEnd: {
-                    starDistanceCycleTimer?.invalidate()
-                    starDistanceCycleTimer = nil
-                },
-                onReactive1LongPress: {
-                    Task { @MainActor in
-                        reactive1ReachCycleTimer?.invalidate()
-
-                        func advanceChromosphereReach() {
-                            Reactive1ChromosphereReach.advanceWrappedAndSave()
-                            applySavedReactive1ReachToChromospherePipeline()
-                            presentReactive1ReachTierOverlay()
-                        }
-
-                        advanceChromosphereReach()
-                        reactive1ReachCycleTimer = Timer.scheduledTimer(withTimeInterval: 1.45, repeats: true) { _ in
-                            Task { @MainActor in
-                                advanceChromosphereReach()
-                            }
-                        }
-                    }
-                },
-                onReactive1LongPressEnd: {
-                    reactive1ReachCycleTimer?.invalidate()
-                    reactive1ReachCycleTimer = nil
+                onReactive1TapCycle: {
+                    Reactive1ChromosphereReach.advanceWrappedAndSave()
+                    applySavedReactive1ReachToChromospherePipeline()
+                    presentReactive1ReachTierOverlay()
                 }
             )
             .transition(.identity)
@@ -2276,6 +2239,12 @@ struct _CurvedDisplayStreamView: View {
     private var reactiveV1ControlOpacityDormantFloor: CGFloat { 0.20 } // +20 percentage points on near-zero dormant alpha
     /// Reactive V1 reach tiers 2–4 (chromosphere scales > standard): brighten top bar/chips ~20% more vs tier 1.
     private let reactiveV1ExpandedReachChromeMul: CGFloat = 1.2
+    /// Expanded Chromosphere washes the toolbar more than tier 1 — match Reactive V2–style readability (incl. collapsed single icon).
+    private let reactiveV1ExpandedReachInactiveBarOpacityFloor: CGFloat = 0.92
+    private let reactiveV1ExpandedReachDormantBarOpacityFloor: CGFloat = 0.58
+    private let reactiveV1ExpandedReachDormantCapsuleOpacityFloor: CGFloat = 0.68
+    private let reactiveV1ExpandedReachUltraThinCapsuleLight: CGFloat = 0.94
+    private let reactiveV1ExpandedReachUltraThinCapsuleDark: CGFloat = 0.58
     
     /// Pass-through for original bar (when dynamic menu is off). No animation; keeps curvedControlsBarContent compiling.
     @ViewBuilder
@@ -2312,10 +2281,29 @@ struct _CurvedDisplayStreamView: View {
         return min(1.0, max(opacity, reactiveV2TranslucentDomeDormantCapsuleOpacityFloor()))
     }
 
+    /// Strong top-bar opacity when Reactive V1 Chromosphere is at reach tier 2+ (indexed ≥ 1).
+    private func applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: CGFloat) -> CGFloat {
+        guard reactive1UsesExpandedReachChromeBoost() else { return barOpacity }
+        return min(1.0, max(barOpacity, reactiveV1ExpandedReachInactiveBarOpacityFloor))
+    }
+
+    private func applyReactiveV1ExpandedReachDormantBarFloor(_ opacity: CGFloat) -> CGFloat {
+        guard reactive1UsesExpandedReachChromeBoost() else { return opacity }
+        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantBarOpacityFloor))
+    }
+
+    private func applyReactiveV1ExpandedReachDormantCapsuleFloor(_ opacity: CGFloat) -> CGFloat {
+        guard reactive1UsesExpandedReachChromeBoost() else { return opacity }
+        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantCapsuleOpacityFloor))
+    }
+
     /// `ultraThinMaterial` capsule behind the toolbar when controls are visible (not the faded-dormant state).
     private func topControlsUltraThinCapsuleOpacityWhenChromeVisible() -> CGFloat {
         if hideControls {
             return topControlsCapsuleBackgroundDormantOpacity()
+        }
+        if reactive1UsesExpandedReachChromeBoost() {
+            return darkControlsMode ? reactiveV1ExpandedReachUltraThinCapsuleDark : reactiveV1ExpandedReachUltraThinCapsuleLight
         }
         if darkControlsMode {
             return dimLevel == 10 ? 0.58 : 0.15
@@ -2334,14 +2322,16 @@ struct _CurvedDisplayStreamView: View {
             if usesReactiveAmbientControlChromeLift() {
                 var o = min(1, 0.12 + reactiveV1ControlOpacityInactiveBoost * (0.12 / 0.5))
                 if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
-                return applyReactiveV2TopChromeFloors(barOpacity: o)
+                let v2 = applyReactiveV2TopChromeFloors(barOpacity: o)
+                return applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2)
             }
             return 0.12
         }
         if usesReactiveAmbientControlChromeLift() {
             var o = min(1, 0.5 + reactiveV1ControlOpacityInactiveBoost)
             if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
-            return applyReactiveV2TopChromeFloors(barOpacity: o)
+            let v2 = applyReactiveV2TopChromeFloors(barOpacity: o)
+            return applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2)
         }
         return 0.5
     }
@@ -2352,7 +2342,8 @@ struct _CurvedDisplayStreamView: View {
             if usesReactiveAmbientControlChromeLift() {
                 var o = min(1, 0.01 + reactiveV1ControlOpacityDormantFloor)
                 if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
-                return applyReactiveV2DormantBarFloor(o)
+                let v2 = applyReactiveV2DormantBarFloor(o)
+                return applyReactiveV1ExpandedReachDormantBarFloor(v2)
             }
             return 0.01
         }
@@ -2361,7 +2352,8 @@ struct _CurvedDisplayStreamView: View {
         case 2, 10:
             var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
             if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
-            return applyReactiveV2DormantBarFloor(o)
+            let v2 = applyReactiveV2DormantBarFloor(o)
+            return applyReactiveV1ExpandedReachDormantBarFloor(v2)
         default: return 0.05
         }
     }
@@ -2373,7 +2365,8 @@ struct _CurvedDisplayStreamView: View {
         case 2, 10:
             var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
             if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
-            return applyReactiveV2DormantCapsuleFloor(o)
+            let v2 = applyReactiveV2DormantCapsuleFloor(o)
+            return applyReactiveV1ExpandedReachDormantCapsuleFloor(v2)
         default: return 0
         }
     }
@@ -4591,7 +4584,7 @@ struct _CurvedDisplayStreamView: View {
                                 // Chromosphere: wire up the downsampled bloom texture on first frame
                                 if let haloQueue {
                                     if self.chromosphereTexture == nil {
-                                        let mipShift = 5
+                                        let mipShift = ChromaHaloDownsample.mipShift
                                         let cw = max(1, Int(self.streamConfig.width) >> mipShift)
                                         let ch = max(1, Int(self.streamConfig.height) >> mipShift)
                                         let bpp = self.viewModel.streamSettings.enableHdr ? 8 : 4
@@ -5727,10 +5720,13 @@ struct _CurvedDisplayStreamView: View {
 
     private func makeChromosphereMesh(curveMagnitude: Float) throws -> MeshResource {
         let haloScale = videoDecoder?.chromaHaloScale ?? 1.55
+        // Match main curved panel tessellation (see `setupRealityView` screen mesh). Symmetric grid avoids
+        // uneven UV density vs the halo texture that made the shell read as a rectangular “LED matrix”.
+        let res: (UInt32, UInt32) = (256, 256)
         return try generateCurvedRoundedPlane(
             width: CURVED_MAX_WIDTH_METERS * haloScale,
             aspectRatio: screenAspect,
-            resolution: (128, 128),
+            resolution: res,
             curveMagnitude: curveMagnitude,
             cornerRadiusFraction: cornerRadiusFraction / haloScale
         )

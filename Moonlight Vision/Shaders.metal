@@ -695,23 +695,14 @@ fragment half4 copyFragmentShaderHEVC_EDR_UIKit(
     return half4(half3(finalColor), half(alpha));
 }
 
-// MARK: - ChromaHalo Edge Bloom Shader
+// MARK: - ChromaHalo Edge Bloom (multi-pass: rim → separable blur → temporal)
 //
-// Renders the edge glow layer behind the main video mesh (Chromosphere).
-// Halo mesh is haloScale× wider and taller in meters; videoScale is uniform on both
-// axes so top/bottom pads match left/right in texture space (avoids “side-only” glow).
-// Perimeter samples use an anisotropic blur: more spread along the edge direction.
-//
-// Inputs:
-//   texture(0): sourceTex  — downsampled mip of the current video frame
-//   texture(1): prevTex    — previous ChromaHalo output for temporal smoothing
-//   buffer(1):  haloScale  — physical scale factor of the halo mesh vs screen (e.g. 1.55)
-//   buffer(2):  intensity  — user-controlled brightness scalar (0.0–2.0)
+// Pass 1 — rim: 7×7 gather on mip 0, premultiplied RGBA (no temporal).
+// Passes 2–5 — Two rounds of separable 13-tap Gaussian (Ambilight-wide diffusion), then temporal on the last V-only pass.
 
-fragment half4 chromaHaloFragment(
+fragment half4 chromaHaloRimFragment(
     CopyVertexOut in [[stage_in]],
     texture2d<half> sourceTex [[texture(0)]],
-    texture2d<half> prevTex   [[texture(1)]],
     constant float  &haloScale [[buffer(1)]],
     constant float  &intensity [[buffer(2)]]
 ) {
@@ -737,22 +728,21 @@ fragment half4 chromaHaloFragment(
     // leaves normalizedDist < 1 on top/bottom rims → visible “hard shelf” vs sides).
     float dist = sqrt(bx * bx + byScaled * byScaled);
 
-    // Reactive V1 reach tiers > 1.55: slightly wider blur + softer temporal mix (reduces “muddy” rim at large scale).
+    // Reactive V1 reach tiers > 1.55: slightly wider rim gather (temporal mix runs in blur-V pass).
     const float kChromaHaloScaleBase = 1.55f;
     const float kChromaHaloScaleSpan = 1.93f; // maxScale(3.48) − kChromaHaloScaleBase; sync with Reactive1ChromosphereReach haloScales.last
     float haloReachT = saturate((haloScale - kChromaHaloScaleBase) / max(kChromaHaloScaleSpan, 1e-4f));
     float blurReachMul   = 1.0f + haloReachT * 0.17f;
-    float temporalReachB = haloReachT * 0.055f;
 
     // Hollow center — pixels under the video mesh are transparent.
     // Slight shrink (0.88) ensures the cutout fully hides behind the video's rounded corners.
     float2 hollowCheck = max(float2(0.0), abs(videoUV - 0.5) * 2.0 - 0.88);
     if (length(hollowCheck) <= 0.0) { return half4(0.0); }
 
-    // Perimeter zone clamping — clamp to a ring of inset sample points.
-    // 8% inset avoids hardware decoder border artifacts.
-    float2 safeMin = float2(0.08);
-    float2 safeMax = float2(0.92);
+    // Perimeter sampling: stay near the real bezel (was 8% inset — read as “wrong” colors). Keep ~2% inset
+    // only to soften occasional decoder edge junk; smooth wide glow still comes from separable blur passes.
+    float2 safeMin = float2(0.02);
+    float2 safeMax = float2(0.98);
     float2 zoneClamped;
     zoneClamped.x = clamp(videoUV.x, safeMin.x, safeMax.x);
     zoneClamped.y = clamp(videoUV.y, safeMin.y, safeMax.y);
@@ -760,26 +750,29 @@ fragment half4 chromaHaloFragment(
     // Dynamic sample spread: pixels further from the screen sample a wider area,
     // smoothly diffusing color outward without hard bands.
     float spread  = 1.0 + dist * 6.0;
-    float blurRad = min(0.10 * spread * blurReachMul, 0.38 * blurReachMul);
+    // Tighter rim kernel: stay on/near the bezel; double separable blur downstream supplies Ambilight width.
+    float blurRad = min(0.036 * spread * blurReachMul, 0.14 * blurReachMul);
 
-    // Anisotropic blur: elongate blur along edges so top/bottom smear sideways and
-    // left/right wings smear vertically — reads more like ambient light bleeding.
+    // Mild anisotropy only — strong tangential stretch pulled interior colors into the rim readout.
     float topBottomDominant = saturate(by - bx);
     float leftRightDominant = saturate(bx - by);
-    float blurMux = 1.0 + topBottomDominant * 2.95;
-    float blurMvy = 1.0 + leftRightDominant * 2.95;
+    float blurMux = 1.0 + topBottomDominant * 2.05;
+    float blurMvy = 1.0 + leftRightDominant * 2.05;
 
-    // 3x3 Gaussian-weighted color gather from source video mip.
+    // 7×7 Gaussian on full-res source (narrow offsets — edge fidelity; blur passes do the big wash).
+    const float kChromaBlurSigma = 2.0f;
+    const float kChromaBlurTwoSigmaSq = 2.0f * kChromaBlurSigma * kChromaBlurSigma;
     half4  color       = half4(0.0);
     float  totalWeight = 0.0;
     float  maxLuma     = 0.0;
 
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
+    for (int dy = -3; dy <= 3; dy++) {
+        for (int dx = -3; dx <= 3; dx++) {
             float2 offset    = blurRad * float2(float(dx) * blurMux, float(dy) * blurMvy);
             float2 sampleUV  = clamp(zoneClamped + offset, safeMin, safeMax);
             half4  sampleCol = sourceTex.sample(s, sampleUV);
-            float  w_g       = exp(-float(dx*dx + dy*dy) * 0.5);
+            float  d2        = float(dx * dx + dy * dy);
+            float  w_g       = exp(-d2 / kChromaBlurTwoSigmaSq);
             color       += sampleCol * half(w_g);
             totalWeight += w_g;
             float luma   = dot(float3(sampleCol.rgb), float3(0.2126, 0.7152, 0.0722));
@@ -788,9 +781,9 @@ fragment half4 chromaHaloFragment(
     }
     color /= half(totalWeight);
 
-    // Saturation boost — pushes chroma vs luma so the rim reads against passthrough (lower = truer dull sand/mud, less “orange crush”).
+    // Saturation boost — gentler than before so the rim stays a soft wash, not posterized chroma bands.
     float avgLuma  = dot(float3(color.rgb), float3(0.2126, 0.7152, 0.0722));
-    float satBoost = 1.62f;
+    float satBoost = 1.12f;
     color.rgb = mix(half3(avgLuma), color.rgb, half(satBoost));
 
     // Soft luminance cap — prevent blown-out whites from washing out the glow.
@@ -798,7 +791,7 @@ fragment half4 chromaHaloFragment(
     if (maxLuma > powerCap) { color.rgb *= half(powerCap / maxLuma); }
 
     // Emission scalar — controls raw brightness before fade.
-    color.rgb *= half(intensity * 2.2);
+    color.rgb *= half(intensity * 2.18);
     color.rgb  = max(color.rgb, half3(0.0));
 
     // Outer fade envelope: per-axis normalization so every rim reaches alpha 0 at the texture edge
@@ -814,19 +807,82 @@ fragment half4 chromaHaloFragment(
     float normalizedDist    = max(nxEff, nyEff);
     float t                 = 1.0 - normalizedDist;
     t                       = t * t * (3.0 - 2.0 * t);
-    // Slightly sharper falloff along top/bottom so the band looks thinner — sides stay softer.
-    float gamma             = mix(2.05, 2.55, topBottomDominant);
+    // Lower gamma = longer, softer wash toward the outer edge (less “banded” rim).
+    float gamma             = mix(1.42, 1.92, topBottomDominant);
     float fade              = pow(max(t, 0.0), gamma);
+    fade                    *= mix(1.0, 1.0 - smoothstep(0.38, 1.0, normalizedDist), 0.62);
 
     // Premultiplied RGBA: avoids dark fringe when RealityKit composites (straight alpha glow smears RGB at low A).
     half  a                 = half(fade);
     half3 premul            = color.rgb * a;
 
     half4 currPM            = half4(premul, a);
-    half4 prevPM            = prevTex.sample(s, in.uv);
-    float frameMix          = 0.12f + temporalReachB;
-    half4 blended           = mix(prevPM, currPM, half(frameMix));
+    half softZero           = smoothstep(half(0.0), half(0.006), currPM.a);
+    return half4(currPM.rgb * softZero, currPM.a * softZero);
+}
 
-    half softZero           = smoothstep(half(0.0), half(0.004), blended.a);
+// 13-tap horizontal Gaussian (σ ≈ 3.8 texels, premultiplied RGBA). `texelUV` = (1/width, 1/height).
+fragment half4 chromaHaloBlurHFragment(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> src [[texture(0)]],
+    constant float2 &texelUV [[buffer(0)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    const float kW0 = 0.03303223f, kW1 = 0.04834536f, kW2 = 0.06602309f, kW3 = 0.08413198f;
+    const float kW4 = 0.10003469f, kW5 = 0.11098501f, kW6 = 0.11489529f;
+    float du = texelUV.x;
+    half4 acc = half4(0.0);
+    acc += src.sample(s, in.uv + float2(-6.0 * du, 0.0)) * half(kW0);
+    acc += src.sample(s, in.uv + float2(-5.0 * du, 0.0)) * half(kW1);
+    acc += src.sample(s, in.uv + float2(-4.0 * du, 0.0)) * half(kW2);
+    acc += src.sample(s, in.uv + float2(-3.0 * du, 0.0)) * half(kW3);
+    acc += src.sample(s, in.uv + float2(-2.0 * du, 0.0)) * half(kW4);
+    acc += src.sample(s, in.uv + float2(-1.0 * du, 0.0)) * half(kW5);
+    acc += src.sample(s, in.uv) * half(kW6);
+    acc += src.sample(s, in.uv + float2( 1.0 * du, 0.0)) * half(kW5);
+    acc += src.sample(s, in.uv + float2( 2.0 * du, 0.0)) * half(kW4);
+    acc += src.sample(s, in.uv + float2( 3.0 * du, 0.0)) * half(kW3);
+    acc += src.sample(s, in.uv + float2( 4.0 * du, 0.0)) * half(kW2);
+    acc += src.sample(s, in.uv + float2( 5.0 * du, 0.0)) * half(kW1);
+    acc += src.sample(s, in.uv + float2( 6.0 * du, 0.0)) * half(kW0);
+    return acc;
+}
+
+// 13-tap vertical Gaussian. `temporalMode` 0 = output blur only (mid-pipeline); 1 = mix with `prevTex` via `frameMix`.
+fragment half4 chromaHaloBlurVFragment(
+    CopyVertexOut in [[stage_in]],
+    texture2d<half> src [[texture(0)]],
+    texture2d<half> prevTex [[texture(1)]],
+    constant float2 &texelUV [[buffer(0)]],
+    constant uint   &temporalMode [[buffer(1)]],
+    constant float  &frameMix [[buffer(2)]]
+) {
+    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+    const float kW0 = 0.03303223f, kW1 = 0.04834536f, kW2 = 0.06602309f, kW3 = 0.08413198f;
+    const float kW4 = 0.10003469f, kW5 = 0.11098501f, kW6 = 0.11489529f;
+    float dv = texelUV.y;
+    half4 acc = half4(0.0);
+    acc += src.sample(s, in.uv + float2(0.0, -6.0 * dv)) * half(kW0);
+    acc += src.sample(s, in.uv + float2(0.0, -5.0 * dv)) * half(kW1);
+    acc += src.sample(s, in.uv + float2(0.0, -4.0 * dv)) * half(kW2);
+    acc += src.sample(s, in.uv + float2(0.0, -3.0 * dv)) * half(kW3);
+    acc += src.sample(s, in.uv + float2(0.0, -2.0 * dv)) * half(kW4);
+    acc += src.sample(s, in.uv + float2(0.0, -1.0 * dv)) * half(kW5);
+    acc += src.sample(s, in.uv) * half(kW6);
+    acc += src.sample(s, in.uv + float2(0.0,  1.0 * dv)) * half(kW5);
+    acc += src.sample(s, in.uv + float2(0.0,  2.0 * dv)) * half(kW4);
+    acc += src.sample(s, in.uv + float2(0.0,  3.0 * dv)) * half(kW3);
+    acc += src.sample(s, in.uv + float2(0.0,  4.0 * dv)) * half(kW2);
+    acc += src.sample(s, in.uv + float2(0.0,  5.0 * dv)) * half(kW1);
+    acc += src.sample(s, in.uv + float2(0.0,  6.0 * dv)) * half(kW0);
+
+    half4 blended;
+    if (temporalMode != 0u) {
+        half4 prevPM = prevTex.sample(s, in.uv);
+        blended = mix(prevPM, acc, half(frameMix));
+    } else {
+        blended = acc;
+    }
+    half softZero = smoothstep(half(0.0), half(0.006), blended.a);
     return half4(blended.rgb * softZero, blended.a * softZero);
 }

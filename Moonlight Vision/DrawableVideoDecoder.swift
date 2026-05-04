@@ -18,6 +18,7 @@ import SwiftUI
 import UIKit
 import VideoToolbox
 import CoreFoundation
+import simd
 
 // Add these constants after your existing constants
 let kCVPixelBufferYCbCrMatrixKey = "YCbCrMatrix" as CFString
@@ -34,6 +35,18 @@ struct HDRParams {
     /// Bit 0 (`1`): Reference HDR — minimal client grading (PQ + gamut + tone map only). See `Shaders.metal` `FullHDRParams.hdrGradeFlags`.
     var hdrGradeFlags: UInt32 = 0
 }
+
+/// ChromaHalo / Chromosphere: halo drawable / RealityKit texture size is full frame `>> mipShift`.
+/// Rim pass samples **mip 0**; a **separable 13-tap blur** on the halo buffer spreads that into a smooth wash (GPU-heavy, quality-first).
+enum ChromaHaloDownsample {
+    /// `1` → half resolution per axis (vs stream). Pairs with separable blur for Hue-like gradients.
+    static let mipShift: Int = 1
+}
+
+private let chromaHaloSourceMipLevel = 0
+
+/// Multiplies halo texel step in separable blur (wider bleed ≈ Ambilight wall wash).
+private let chromaHaloAmbilightBlurSpread: Float = 1.45
 
 private struct ColorEnhancementUniforms {
     var saturation: Float
@@ -230,7 +243,12 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
     // ChromaHalo: downsampled drawable queue for the edge bloom layer
     var chromaHaloQueue: TextureResource.DrawableQueue?
-    private var chromaHaloPipelineState: MTLRenderPipelineState?
+    private var chromaHaloRimPipelineState: MTLRenderPipelineState?
+    private var chromaHaloBlurHPipelineState: MTLRenderPipelineState?
+    private var chromaHaloBlurVPipelineState: MTLRenderPipelineState?
+    /// Ping-pong scratch: rim → A, horizontal blur → B, vertical blur (+ temporal) → drawable.
+    private var chromaHaloScratchA: MTLTexture?
+    private var chromaHaloScratchB: MTLTexture?
     private var prevChromaHaloTexture: MTLTexture?
 
     private var firstFrameEmitted = false
@@ -583,26 +601,30 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             blitEncoder.endEncoding()
         }
 
-        // ChromaHalo edge bloom render pass — only runs when intensity > 0
+        // ChromaHalo: rim (mip 0) → two rounds separable blur (Ambilight diffusion) → temporal on final V-pass.
         if chromaHaloIntensity > 0.0,
            let haloQueue = chromaHaloQueue,
            let haloDrawable = try? haloQueue.nextDrawable() {
 
-            let mipLevel = min(5, drawable.texture.mipmapLevelCount - 1)
+            let sampleMip = min(chromaHaloSourceMipLevel, drawable.texture.mipmapLevelCount - 1)
 
-            // Lazily build the ChromaHalo pipeline on first use
-            if chromaHaloPipelineState == nil {
-                chromaHaloPipelineState = buildCopyPipeline(fragment: "chromaHaloFragment")
+            if chromaHaloRimPipelineState == nil {
+                chromaHaloRimPipelineState = buildCopyPipeline(fragment: "chromaHaloRimFragment")
+            }
+            if chromaHaloBlurHPipelineState == nil {
+                chromaHaloBlurHPipelineState = buildCopyPipeline(fragment: "chromaHaloBlurHFragment")
+            }
+            if chromaHaloBlurVPipelineState == nil {
+                chromaHaloBlurVPipelineState = buildCopyPipeline(fragment: "chromaHaloBlurVFragment")
             }
 
-            // Lazily allocate the previous-frame texture for temporal smoothing
             var didAllocatePrevChroma = false
             if prevChromaHaloTexture == nil
-                || prevChromaHaloTexture!.width  != haloDrawable.texture.width
+                || prevChromaHaloTexture!.width != haloDrawable.texture.width
                 || prevChromaHaloTexture!.height != haloDrawable.texture.height {
                 let desc = MTLTextureDescriptor.texture2DDescriptor(
                     pixelFormat: haloDrawable.texture.pixelFormat,
-                    width:  haloDrawable.texture.width,
+                    width: haloDrawable.texture.width,
                     height: haloDrawable.texture.height,
                     mipmapped: false)
                 desc.usage = [.shaderRead, .renderTarget]
@@ -610,7 +632,6 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 didAllocatePrevChroma = prevChromaHaloTexture != nil
             }
 
-            // Ensure history starts transparent (avoid garbage feeding temporal mix → dark rims).
             if didAllocatePrevChroma, let freshPrev = prevChromaHaloTexture {
                 let clearDesc = MTLRenderPassDescriptor()
                 clearDesc.colorAttachments[0].texture = freshPrev
@@ -622,34 +643,110 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 }
             }
 
-            if let haloPipeline = chromaHaloPipelineState,
-               let mipView = drawable.texture.makeTextureView(
-                    pixelFormat: drawable.texture.pixelFormat,
-                    textureType: .type2D,
-                    levels: mipLevel..<mipLevel+1,
-                    slices: 0..<1) {
+            ensureChromaHaloBlurScratchMatches(haloDrawable.texture)
 
-                let haloPass = MTLRenderPassDescriptor()
-                haloPass.colorAttachments[0].texture     = haloDrawable.texture
-                haloPass.colorAttachments[0].loadAction  = .clear
-                haloPass.colorAttachments[0].clearColor  = MTLClearColorMake(0, 0, 0, 0)
-                haloPass.colorAttachments[0].storeAction = .store
+            if let mipView = drawable.texture.makeTextureView(
+                pixelFormat: drawable.texture.pixelFormat,
+                textureType: .type2D,
+                levels: sampleMip..<(sampleMip + 1),
+                slices: 0..<1),
+               let rimPS = chromaHaloRimPipelineState,
+               let blurHPS = chromaHaloBlurHPipelineState,
+               let blurVPS = chromaHaloBlurVPipelineState,
+               let scratchA = chromaHaloScratchA,
+               let scratchB = chromaHaloScratchB,
+               let prevTex = prevChromaHaloTexture {
 
-                if let haloEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: haloPass) {
-                    haloEncoder.setRenderPipelineState(haloPipeline)
-                    haloEncoder.setFragmentTexture(mipView,                index: 0)
-                    haloEncoder.setFragmentTexture(prevChromaHaloTexture,  index: 1)
+                let w = Float(scratchA.width)
+                let h = Float(scratchA.height)
+                var texelUV = simd_float2(
+                    chromaHaloAmbilightBlurSpread / max(w, 1),
+                    chromaHaloAmbilightBlurSpread / max(h, 1))
+
+                // Pass 1 — rim → scratch A
+                let passRim = MTLRenderPassDescriptor()
+                passRim.colorAttachments[0].texture = scratchA
+                passRim.colorAttachments[0].loadAction = .clear
+                passRim.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passRim.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passRim) {
+                    enc.setRenderPipelineState(rimPS)
+                    enc.setFragmentTexture(mipView, index: 0)
                     var scale = chromaHaloScale
                     var intensity = chromaHaloIntensity
-                    haloEncoder.setFragmentBytes(&scale,     length: MemoryLayout<Float>.size, index: 1)
-                    haloEncoder.setFragmentBytes(&intensity, length: MemoryLayout<Float>.size, index: 2)
-                    haloEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                    haloEncoder.endEncoding()
+                    enc.setFragmentBytes(&scale, length: MemoryLayout<Float>.size, index: 1)
+                    enc.setFragmentBytes(&intensity, length: MemoryLayout<Float>.size, index: 2)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
                 }
 
-                // Copy rendered halo to prevChromaHaloTexture for next frame's temporal mix
-                if let blitEnc = commandBuffer.makeBlitCommandEncoder(),
-                   let prevTex = prevChromaHaloTexture {
+                // Pass 2 — horizontal blur A → B
+                let passH = MTLRenderPassDescriptor()
+                passH.colorAttachments[0].texture = scratchB
+                passH.colorAttachments[0].loadAction = .clear
+                passH.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passH.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passH) {
+                    enc.setRenderPipelineState(blurHPS)
+                    enc.setFragmentTexture(scratchA, index: 0)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 3 — first vertical blur → scratch A (Ambilight diffusion pass 2/4)
+                let passV1 = MTLRenderPassDescriptor()
+                passV1.colorAttachments[0].texture = scratchA
+                passV1.colorAttachments[0].loadAction = .clear
+                passV1.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passV1.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passV1) {
+                    enc.setRenderPipelineState(blurVPS)
+                    enc.setFragmentTexture(scratchB, index: 0)
+                    enc.setFragmentTexture(prevTex, index: 1)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    var vTemporalOff: UInt32 = 0
+                    enc.setFragmentBytes(&vTemporalOff, length: MemoryLayout<UInt32>.size, index: 1)
+                    var mixPlaceholder: Float = 0
+                    enc.setFragmentBytes(&mixPlaceholder, length: MemoryLayout<Float>.size, index: 2)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 4 — horizontal blur scratch A → B
+                let passH2 = MTLRenderPassDescriptor()
+                passH2.colorAttachments[0].texture = scratchB
+                passH2.colorAttachments[0].loadAction = .clear
+                passH2.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passH2.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passH2) {
+                    enc.setRenderPipelineState(blurHPS)
+                    enc.setFragmentTexture(scratchA, index: 0)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 5 — vertical blur + temporal → halo drawable
+                let passV2 = MTLRenderPassDescriptor()
+                passV2.colorAttachments[0].texture = haloDrawable.texture
+                passV2.colorAttachments[0].loadAction = .clear
+                passV2.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passV2.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passV2) {
+                    enc.setRenderPipelineState(blurVPS)
+                    enc.setFragmentTexture(scratchB, index: 0)
+                    enc.setFragmentTexture(prevTex, index: 1)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    var vTemporalOn: UInt32 = 1
+                    enc.setFragmentBytes(&vTemporalOn, length: MemoryLayout<UInt32>.size, index: 1)
+                    var mix = chromaHaloTemporalFrameMix()
+                    enc.setFragmentBytes(&mix, length: MemoryLayout<Float>.size, index: 2)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                if let blitEnc = commandBuffer.makeBlitCommandEncoder() {
                     blitEnc.copy(from: haloDrawable.texture, to: prevTex)
                     blitEnc.endEncoding()
                 }
@@ -763,9 +860,9 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 }
             }()
 
-            // ChromaHalo: create a tiny downsampled queue (mip 5 = 1/32 resolution)
+            // ChromaHalo: downsampled queue (see `ChromaHaloDownsample.mipShift`)
             self.chromaHaloQueue = {
-                let mipShift = 5
+                let mipShift = ChromaHaloDownsample.mipShift
                 let cw = max(1, videoWidth  >> mipShift)
                 let ch = max(1, videoHeight >> mipShift)
                 let descriptor = TextureResource.DrawableQueue.Descriptor(
@@ -784,6 +881,9 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                     return nil
                 }
             }()
+
+            self.chromaHaloScratchA = nil
+            self.chromaHaloScratchB = nil
 
             region = MTLRegionMake2D(0, 0, videoWidth, videoHeight)
 
@@ -872,7 +972,13 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         textureCache = nil
         copyPipelineState = nil
         copyPipelineFormat = nil
-        
+        chromaHaloRimPipelineState = nil
+        chromaHaloBlurHPipelineState = nil
+        chromaHaloBlurVPipelineState = nil
+        chromaHaloScratchA = nil
+        chromaHaloScratchB = nil
+        prevChromaHaloTexture = nil
+
         print("DrawableVideoDecoder: Stopped and cleaned up all state")
     }
 
@@ -1377,6 +1483,32 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             updateHDRMetadata()
             LiRequestIdrFrame()
         }
+    }
+
+    /// Sync constants with `Shaders.metal` `chromaHaloRimFragment` / `Reactive1ChromosphereReach`.
+    private func chromaHaloTemporalFrameMix() -> Float {
+        let kBase: Float = 1.55
+        let kSpan: Float = 1.93
+        let reachT = min(1, max(0, (chromaHaloScale - kBase) / max(kSpan, 1e-4)))
+        return 0.27 + reachT * 0.055
+    }
+
+    private func ensureChromaHaloBlurScratchMatches(_ haloTex: MTLTexture) {
+        let w = haloTex.width
+        let h = haloTex.height
+        let pf = haloTex.pixelFormat
+        if let a = chromaHaloScratchA,
+           a.width == w, a.height == h, a.pixelFormat == pf,
+           let b = chromaHaloScratchB,
+           b.width == w, b.height == h, b.pixelFormat == pf {
+            return
+        }
+        chromaHaloScratchA = nil
+        chromaHaloScratchB = nil
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pf, width: w, height: h, mipmapped: false)
+        desc.usage = [.shaderRead, .renderTarget]
+        chromaHaloScratchA = mtlDevice.makeTexture(descriptor: desc)
+        chromaHaloScratchB = mtlDevice.makeTexture(descriptor: desc)
     }
 
     // Builds a simple copy pipeline with no input buffers, just

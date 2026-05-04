@@ -36,7 +36,7 @@ struct UpdatesView: View {
                             
                             ChangelogItem(text: "HDR: Complete overhaul of the HDR grading pipeline—PQ decoding, gamut mapping, and tone shaping were reworked end-to-end for a more accurate picture on Vision Pro.")
                             ChangelogItem(text: "HDR: New in-stream Enhanced HDR panel plus optional Reference HDR.")
-                            ChangelogItem(text: "Reactive V1 lighting and bloom adjustments, with long press cycling.")
+                            ChangelogItem(text: "Reactive V1 lighting and bloom adjustments; tap the preset in the picker to cycle glow reach tiers.")
                             ChangelogItem(text: "Various UI polish.")
                         }
                         .padding(24)
