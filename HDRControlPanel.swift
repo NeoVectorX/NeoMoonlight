@@ -15,8 +15,12 @@ struct HDRControlPanel: View {
     var onLiveUpdate: (() -> Void)? = nil
     /// Curved-display attachment uses `0.6`; flat display passes `1.0` where the panel is not embedded as a shrunk attachment.
     var attachmentLayoutScale: CGFloat = 0.6
-    /// Flat-only UX: darken and disable sliders when Reference HDR is on. Curved leaves this `false` so behavior matches the shipped curved panel.
+    /// When `true` and Reference HDR is on: grading sliders keep full layout but lose orange accent and do not accept drags (flat and curved pass this).
     var dimInactiveGradingControlsWhenReferenceHDR: Bool = false
+
+    private var referenceHDRNeutralGradingSliderChrome: Bool {
+        dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR
+    }
 
     private let brandNavy   = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
@@ -51,28 +55,24 @@ struct HDRControlPanel: View {
             VStack(alignment: .leading, spacing: 18) {
                 sectionLabel("Display Quality")
 
-                HDRSlider(title: "Brightness",  value: $settings.brightness, range: 0.5...2.0, defaultValue: 1.35, icon: "sun.max.fill",          brandOrange: brandOrange)
+                HDRSlider(title: "Brightness", value: $settings.brightness, range: 0.5...2.0, defaultValue: 1.35, icon: "sun.max.fill", brandOrange: brandOrange, neutralChrome: referenceHDRNeutralGradingSliderChrome)
                 VStack(alignment: .leading, spacing: 4) {
-                    HDRSlider(title: "Contrast", value: $settings.contrast, range: 0.5...2.0, defaultValue: 1.15, icon: "circle.lefthalf.filled", brandOrange: brandOrange)
+                    HDRSlider(title: "Contrast", value: $settings.contrast, range: 0.5...2.0, defaultValue: 1.15, icon: "circle.lefthalf.filled", brandOrange: brandOrange, neutralChrome: referenceHDRNeutralGradingSliderChrome)
                     Text("Values below 1.0 brighten dark areas toward mid-tones.")
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.38))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HDRSlider(title: "Saturation",  value: $settings.saturation, range: 0.0...2.0, defaultValue: 1.40, icon: "paintpalette.fill",       brandOrange: brandOrange)
+                HDRSlider(title: "Saturation", value: $settings.saturation, range: 0.0...2.0, defaultValue: 1.40, icon: "paintpalette.fill", brandOrange: brandOrange, neutralChrome: referenceHDRNeutralGradingSliderChrome)
             }
-            .disabled(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR)
-            .opacity(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR ? 0.42 : 1)
 
             dividerLine
 
             // Exposure
             VStack(alignment: .leading, spacing: 18) {
                 sectionLabel("Exposure")
-                HDRSlider(title: "Exposure", value: $settings.pqExposure, range: 0.5...2.0, defaultValue: 1.0, icon: "dial.medium.fill", brandOrange: brandOrange)
+                HDRSlider(title: "Exposure", value: $settings.pqExposure, range: 0.5...2.0, defaultValue: 1.0, icon: "dial.medium.fill", brandOrange: brandOrange, neutralChrome: referenceHDRNeutralGradingSliderChrome)
             }
-            .disabled(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR)
-            .opacity(dimInactiveGradingControlsWhenReferenceHDR && settings.referenceHDR ? 0.42 : 1)
 
             dividerLine
 
@@ -170,8 +170,16 @@ struct HDRSlider: View {
     let icon: String
     let brandOrange: Color
     var step: Float = 0.01
+    /// Reference HDR + stream flag: no orange accent, sliders do not move (layout unchanged).
+    var neutralChrome: Bool = false
 
     @State private var isResetting = false
+
+    private var sliderTint: Color {
+        neutralChrome ? Color.white.opacity(0.28) : brandOrange
+    }
+
+    private var chromeInteractive: Bool { !neutralChrome }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -200,7 +208,7 @@ struct HDRSlider: View {
                 }
                 .buttonStyle(.plain)
                 .scaleEffect(isResetting ? 0.8 : 1.0)
-                .disabled(abs(value - defaultValue) < 0.01)
+                .disabled(!chromeInteractive || abs(value - defaultValue) < 0.01)
             }
 
             Slider(
@@ -210,7 +218,8 @@ struct HDRSlider: View {
                 ),
                 in: range
             )
-            .tint(brandOrange)
+            .tint(sliderTint)
+            .disabled(!chromeInteractive)
         }
     }
 }

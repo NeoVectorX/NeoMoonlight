@@ -2067,9 +2067,12 @@ struct _CurvedDisplayStreamView: View {
     @ViewBuilder
     private var hdrPanelAttachment: some View {
         if showHDRPanel {
-            HDRControlPanel(settings: hdrPanelSettings, isPresented: $showHDRPanel, onLiveUpdate: {
-                updateHDRParamsFromPanel()
-            })
+            HDRControlPanel(
+                settings: hdrPanelSettings,
+                isPresented: $showHDRPanel,
+                onLiveUpdate: { updateHDRParamsFromPanel() },
+                dimInactiveGradingControlsWhenReferenceHDR: true
+            )
                 .transition(.identity)
         } else {
             Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
@@ -2237,14 +2240,14 @@ struct _CurvedDisplayStreamView: View {
     /// Reactive V1 Chromosphere washes the periphery — lift faded control chrome (~+20%).
     private var reactiveV1ControlOpacityInactiveBoost: CGFloat { 0.1 } // 0.5 × 20% rounded for clarity vs glow
     private var reactiveV1ControlOpacityDormantFloor: CGFloat { 0.20 } // +20 percentage points on near-zero dormant alpha
-    /// Reactive V1 reach tiers 2–4 (chromosphere scales > standard): brighten top bar/chips ~20% more vs tier 1.
+    /// Reactive V1 reach Wide+ (indexed ≥ 1): extra multiply on computed bar alpha before floors (ramped per wash step).
     private let reactiveV1ExpandedReachChromeMul: CGFloat = 1.2
-    /// Expanded Chromosphere washes the toolbar more than tier 1 — match Reactive V2–style readability (incl. collapsed single icon).
-    private let reactiveV1ExpandedReachInactiveBarOpacityFloor: CGFloat = 0.92
-    private let reactiveV1ExpandedReachDormantBarOpacityFloor: CGFloat = 0.58
-    private let reactiveV1ExpandedReachDormantCapsuleOpacityFloor: CGFloat = 0.68
-    private let reactiveV1ExpandedReachUltraThinCapsuleLight: CGFloat = 0.94
-    private let reactiveV1ExpandedReachUltraThinCapsuleDark: CGFloat = 0.58
+    /// Baseline floors at Wide; `reactiveV1ExpandedReachWashStep()` adds more for Expanded / Maximum.
+    private let reactiveV1ExpandedReachInactiveBarOpacityFloor: CGFloat = 0.955
+    private let reactiveV1ExpandedReachDormantBarOpacityFloor: CGFloat = 0.66
+    private let reactiveV1ExpandedReachDormantCapsuleOpacityFloor: CGFloat = 0.76
+    private let reactiveV1ExpandedReachUltraThinCapsuleLight: CGFloat = 0.97
+    private let reactiveV1ExpandedReachUltraThinCapsuleDark: CGFloat = 0.66
     
     /// Pass-through for original bar (when dynamic menu is off). No animation; keeps curvedControlsBarContent compiling.
     @ViewBuilder
@@ -2254,6 +2257,45 @@ struct _CurvedDisplayStreamView: View {
 
     private func reactive1UsesExpandedReachChromeBoost() -> Bool {
         dimLevel == 2 && Reactive1ChromosphereReach.clampedSavedIndex() >= 1
+    }
+
+    /// Wide / Expanded / Maximum: strong Chromosphere wash — idle and auto-hidden toolbar never dim below this (Standard & other dim modes unchanged).
+    private let reactiveV1ExpandedReachMinFadedBarOpacity: CGFloat = 0.75
+
+    private func clampBarOpacityForReactive1WidePlusChromosphere(_ opacity: CGFloat) -> CGFloat {
+        guard reactive1UsesExpandedReachChromeBoost() else { return opacity }
+        return max(opacity, reactiveV1ExpandedReachMinFadedBarOpacity)
+    }
+
+    /// Wide = 0, Expanded = 1, Maximum = 2 (only meaningful when `reactive1UsesExpandedReachChromeBoost()`).
+    private func reactiveV1ExpandedReachWashStep() -> Int {
+        guard reactive1UsesExpandedReachChromeBoost() else { return 0 }
+        return min(2, max(0, Reactive1ChromosphereReach.clampedSavedIndex() - 1))
+    }
+
+    private func reactiveV1ExpandedReachInactiveBarOpacityFloorEffective() -> CGFloat {
+        min(1.0, reactiveV1ExpandedReachInactiveBarOpacityFloor + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.024)
+    }
+
+    private func reactiveV1ExpandedReachDormantBarOpacityFloorEffective() -> CGFloat {
+        min(1.0, reactiveV1ExpandedReachDormantBarOpacityFloor + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.085)
+    }
+
+    private func reactiveV1ExpandedReachDormantCapsuleOpacityFloorEffective() -> CGFloat {
+        min(1.0, reactiveV1ExpandedReachDormantCapsuleOpacityFloor + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.075)
+    }
+
+    private func reactiveV1ExpandedReachUltraThinCapsuleLightEffective() -> CGFloat {
+        min(1.0, reactiveV1ExpandedReachUltraThinCapsuleLight + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.014)
+    }
+
+    private func reactiveV1ExpandedReachUltraThinCapsuleDarkEffective() -> CGFloat {
+        min(1.0, reactiveV1ExpandedReachUltraThinCapsuleDark + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.09)
+    }
+
+    private func reactiveV1ExpandedReachChromeMulEffective() -> CGFloat {
+        guard reactive1UsesExpandedReachChromeBoost() else { return 1.0 }
+        return min(1.45, reactiveV1ExpandedReachChromeMul + CGFloat(reactiveV1ExpandedReachWashStep()) * 0.07)
     }
 
     /// Reactive V1 (Chromosphere) or V2 (translucent dome): wash periphery → same stronger top chrome as Chromosphere tier 1.
@@ -2284,17 +2326,17 @@ struct _CurvedDisplayStreamView: View {
     /// Strong top-bar opacity when Reactive V1 Chromosphere is at reach tier 2+ (indexed ≥ 1).
     private func applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: CGFloat) -> CGFloat {
         guard reactive1UsesExpandedReachChromeBoost() else { return barOpacity }
-        return min(1.0, max(barOpacity, reactiveV1ExpandedReachInactiveBarOpacityFloor))
+        return min(1.0, max(barOpacity, reactiveV1ExpandedReachInactiveBarOpacityFloorEffective()))
     }
 
     private func applyReactiveV1ExpandedReachDormantBarFloor(_ opacity: CGFloat) -> CGFloat {
         guard reactive1UsesExpandedReachChromeBoost() else { return opacity }
-        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantBarOpacityFloor))
+        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantBarOpacityFloorEffective()))
     }
 
     private func applyReactiveV1ExpandedReachDormantCapsuleFloor(_ opacity: CGFloat) -> CGFloat {
         guard reactive1UsesExpandedReachChromeBoost() else { return opacity }
-        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantCapsuleOpacityFloor))
+        return min(1.0, max(opacity, reactiveV1ExpandedReachDormantCapsuleOpacityFloorEffective()))
     }
 
     /// `ultraThinMaterial` capsule behind the toolbar when controls are visible (not the faded-dormant state).
@@ -2303,7 +2345,8 @@ struct _CurvedDisplayStreamView: View {
             return topControlsCapsuleBackgroundDormantOpacity()
         }
         if reactive1UsesExpandedReachChromeBoost() {
-            return darkControlsMode ? reactiveV1ExpandedReachUltraThinCapsuleDark : reactiveV1ExpandedReachUltraThinCapsuleLight
+            let raw = darkControlsMode ? reactiveV1ExpandedReachUltraThinCapsuleDarkEffective() : reactiveV1ExpandedReachUltraThinCapsuleLightEffective()
+            return clampBarOpacityForReactive1WidePlusChromosphere(raw)
         }
         if darkControlsMode {
             return dimLevel == 10 ? 0.58 : 0.15
@@ -2321,17 +2364,17 @@ struct _CurvedDisplayStreamView: View {
         if darkControlsMode {
             if usesReactiveAmbientControlChromeLift() {
                 var o = min(1, 0.12 + reactiveV1ControlOpacityInactiveBoost * (0.12 / 0.5))
-                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMulEffective()) }
                 let v2 = applyReactiveV2TopChromeFloors(barOpacity: o)
-                return applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2)
+                return clampBarOpacityForReactive1WidePlusChromosphere(applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2))
             }
             return 0.12
         }
         if usesReactiveAmbientControlChromeLift() {
             var o = min(1, 0.5 + reactiveV1ControlOpacityInactiveBoost)
-            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMulEffective()) }
             let v2 = applyReactiveV2TopChromeFloors(barOpacity: o)
-            return applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2)
+            return clampBarOpacityForReactive1WidePlusChromosphere(applyReactiveV1ExpandedReachTopChromeFloors(barOpacity: v2))
         }
         return 0.5
     }
@@ -2341,9 +2384,9 @@ struct _CurvedDisplayStreamView: View {
         if darkControlsMode {
             if usesReactiveAmbientControlChromeLift() {
                 var o = min(1, 0.01 + reactiveV1ControlOpacityDormantFloor)
-                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+                if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMulEffective()) }
                 let v2 = applyReactiveV2DormantBarFloor(o)
-                return applyReactiveV1ExpandedReachDormantBarFloor(v2)
+                return clampBarOpacityForReactive1WidePlusChromosphere(applyReactiveV1ExpandedReachDormantBarFloor(v2))
             }
             return 0.01
         }
@@ -2351,9 +2394,9 @@ struct _CurvedDisplayStreamView: View {
         case 4, 12: return 0.005
         case 2, 10:
             var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
-            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMulEffective()) }
             let v2 = applyReactiveV2DormantBarFloor(o)
-            return applyReactiveV1ExpandedReachDormantBarFloor(v2)
+            return clampBarOpacityForReactive1WidePlusChromosphere(applyReactiveV1ExpandedReachDormantBarFloor(v2))
         default: return 0.05
         }
     }
@@ -2364,9 +2407,9 @@ struct _CurvedDisplayStreamView: View {
         case 4, 12: return 0.005
         case 2, 10:
             var o = min(1, 0.015 + reactiveV1ControlOpacityDormantFloor)
-            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMul) }
+            if reactive1UsesExpandedReachChromeBoost() { o = min(1, o * reactiveV1ExpandedReachChromeMulEffective()) }
             let v2 = applyReactiveV2DormantCapsuleFloor(o)
-            return applyReactiveV1ExpandedReachDormantCapsuleFloor(v2)
+            return clampBarOpacityForReactive1WidePlusChromosphere(applyReactiveV1ExpandedReachDormantCapsuleFloor(v2))
         default: return 0
         }
     }
