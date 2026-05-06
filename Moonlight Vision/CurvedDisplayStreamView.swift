@@ -2159,7 +2159,6 @@ struct _CurvedDisplayStreamView: View {
                 onReactive1TapCycle: {
                     Reactive1ChromosphereReach.advanceWrappedAndSave()
                     applySavedReactive1ReachToChromospherePipeline()
-                    presentReactive1ReachTierOverlay()
                 }
             )
             .transition(.identity)
@@ -3155,6 +3154,7 @@ struct _CurvedDisplayStreamView: View {
                         if showHDRPanel {
                             showDimmingPicker = false
                             showEnvironmentPicker = false
+                            updateHDRParamsFromPanel()
                         }
                         startHideTimer()
                     },
@@ -5231,22 +5231,6 @@ struct _CurvedDisplayStreamView: View {
         videoDecoder?.chromaHaloScale = scale
         guard chromosphereMeshEntity != nil || headStorage.chromosphereHaloEntity != nil else { return }
         replaceChromosphereMeshWithDisplayCurve(curvaturePreset.value * curveAnimationMultiplier)
-    }
-
-    private func presentReactive1ReachTierOverlay() {
-        let idx = Reactive1ChromosphereReach.clampedSavedIndex()
-        let tierName = Reactive1ChromosphereReach.overlayDisplayName(forIndex: idx)
-        presetOverlayText = "REACTIVE GLOW: \(tierName.uppercased())"
-        presetOverlayIcon = "rays"
-        showInlinePresetOverlay = true
-        presetOverlayTimer?.invalidate()
-        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { _ in
-            DispatchQueue.main.async {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    self.showInlinePresetOverlay = false
-                }
-            }
-        }
     }
 
     private func updateDimmerDomesState() {

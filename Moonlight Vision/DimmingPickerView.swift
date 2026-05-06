@@ -23,7 +23,7 @@ struct DimmingPickerView: View {
     let defaultPresetBrightness: [Int: Double]
     /// Starfield: each tap selects preset and advances star distance one step (curved display only).
     var onStarfieldTapCycle: (() -> Void)? = nil
-    /// Reactive 1 (Chromosphere): each tap advances glow reach tier (curved display only).
+    /// Reactive 1 (Chromosphere): each tap expands glow size / reach (curved display only).
     var onReactive1TapCycle: (() -> Void)? = nil
     
     // Dimming preset items
@@ -152,15 +152,10 @@ struct DimmingPickerView: View {
                                         .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1))
                                 )
 
-                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
-                                    Text(item.displayName)
-                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
-                                        .foregroundColor(isSelected(item) ? brandOrange : .white)
-                                        .lineLimit(1)
-                                    Image(systemName: "circle.fill")
-                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
-                                        .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
-                                }
+                                Text(item.displayName)
+                                    .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
+                                    .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                    .lineLimit(1)
                             }
                             .contentShape(Rectangle())
                         }
@@ -232,14 +227,16 @@ struct DimmingPickerView: View {
             }
             .frame(minHeight: DimmingPickerMetrics.pt(220))
             
-            // Hint for adjustable presets
-            HStack(spacing: DimmingPickerMetrics.pt(4)) {
+            // Hint for adjustable presets (top-align icon with first line when text wraps)
+            HStack(alignment: .top, spacing: DimmingPickerMetrics.pt(8)) {
                 Image(systemName: "lightbulb.circle")
-                    .font(.system(size: DimmingPickerMetrics.pt(10)))
-                    .foregroundColor(.white.opacity(0.5))
-                Text("Long press on dimmable presets adjusts brightness. Tap Reactive 1 to cycle glow reach tiers. Tap Starfield to cycle star distance.")
                     .font(.system(size: DimmingPickerMetrics.pt(11)))
                     .foregroundColor(.white.opacity(0.5))
+                    .padding(.top, DimmingPickerMetrics.pt(1.5))
+                Text("Long press on dimmable presets adjusts brightness. Tap Reactive 1 to expand glow size. Tap Starfield to cycle star distance.")
+                    .font(.system(size: DimmingPickerMetrics.pt(11)))
+                    .foregroundColor(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.top, DimmingPickerMetrics.pt(4))
         }

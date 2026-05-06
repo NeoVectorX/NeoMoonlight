@@ -11,6 +11,7 @@ import SwiftUI
 struct SettingsView: View {
     @Binding public var settings: TemporarySettings
     @AppStorage("classic.absoluteTouchMode") private var classicAbsoluteTouchMode: Bool = false
+    @AppStorage("settings.customBitrateMbps") private var savedCustomBitrateMbps: Int = 0
     @State private var selectedAspectRatio: AspectRatio?
     @State private var isCustomAspectRatio: Bool = false
     @State private var isCustomResolution: Bool = false
@@ -18,6 +19,7 @@ struct SettingsView: View {
     @State private var customWidth: String = ""
     @State private var customHeight: String = ""
     @State private var customBitrateString: String = ""
+    @State private var customBitrateIsValid: Bool = true
     
     private var bitrateSelection: Binding<Int32> {
         Binding(
@@ -27,13 +29,50 @@ struct SettingsView: View {
             set: { newValue in
                 if newValue == -1 {
                     isCustomBitrate = true
-                    customBitrateString = ""
+                    // Prefer showing the last confirmed custom bitrate, otherwise derive from current bitrate.
+                    if savedCustomBitrateMbps > 0 {
+                        customBitrateString = "\(savedCustomBitrateMbps)"
+                    } else {
+                        customBitrateString = "\(max(1, Int(settings.bitrate / 1000)))"
+                    }
+                    customBitrateIsValid = true
                 } else {
                     isCustomBitrate = false
                     settings.bitrate = newValue
                 }
             }
         )
+    }
+
+    private static func isPresetBitrate(_ bitrate: Int32) -> Bool {
+        bitrateTable.contains(bitrate)
+    }
+
+    private func syncCustomBitrateUIFromSettings() {
+        if Self.isPresetBitrate(settings.bitrate) {
+            isCustomBitrate = false
+            customBitrateIsValid = true
+            return
+        }
+        isCustomBitrate = true
+        let mbps = max(1, Int(settings.bitrate / 1000))
+        customBitrateString = "\(mbps)"
+        savedCustomBitrateMbps = mbps
+        customBitrateIsValid = true
+    }
+
+    private func confirmCustomBitrate() {
+        let filtered = customBitrateString.filter { $0.isNumber }
+        if filtered != customBitrateString {
+            customBitrateString = filtered
+        }
+        guard let mbps = Int(filtered), mbps > 0 else {
+            customBitrateIsValid = false
+            return
+        }
+        customBitrateIsValid = true
+        savedCustomBitrateMbps = mbps
+        settings.bitrate = Int32(mbps) * 1000
     }
     
     private var resolutionSelection: Binding<Resolution> {
@@ -204,7 +243,11 @@ struct SettingsView: View {
                                 .foregroundColor(.white)
                             Spacer()
                             Picker("", selection: bitrateSelection) {
-                                Text("Custom").tag(Int32(-1))
+                                if isCustomBitrate {
+                                    Text("Custom (\(max(1, Int(settings.bitrate / 1000))) Mbps)").tag(Int32(-1))
+                                } else {
+                                    Text("Custom").tag(Int32(-1))
+                                }
                                 
                                 ForEach(Self.bitrateTable, id: \.self) { bitrate in
                                     Text("\(bitrate / 1000) Mbps").tag(bitrate)
@@ -225,6 +268,7 @@ struct SettingsView: View {
                                         TextField("", text: $customBitrateString)
                                             .textFieldStyle(.plain)
                                             .keyboardType(.numberPad)
+                                            .submitLabel(.done)
                                             .foregroundColor(.white)
                                             .padding(10)
                                             .frame(width: 80)
@@ -241,17 +285,44 @@ struct SettingsView: View {
                                                 if filtered != newValue {
                                                     customBitrateString = filtered
                                                 }
-                                                if let mbps = Int32(filtered), mbps > 0 {
-                                                    settings.bitrate = mbps * 1000
-                                                }
+                                                customBitrateIsValid = true
                                             }
+                                            .onSubmit { confirmCustomBitrate() }
                                     }
                                     
-                                    Text("Enter custom bitrate in Mbps (e.g., 150)")
-                                        .font(.caption)
-                                        .foregroundColor(.white.opacity(0.5))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Enter custom bitrate in Mbps (e.g., 150)")
+                                            .font(.caption)
+                                            .foregroundColor(.white.opacity(0.5))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                                        if !customBitrateIsValid {
+                                            Text("Please enter a valid bitrate.")
+                                                .font(.caption)
+                                                .foregroundColor(.red.opacity(0.9))
+                                        }
+
+                                        Button {
+                                            confirmCustomBitrate()
+                                        } label: {
+                                            Text("Confirm")
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundColor(.white.opacity(0.9))
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 7)
+                                                .background(
+                                                    Capsule(style: .continuous)
+                                                        .fill(Color.white.opacity(0.12))
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
+
+                                Text("Selected: \(max(1, Int(settings.bitrate / 1000))) Mbps")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .padding(.top, 8)
                         }
@@ -739,6 +810,8 @@ struct SettingsView: View {
             // Load gaze cursor calibration from UserDefaults
             settings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
             settings.gazeCursorOffsetY = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetY")
+
+            syncCustomBitrateUIFromSettings()
         }
         .onChange(of: settings.resolution) { _, newValue in
             selectedAspectRatio = newValue.aspectRatio

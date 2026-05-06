@@ -1227,6 +1227,9 @@ struct _FlatDisplayStreamView: View {
                     systemImage: "wand.and.stars"
                 ) {
                     showHDRPanel.toggle()
+                    if showHDRPanel {
+                        updateHDRParamsFromPanel()
+                    }
                     startHideTimer()
                 }
             }
