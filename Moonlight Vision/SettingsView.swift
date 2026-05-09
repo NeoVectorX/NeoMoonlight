@@ -19,30 +19,8 @@ struct SettingsView: View {
     @State private var customWidth: String = ""
     @State private var customHeight: String = ""
     @State private var customBitrateString: String = ""
-    @State private var customBitrateIsValid: Bool = true
-    
-    private var bitrateSelection: Binding<Int32> {
-        Binding(
-            get: {
-                isCustomBitrate ? -1 : settings.bitrate
-            },
-            set: { newValue in
-                if newValue == -1 {
-                    isCustomBitrate = true
-                    // Prefer showing the last confirmed custom bitrate, otherwise derive from current bitrate.
-                    if savedCustomBitrateMbps > 0 {
-                        customBitrateString = "\(savedCustomBitrateMbps)"
-                    } else {
-                        customBitrateString = "\(max(1, Int(settings.bitrate / 1000)))"
-                    }
-                    customBitrateIsValid = true
-                } else {
-                    isCustomBitrate = false
-                    settings.bitrate = newValue
-                }
-            }
-        )
-    }
+    /// Inline editor after picking Custom; dismisses when the user taps Confirm.
+    @State private var showCustomBitrateEntryRow: Bool = false
 
     private static func isPresetBitrate(_ bitrate: Int32) -> Bool {
         bitrateTable.contains(bitrate)
@@ -51,28 +29,44 @@ struct SettingsView: View {
     private func syncCustomBitrateUIFromSettings() {
         if Self.isPresetBitrate(settings.bitrate) {
             isCustomBitrate = false
-            customBitrateIsValid = true
+            showCustomBitrateEntryRow = false
             return
         }
         isCustomBitrate = true
+        showCustomBitrateEntryRow = false
         let mbps = max(1, Int(settings.bitrate / 1000))
         customBitrateString = "\(mbps)"
         savedCustomBitrateMbps = mbps
-        customBitrateIsValid = true
     }
 
-    private func confirmCustomBitrate() {
+    private var customBitrateMbpsDraft: Int? {
+        let digits = customBitrateString.filter { $0.isNumber }
+        guard let m = Int(digits), m > 0 else { return nil }
+        return m
+    }
+
+    /// Digits-only while typing; bitrate applies when the user taps Confirm.
+    private func sanitizeCustomBitrateDraft() {
         let filtered = customBitrateString.filter { $0.isNumber }
         if filtered != customBitrateString {
             customBitrateString = filtered
         }
-        guard let mbps = Int(filtered), mbps > 0 else {
-            customBitrateIsValid = false
-            return
-        }
-        customBitrateIsValid = true
+    }
+
+    private func confirmCustomBitrateEntry() {
+        guard let mbps = customBitrateMbpsDraft else { return }
         savedCustomBitrateMbps = mbps
         settings.bitrate = Int32(mbps) * 1000
+        showCustomBitrateEntryRow = false
+    }
+
+    /// Single-line capsule title so the bitrate row stays the same height as other menu pickers.
+    private var bitrateMenuCapsuleTitle: String {
+        if isCustomBitrate {
+            let n = max(1, Int(settings.bitrate / 1000))
+            return "Custom (\(n) Mbps)".replacingOccurrences(of: " ", with: "\u{00A0}")
+        }
+        return "\(settings.bitrate / 1000) Mbps"
     }
     
     private var resolutionSelection: Binding<Resolution> {
@@ -242,87 +236,74 @@ struct SettingsView: View {
                             Text("Bitrate")
                                 .foregroundColor(.white)
                             Spacer()
-                            Picker("", selection: bitrateSelection) {
-                                if isCustomBitrate {
-                                    Text("Custom (\(max(1, Int(settings.bitrate / 1000))) Mbps)").tag(Int32(-1))
-                                } else {
-                                    Text("Custom").tag(Int32(-1))
+                            Menu {
+                                Button("Custom…") {
+                                    isCustomBitrate = true
+                                    showCustomBitrateEntryRow = true
+                                    if savedCustomBitrateMbps > 0 {
+                                        customBitrateString = "\(savedCustomBitrateMbps)"
+                                    } else {
+                                        customBitrateString = "\(max(1, Int(settings.bitrate / 1000)))"
+                                    }
                                 }
-                                
-                                ForEach(Self.bitrateTable, id: \.self) { bitrate in
-                                    Text("\(bitrate / 1000) Mbps").tag(bitrate)
+                                Divider()
+                                ForEach(Self.bitrateTable, id: \.self) { br in
+                                    Button("\(br / 1000) Mbps") {
+                                        isCustomBitrate = false
+                                        showCustomBitrateEntryRow = false
+                                        settings.bitrate = br
+                                    }
                                 }
+                            } label: {
+                                Text(bitrateMenuCapsuleTitle)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.72)
                             }
-                            .pickerStyle(.menu)
                         }
                         .padding(.vertical, 4)
                         
-                        if isCustomBitrate {
-                            VStack(spacing: 12) {
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Bitrate (Mbps)")
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(0.6))
-                                        
-                                        TextField("", text: $customBitrateString)
-                                            .textFieldStyle(.plain)
-                                            .keyboardType(.numberPad)
-                                            .submitLabel(.done)
-                                            .foregroundColor(.white)
-                                            .padding(10)
-                                            .frame(width: 80)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 8)
-                                                    .fill(Color.white.opacity(0.1))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 8)
-                                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                            )
-                                            .onChange(of: customBitrateString) { _, newValue in
-                                                let filtered = newValue.filter { $0.isNumber }
-                                                if filtered != newValue {
-                                                    customBitrateString = filtered
-                                                }
-                                                customBitrateIsValid = true
-                                            }
-                                            .onSubmit { confirmCustomBitrate() }
+                        if isCustomBitrate && showCustomBitrateEntryRow {
+                            HStack(spacing: 10) {
+                                TextField("", text: $customBitrateString)
+                                    .textFieldStyle(.plain)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.center)
+                                    .font(.system(size: 17, weight: .medium, design: .rounded).monospacedDigit())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 10)
+                                    .frame(width: 88)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.white.opacity(0.1))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                                    .onChange(of: customBitrateString) { _, _ in
+                                        sanitizeCustomBitrateDraft()
                                     }
-                                    
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text("Enter custom bitrate in Mbps (e.g., 150)")
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(0.5))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                                        if !customBitrateIsValid {
-                                            Text("Please enter a valid bitrate.")
-                                                .font(.caption)
-                                                .foregroundColor(.red.opacity(0.9))
-                                        }
+                                Text("Mbps")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.85))
 
-                                        Button {
-                                            confirmCustomBitrate()
-                                        } label: {
-                                            Text("Confirm")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundColor(.white.opacity(0.9))
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 7)
-                                                .background(
-                                                    Capsule(style: .continuous)
-                                                        .fill(Color.white.opacity(0.12))
-                                                )
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
+                                Button(action: confirmCustomBitrateEntry) {
+                                    Text("Confirm")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white.opacity(0.92))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.white.opacity(0.18))
+                                        )
                                 }
+                                .buttonStyle(.plain)
+                                .disabled(customBitrateMbpsDraft == nil)
 
-                                Text("Selected: \(max(1, Int(settings.bitrate / 1000))) Mbps")
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Spacer(minLength: 0)
                             }
                             .padding(.top, 8)
                         }
