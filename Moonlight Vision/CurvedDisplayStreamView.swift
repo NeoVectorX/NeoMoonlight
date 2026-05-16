@@ -3704,6 +3704,12 @@ struct _CurvedDisplayStreamView: View {
     }
 
     // MARK: - HDR & Material
+    
+    /// Pushes persisted HDR panel values into `safeHDRSettings` right before `DrawableVideoDecoder` is created,
+    /// ensuring the first frame matches UserDefaults even if lifecycle ordering was off.
+    private func syncHDRSettingsForStreamStart() {
+        applyCurvedUIKitPreset(viewModel.streamSettings.uikitPreset)
+    }
 
     private func applyCurvedUIKitPreset(_ preset: Int32) {
         var params = safeHDRSettings.value
@@ -3813,16 +3819,23 @@ struct _CurvedDisplayStreamView: View {
         safeHDRSettings.value = params
     }
 
-    // Live update from HDR panel sliders — panel overrides take precedence over preset values.
+    // Live update from HDR panel sliders — must match stream start logic for Custom preset (uikitPreset == 0)
+    // to prevent image "snap" when opening HDR panel
     private func updateHDRParamsFromPanel() {
-        var params = safeHDRSettings.value
-        params.boost       = hdrPanelSettings.brightness
-        params.contrast    = hdrPanelSettings.contrast
-        params.saturation  = hdrPanelSettings.saturation
-        params.pqExposure  = hdrPanelSettings.pqExposure
-        params.brightness  = 0.0
-        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
-        safeHDRSettings.value = params
+        if viewModel.streamSettings.uikitPreset == 0 {
+            // Custom preset: use same HDR headroom/clamps as stream start
+            applyCurvedUIKitPreset(0)
+        } else {
+            // Non-custom presets: raw copy from panel (legacy behavior for non-zero presets)
+            var params = safeHDRSettings.value
+            params.boost = hdrPanelSettings.brightness
+            params.contrast = hdrPanelSettings.contrast
+            params.saturation = hdrPanelSettings.saturation
+            params.pqExposure = hdrPanelSettings.pqExposure
+            params.brightness = 0.0
+            params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
+            safeHDRSettings.value = params
+        }
     }
     
     private func updateScreenMaterial() {
@@ -4587,6 +4600,9 @@ struct _CurvedDisplayStreamView: View {
             self.idrWatchdogTimer2 = Timer.scheduledTimer(withTimeInterval: 0.9, repeats: false) { _ in
                 if !self.firstFrameReceived { LiRequestIdrFrame() }
             }
+            
+            // CRITICAL: Sync HDR settings from panel to safeHDRSettings BEFORE decoder creation
+            self.syncHDRSettingsForStreamStart()
             
             self.ensureHDRTextureMatchesSetting()
             

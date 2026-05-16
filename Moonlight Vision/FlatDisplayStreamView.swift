@@ -1718,6 +1718,12 @@ struct _FlatDisplayStreamView: View {
     
     // MARK: - HDR & Presets
     
+    /// Pushes persisted HDR panel values into `safeHDRSettings` right before `DrawableVideoDecoder` is created,
+    /// ensuring the first frame matches UserDefaults even if lifecycle ordering was off.
+    private func syncHDRSettingsForStreamStart() {
+        applyCurvedUIKitPreset(viewModel.streamSettings.uikitPreset)
+    }
+    
     private func applyCurvedUIKitPreset(_ preset: Int32) {
         var params = safeHDRSettings.value
         let isHdr = viewModel.streamSettings.enableHdr
@@ -1805,16 +1811,23 @@ struct _FlatDisplayStreamView: View {
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
     }
     
-    // Live update from HDR panel sliders — overrides preset base values.
+    // Live update from HDR panel sliders — must match stream start logic for Custom preset (uikitPreset == 0)
+    // to prevent image "snap" when opening HDR panel
     private func updateHDRParamsFromPanel() {
-        var params = safeHDRSettings.value
-        params.boost       = hdrPanelSettings.brightness
-        params.contrast    = hdrPanelSettings.contrast
-        params.saturation  = hdrPanelSettings.saturation
-        params.pqExposure  = hdrPanelSettings.pqExposure
-        params.brightness = 0.0
-        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
-        safeHDRSettings.value = params
+        if viewModel.streamSettings.uikitPreset == 0 {
+            // Custom preset: use same HDR headroom/clamps as stream start
+            applyCurvedUIKitPreset(0)
+        } else {
+            // Non-custom presets: raw copy from panel (legacy behavior for non-zero presets)
+            var params = safeHDRSettings.value
+            params.boost = hdrPanelSettings.brightness
+            params.contrast = hdrPanelSettings.contrast
+            params.saturation = hdrPanelSettings.saturation
+            params.pqExposure = hdrPanelSettings.pqExposure
+            params.brightness = 0.0
+            params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
+            safeHDRSettings.value = params
+        }
     }
 
     private func presentFilterPresetCenterPopup(selectedPreset: Int32) {
@@ -2396,6 +2409,9 @@ struct _FlatDisplayStreamView: View {
             self.firstFrameSeenEpoch = -1
             let myEpoch = self.streamEpoch
             print("[FlatDisplay] 🚀 Starting stream (epoch \(myEpoch))")
+            
+            // CRITICAL: Sync HDR settings from panel to safeHDRSettings BEFORE decoder creation
+            self.syncHDRSettingsForStreamStart()
             
             self.renderGateOpen = true
             self.ensureHDRTextureMatchesSetting()

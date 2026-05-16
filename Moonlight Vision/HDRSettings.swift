@@ -14,6 +14,17 @@ private enum HDRSettingsMigration {
     static let legacyTrimsKey = "hdrTrimsRestoredLegacy_v1"
 }
 
+/// Robust Float reading from UserDefaults — handles Float, Double, or NSNumber storage
+private func persistedFloat(forKey key: String, default defaultValue: Float) -> Float {
+    guard let v = UserDefaults.standard.object(forKey: key) else { return defaultValue }
+    switch v {
+    case let f as Float: return f
+    case let d as Double: return Float(d)
+    case let n as NSNumber: return n.floatValue
+    default: return defaultValue
+    }
+}
+
 class HDRSettings: ObservableObject {
     @Published var brightness: Float {
         didSet { UserDefaults.standard.set(brightness, forKey: "hdrBrightness") }
@@ -43,15 +54,15 @@ class HDRSettings: ObservableObject {
         let defaultsContrast: Float = 1.15
         let defaultsSaturation: Float = 1.40
 
-        var contrastIn = UserDefaults.standard.object(forKey: "hdrContrast") as? Float ?? defaultsContrast
-        var saturationIn = UserDefaults.standard.object(forKey: "hdrSaturation") as? Float ?? defaultsSaturation
+        var contrastIn = persistedFloat(forKey: "hdrContrast", default: defaultsContrast)
+        var saturationIn = persistedFloat(forKey: "hdrSaturation", default: defaultsSaturation)
 
         let alreadyMigrated = UserDefaults.standard.bool(forKey: HDRSettingsMigration.legacyTrimsKey)
         if !alreadyMigrated {
             UserDefaults.standard.set(true, forKey: HDRSettingsMigration.legacyTrimsKey)
             // Brief “neutral 1/1/…” window left dull trims in UserDefaults; restore historical punch.
-            if UserDefaults.standard.object(forKey: "hdrContrast") as? Float == 1.0
-                && UserDefaults.standard.object(forKey: "hdrSaturation") as? Float == 1.0 {
+            if persistedFloat(forKey: "hdrContrast", default: defaultsContrast) == 1.0
+                && persistedFloat(forKey: "hdrSaturation", default: defaultsSaturation) == 1.0 {
                 contrastIn = defaultsContrast
                 saturationIn = defaultsSaturation
                 UserDefaults.standard.set(contrastIn, forKey: "hdrContrast")
@@ -59,10 +70,10 @@ class HDRSettings: ObservableObject {
             }
         }
 
-        self.brightness = UserDefaults.standard.object(forKey: "hdrBrightness") as? Float ?? defaultsBrightness
+        self.brightness = persistedFloat(forKey: "hdrBrightness", default: defaultsBrightness)
         self.contrast = contrastIn
         self.saturation = saturationIn
-        self.pqExposure = UserDefaults.standard.object(forKey: "hdrPqExposure") as? Float ?? 1.0
+        self.pqExposure = persistedFloat(forKey: "hdrPqExposure", default: 1.0)
         self.referenceHDR = UserDefaults.standard.bool(forKey: "hdrReferenceMode")
     }
 
