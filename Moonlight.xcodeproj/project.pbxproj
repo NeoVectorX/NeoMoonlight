@@ -1848,7 +1848,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1928,7 +1928,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
