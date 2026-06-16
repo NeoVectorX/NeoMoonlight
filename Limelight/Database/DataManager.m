@@ -171,6 +171,8 @@ realitykitRendererAnimateOpening:(BOOL)realitykitRendererAnimateOpening
         MoonlightSettings* settings = [[MoonlightSettings alloc] initWithEntity:entity insertIntoManagedObjectContext:_managedObjectContext];
 
         settings.statsOverlay = NO;
+        settings.absoluteTouchMode = YES;
+        settings.multiController = NO;
 
         return settings;
     } else {
