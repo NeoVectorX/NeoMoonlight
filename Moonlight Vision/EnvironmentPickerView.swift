@@ -8,6 +8,19 @@
 
 import SwiftUI
 
+/// Baseline sizing for the environment sheet; multiply with ``pt(_:)`` for uniform layout/fonts.
+private enum EnvironmentPickerMetrics {
+    /// 25% smaller than original design (`1 − 0.25`).
+    static let scale: CGFloat = 0.75
+    static func pt(_ base: CGFloat) -> CGFloat { base * scale }
+    /// One grid cell: thumbnail + label stack (baseline units before ``pt(_:)``).
+    static var gridCellHeight: CGFloat { pt(100 + 8 + 24) }
+    /// Two rows of cells plus inter-row grid spacing.
+    static var gridPageHeight: CGFloat { gridCellHeight * 2 + pt(20) }
+    /// Inner width between outer padding (700 − 32×2 at baseline).
+    static var gridPageWidth: CGFloat { pt(636) }
+}
+
 struct EnvironmentPickerView: View {
     @Binding var environmentSphereLevel: Int
     @Binding var newsetLevel: Int
@@ -31,7 +44,11 @@ struct EnvironmentPickerView: View {
     }
     
     @State private var currentPage = 0
+    /// Drives horizontal paging scroll position (kept in sync with ``currentPage``).
+    @State private var scrollPageID: Int?
     private let itemsPerPage = 6
+    private let pageSwipeMinimumDistance: CGFloat = 24
+    private let pageSwipeTriggerDistance: CGFloat = 40
     
     private var allItems: [EnvItem] {
         var items: [EnvItem] = []
@@ -54,23 +71,22 @@ struct EnvironmentPickerView: View {
         max(1, Int(ceil(Double(allItems.count) / Double(itemsPerPage))))
     }
     
-    private var currentItems: [EnvItem] {
-        let start = currentPage * itemsPerPage
+    private func items(for page: Int) -> [EnvItem] {
+        let start = page * itemsPerPage
         let end = min(start + itemsPerPage, allItems.count)
         guard start < end else { return [] }
         return Array(allItems[start..<end])
     }
     
     // Theme Colors
-    private let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: EnvironmentPickerMetrics.pt(20)) {
             // Header
             HStack {
                 Text("Select Environment")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: EnvironmentPickerMetrics.pt(24), weight: .bold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -79,96 +95,170 @@ struct EnvironmentPickerView: View {
                     withAnimation { isPresented = false }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundColor(.white.opacity(0.8))
+                        .font(.system(size: EnvironmentPickerMetrics.pt(32)))
+                        .foregroundColor(.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)
+                .neoMenuItemGazeHighlight(.circle)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, EnvironmentPickerMetrics.pt(8))
             
-            // Grid
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 20) {
-                ForEach(currentItems) { item in
-                    Button {
-                        selectItem(item)
-                    } label: {
-                        VStack(spacing: 8) {
-                            Group {
-                                if item.type == .disable {
-                                    ZStack {
-                                        Color.white.opacity(0.1)
-                                        Image(systemName: "slash.circle")
-                                            .font(.system(size: 40))
-                                            .foregroundColor(.white.opacity(0.6))
-                                    }
-                                } else {
-                                    EnvironmentThumbnailView(displayName: item.displayName)
-                                }
-                            }
-                            .frame(height: 100)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
+            // Pages: horizontal swipe triggers the same animated page jump as the arrows.
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 0) {
+                    ForEach(0..<pageCount, id: \.self) { page in
+                        environmentPageGrid(items: items(for: page))
+                            .frame(
+                                width: EnvironmentPickerMetrics.gridPageWidth,
+                                height: EnvironmentPickerMetrics.gridPageHeight,
+                                alignment: .top
                             )
-                            
-                            Text(item.displayName)
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(isSelected(item) ? brandOrange : .white)
-                                .lineLimit(1)
-                        }
-                        .contentShape(Rectangle()) // Make whole area tappable
+                            .id(page)
                     }
-                    .buttonStyle(.plain)
                 }
+                .scrollTargetLayout()
             }
-            .frame(minHeight: 260) // Keep stable height
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $scrollPageID)
+            .scrollDisabled(true)
+            .gesture(pageSwipeGesture)
+            .frame(height: EnvironmentPickerMetrics.gridPageHeight)
+            .onAppear { scrollPageID = currentPage }
+            .onChange(of: scrollPageID) { _, newID in
+                guard let newID, newID != currentPage else { return }
+                currentPage = newID
+            }
+            .onChange(of: currentPage) { _, page in
+                if scrollPageID != page { scrollPageID = page }
+            }
             
             // Pagination
-            HStack(spacing: 20) {
+            HStack(spacing: EnvironmentPickerMetrics.pt(20)) {
                 Button {
-                    withAnimation { currentPage = max(0, currentPage - 1) }
+                    goToPage(currentPage - 1)
                 } label: {
                     Image(systemName: "chevron.left.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: EnvironmentPickerMetrics.pt(32)))
                     .foregroundColor(currentPage > 0 ? .white : .white.opacity(0.2))
                 }
                 .buttonStyle(.plain)
                 .disabled(currentPage == 0)
                 
-                HStack(spacing: 8) {
+                HStack(spacing: EnvironmentPickerMetrics.pt(8)) {
                     ForEach(0..<pageCount, id: \.self) { index in
                         Circle()
                             .fill(index == currentPage ? brandOrange : Color.white.opacity(0.3))
-                            .frame(width: 8, height: 8)
+                            .frame(
+                                width: EnvironmentPickerMetrics.pt(8),
+                                height: EnvironmentPickerMetrics.pt(8)
+                            )
                     }
                 }
                 
                 Button {
-                    withAnimation { currentPage = min(pageCount - 1, currentPage + 1) }
+                    goToPage(currentPage + 1)
                 } label: {
                     Image(systemName: "chevron.right.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: EnvironmentPickerMetrics.pt(32)))
                     .foregroundColor(currentPage < pageCount - 1 ? .white : .white.opacity(0.2))
                 }
                 .buttonStyle(.plain)
                 .disabled(currentPage >= pageCount - 1)
             }
         }
-        .padding(32)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(brandNavy.opacity(0.95))
-                .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(EnvironmentPickerMetrics.pt(32))
+        .neoClearBluePanelChrome(
+            cornerRadius: EnvironmentPickerMetrics.pt(24),
+            layoutScale: EnvironmentPickerMetrics.scale
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-        )
-        .frame(width: 700)
+        .frame(width: EnvironmentPickerMetrics.pt(700))
         .onAppear {
             scrollToSelection()
         }
+    }
+    
+    @ViewBuilder
+    private func environmentPageGrid(items: [EnvItem]) -> some View {
+        let thumbRadius = EnvironmentPickerMetrics.pt(12)
+
+        LazyVGrid(
+            columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+            spacing: EnvironmentPickerMetrics.pt(20)
+        ) {
+            ForEach(items) { item in
+                VStack(spacing: EnvironmentPickerMetrics.pt(8)) {
+                    Button {
+                        selectItem(item)
+                    } label: {
+                        environmentThumbnail(for: item, cornerRadius: thumbRadius)
+                    }
+                    .buttonStyle(.plain)
+
+                    Text(item.displayName)
+                        .font(.system(size: EnvironmentPickerMetrics.pt(16), weight: .medium))
+                        .foregroundColor(isSelected(item) ? brandOrange : .white)
+                        .lineLimit(1)
+                        .hoverEffectDisabled(true)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectItem(item)
+                        }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private func environmentThumbnail(for item: EnvItem, cornerRadius: CGFloat) -> some View {
+        Group {
+            if item.type == .disable {
+                ZStack {
+                    Color.white.opacity(0.1)
+                    Image(systemName: "slash.circle")
+                        .font(.system(size: EnvironmentPickerMetrics.pt(40)))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+            } else {
+                EnvironmentThumbnailView(displayName: item.displayName)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: EnvironmentPickerMetrics.pt(100))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(
+                    isSelected(item) ? brandOrange : Color.white.opacity(0.2),
+                    lineWidth: isSelected(item) ? EnvironmentPickerMetrics.pt(3) : EnvironmentPickerMetrics.pt(1)
+                )
+        )
+        .neoMenuItemGazeHighlight(.roundedRect(cornerRadius: cornerRadius))
+    }
+    
+    private func goToPage(_ page: Int) {
+        let clamped = min(max(0, page), pageCount - 1)
+        guard clamped != currentPage else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            currentPage = clamped
+            scrollPageID = clamped
+        }
+    }
+
+    private var pageSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: pageSwipeMinimumDistance, coordinateSpace: .local)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) else { return }
+                if horizontal <= -pageSwipeTriggerDistance {
+                    goToPage(currentPage + 1)
+                } else if horizontal >= pageSwipeTriggerDistance {
+                    goToPage(currentPage - 1)
+                }
+            }
     }
     
     private func scrollToSelection() {
@@ -187,7 +277,9 @@ struct EnvironmentPickerView: View {
         }
         
         if let item = selectedItem, let idx = allItems.firstIndex(where: { $0.id == item.id }) {
-            currentPage = idx / itemsPerPage
+            let page = idx / itemsPerPage
+            currentPage = page
+            scrollPageID = page
         }
     }
     
@@ -218,6 +310,11 @@ struct EnvironmentPickerView: View {
             // Keep picker open to allow cycling
         }
     }
+}
+
+extension EnvironmentPickerView {
+    /// Curved stream attachment width in meters (matches ``EnvironmentPickerMetrics.scale``).
+    static var curvedDesiredLocalWidth: Float { 0.96 * Float(EnvironmentPickerMetrics.scale) }
 }
 
 private struct EnvironmentThumbnailView: View {

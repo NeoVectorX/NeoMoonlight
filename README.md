@@ -15,7 +15,7 @@
 - **Automatic Aspect Ratio** — Stream aspect ratio adjusts automatically.
 - **Mouse Cursor Toggle** — Added a toggle switch in settings to disable VisionOS cursor, eliminating duplicate cursors.
 
-## 🚀 Neo Moonlight v12.0 - Plato Edition
+## 🚀 Neo Moonlight v12.2 - Lunar Edition
 **Release Date:** February 2026
 
 ### 🌟 New Feature: SharePlay Co-op

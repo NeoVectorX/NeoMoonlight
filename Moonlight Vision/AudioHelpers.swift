@@ -7,6 +7,7 @@
 //
 
 import AVFoundation
+import UIKit
 
 enum SoundStageSize: String, Codable, CaseIterable {
     case small = "Small"
@@ -31,17 +32,90 @@ enum SoundStageSize: String, Codable, CaseIterable {
 
 class AudioHelpers {
 
+    private static var sessionActivated = false
+    private static var pinnedStreamSceneIdentifier: String?
+
+    /// While streaming, spatial audio stays anchored to this scene (immersive space or stream window),
+    /// even if the main menu window becomes frontmost.
+    static func pinStreamAudioToScene(_ identifier: String?) {
+        pinnedStreamSceneIdentifier = identifier
+        if let identifier {
+            print("AudioHelpers - Pinned stream audio to scene: \(identifier)")
+        } else {
+            print("AudioHelpers - Cleared stream audio scene pin")
+        }
+    }
+
+    static func pinnedStreamSceneIdentifierForSurround() -> String? {
+        pinnedStreamSceneIdentifier
+    }
+
+    #if os(visionOS)
+    static func immersiveSpaceSceneIdentifier() -> String? {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            if windowScene.session.role == .immersiveSpaceApplication {
+                return windowScene.session.persistentIdentifier
+            }
+        }
+        return nil
+    }
+    #else
+    static func immersiveSpaceSceneIdentifier() -> String? { nil }
+    #endif
+
+    static func keyWindowSceneIdentifier() -> String? {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            if windowScene.windows.contains(where: \.isKeyWindow) {
+                return windowScene.session.persistentIdentifier
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    static func captureAndPinStreamAudioScene(preferredIdentifier: String? = nil) -> String? {
+        let identifier = preferredIdentifier
+            ?? pinnedStreamSceneIdentifier
+            ?? immersiveSpaceSceneIdentifier()
+            ?? keyWindowSceneIdentifier()
+        pinStreamAudioToScene(identifier)
+        return identifier
+    }
+
+    private static func preferredSurroundSceneIdentifier() -> String? {
+        pinnedStreamSceneIdentifier
+            ?? immersiveSpaceSceneIdentifier()
+            ?? keyWindowSceneIdentifier()
+            ?? UIApplication.shared.connectedScenes.first?.session.persistentIdentifier
+    }
+
+    static func isStreamSceneForegroundActive(_ identifier: String) -> Bool {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene,
+                  windowScene.session.persistentIdentifier == identifier else { continue }
+            return windowScene.activationState == .foregroundActive
+        }
+        return false
+    }
+
     private static func fixCategoryAndMic() {
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setActive(true)
-            try audioSession.setCategory(.playAndRecord, options: [.mixWithOthers, .allowBluetoothA2DP, .allowAirPlay])
-            try audioSession.setMode(.voiceChat)
-            try audioSession.setPreferredInputNumberOfChannels(1)
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            if !sessionActivated {
+                try audioSession.setActive(true)
+                sessionActivated = true
+            }
         }
         catch {
-            print("Failed to set the audio session mic/category configuration?")
+            print("Failed to set the audio session category configuration?")
         }
+    }
+
+    static func resetSessionState() {
+        sessionActivated = false
     }
 
     /// Ensure that the audio session is direct stereo
@@ -59,15 +133,15 @@ class AudioHelpers {
         }
     }
     
-    /// Ensure that the audio session is surround and anchored to the active window
-    /// Also ensures that the microphone uses voice chat noise cancellation.
+    /// Ensure that the audio session is surround and anchored to the stream scene when pinned,
+    /// otherwise the active window.
     static func fixAudioForSurroundForCurrentWindow(soundStageSize: SoundStageSize = .medium) {
         AudioHelpers.fixCategoryAndMic()
         
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            if let id = UIApplication.shared.connectedScenes.first?.session.persistentIdentifier {
-                print("AudioHelpers - Found current window \(id) with sound stage: \(soundStageSize.rawValue)")
+            if let id = preferredSurroundSceneIdentifier() {
+                print("AudioHelpers - Anchoring surround audio to scene \(id) with sound stage: \(soundStageSize.rawValue)")
 
                 try audioSession.setPreferredOutputNumberOfChannels(audioSession.maximumOutputNumberOfChannels)
                 try audioSession.setIntendedSpatialExperience(.headTracked(soundStageSize: soundStageSize.avAudioSessionSize, anchoringStrategy: .scene(identifier: id)))
@@ -78,6 +152,27 @@ class AudioHelpers {
             }
         } catch {
             print("Failed to set the audio session configuration?")
+        }
+    }
+
+    /// Prefer an explicit stream scene, then the pinned stream scene, then the active window.
+    /// If the stream scene is not foreground-active yet (e.g. menu still dismissing), keep bypassed
+    /// playback so Moonlight's SDL audio path stays alive until the scene is ready.
+    static func fixAudioForSurroundForStream(
+        soundStageSize: SoundStageSize = .medium,
+        sceneIdentifier: String? = nil
+    ) {
+        let targetScene = sceneIdentifier ?? pinnedStreamSceneIdentifier
+
+        if let targetScene {
+            guard isStreamSceneForegroundActive(targetScene) else {
+                print("AudioHelpers - Stream scene not foreground-active (\(targetScene)); keeping bypassed playback")
+                fixAudioForDirectStereo()
+                return
+            }
+            fixAudioForScene(identifier: targetScene, soundStageSize: soundStageSize)
+        } else {
+            fixAudioForSurroundForCurrentWindow(soundStageSize: soundStageSize)
         }
     }
     

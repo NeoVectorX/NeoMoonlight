@@ -25,12 +25,17 @@ struct CurvedDisplayTutorialView: View {
         (
             icon: "gamecontroller.fill",
             title: "Control Modes",
-            description: "Switch between Gaze Control, Screen Adjust, and Controller Mode using the toggle in top controls. Enable Controller Mode for gamepads connected directly to Vision Pro Bluetooth."
+            description: "Switch between Gaze Control, Screen Adjust, and Accessory Mode using the toggle in top controls. Select Accessory Mode to enable gamepads and mice."
         ),
         (
             icon: "arrow.up.left.and.arrow.down.right",
             title: "Screen Adjust",
-            description: "Enable Screen Adjust Mode to unlock the screen. Pinch and drag to reposition. Pinch with both fingers inwards and outwards to change the scale."
+            description: "In Screen Adjust Mode pinch-drag the middle area of the screen to reposition. Pinch in/out to change the screen scale."
+        ),
+        (
+            icon: "rectangle.fill.on.rectangle.angled.fill",
+            title: "Screen Preset Mode",
+            description: "Store up to 3 of your favorite screen positions. Long press the Screen Preset button to quickly cycle through each preset."
         ),
         (
             icon: "hand.point.up.left.fill",
@@ -40,17 +45,17 @@ struct CurvedDisplayTutorialView: View {
         (
             icon: "hand.tap.fill",
             title: "Long Press to Reset",
-            description: "Long Press (Pinch & Hold) on Tilt, Dimming, and Environment icons to quickly reset to default state."
+            description: "Long Press (Pinch & Hold) on Dimming, Environment and Screen Adjust icons to reset to default"
         ),
         (
             icon: "eye.slash.fill",
             title: "App Visibility",
-            description: "In Curved Display mode, external apps and system windows aren't visible. Switch to Flat Display if you need to use other apps."
+            description: "In Curved Display mode, external apps and system windows are unable to be visible. Switch to Flat Display if you need external app visiblity."
         ),
         (
             icon: "person.2.fill",
             title: "Couch Co-op Mode",
-            description: "Play couch co-op games with a friend via SharePlay. This is an experimental feature, so bear with any quirks or bugs you may encounter."
+            description: "Play couch co-op games locally or online with another Vision Pro player. Only the host needs to own the game. Requires a strong connection."
         ),
         (
             icon: "mountain.2.fill",
@@ -249,7 +254,7 @@ struct CurvedDisplayTutorialView: View {
                                 }
                             } else {
                                 withAnimation(.easeOut(duration: 0.3)) {
-                                    UserDefaults.standard.set(true, forKey: "hasSeenCurvedDisplayTutorial_v2")
+                                    UserDefaults.standard.set(true, forKey: "hasSeenCurvedDisplayTutorial_v3")
                                     isPresented = false
                                 }
                             }
@@ -361,5 +366,115 @@ struct CurvedDisplayTutorialView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
         .compositingGroup()
+    }
+}
+
+// MARK: - Head Follow first-use intro
+
+struct HeadFollowIntroView: View {
+    @Binding var isPresented: Bool
+    @State private var currentStep = 0
+
+    private let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
+    private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
+
+    private let steps: [(icon: String, title: String, description: String)] = [
+        (
+            icon: "figure.walk",
+            title: "Follow Mode",
+            description: "The screen stays with you while you move around."
+        ),
+        (
+            icon: "arrow.up.and.down.and.arrow.left.and.right",
+            title: "Screen Adjust",
+            description: "Drag to move the screen around you. Pinch to resize it smaller or larger."
+        ),
+        (
+            icon: "crown.fill",
+            title: "Reset Position",
+            description: "Hold the Digital Crown to snap the screen back to its original in-front position and default size."
+        ),
+        (
+            icon: "lock.open.fill",
+            title: "Turn Off",
+            description: "Tap Follow Mode on the top bar to exit and restore your previous layout."
+        )
+    ]
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Text("Follow Mode")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+
+                Image(systemName: steps[currentStep].icon)
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 96, height: 96)
+                    .background(
+                        Circle()
+                            .fill(brandNavy.opacity(0.85))
+                            .overlay(Circle().strokeBorder(brandOrange.opacity(0.6), lineWidth: 2))
+                    )
+
+                VStack(spacing: 10) {
+                    Text(steps[currentStep].title)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text(steps[currentStep].description)
+                        .font(.system(size: 16))
+                        .foregroundColor(.white.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: 380)
+
+                HStack(spacing: 8) {
+                    ForEach(0..<steps.count, id: \.self) { index in
+                        Circle()
+                            .fill(index == currentStep ? brandOrange : Color.white.opacity(0.35))
+                            .frame(width: index == currentStep ? 10 : 7, height: index == currentStep ? 10 : 7)
+                    }
+                }
+
+                Button {
+                    if currentStep < steps.count - 1 {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            currentStep += 1
+                        }
+                    } else {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            isPresented = false
+                        }
+                    }
+                } label: {
+                    Text(currentStep < steps.count - 1 ? "Next" : "Got It")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 140, height: 48)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(brandOrange)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(36)
+            .frame(width: 480)
+            .background(
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(brandNavy.opacity(0.94))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24)
+                            .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.4), radius: 30, y: 16)
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
     }
 }

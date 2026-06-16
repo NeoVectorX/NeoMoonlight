@@ -15,9 +15,7 @@ struct CenterPresetPopup: View {
     var displayScale: CGFloat = 1.0
     
     var body: some View {
-        let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
         let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
-        let babyBlue = Color(red: 0.72, green: 0.85, blue: 1.0)
         let radius: CGFloat = 24 * displayScale
         let spacing: CGFloat = 12 * displayScale
         let circleSize: CGFloat = 83 * displayScale
@@ -56,22 +54,7 @@ struct CenterPresetPopup: View {
         .frame(width: width, height: height)
         .padding(.horizontal, padH)
         .padding(.vertical, padV)
-        .background(
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(brandNavy.opacity(0.92))
-                .overlay(
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                )
-        )
-        .shadow(color: .black.opacity(0.25), radius: 30 * displayScale, x: 0, y: 16 * displayScale)
+        .neoClearBluePanelChrome(cornerRadius: radius, layoutScale: displayScale)
         .allowsHitTesting(false)
     }
 }

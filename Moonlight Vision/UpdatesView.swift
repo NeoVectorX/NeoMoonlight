@@ -19,6 +19,12 @@ struct UpdatesView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
+
+                Text("Neo Moonlight is an independent community fork for Apple Vision Pro. It is not affiliated with or endorsed by the Moonlight Game Streaming Project.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.65))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
                 
                 // Changelog Section
                 VStack(alignment: .leading, spacing: 16) {
@@ -27,74 +33,101 @@ struct UpdatesView: View {
                         .foregroundColor(.white.opacity(0.7))
                         .padding(.horizontal, 24)
                     
-                    // Version 12.0
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Neo Moonlight Version 12.0 - PLATO EDITION (February 2026)")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        
-                        ChangelogItem(text: "Experimental: Couch Co-op via SharePlay - Play couch co-op games with your friend. This is an extremely experimental feature, so please bear with any bugs or issues you may encounter. IMPORTANT: read co-op instructions in the user guide first")
-                        ChangelogItem(text: "Added Gaze / Touch control to curved display mode, this was uber challenging to make work across all curvatures, resolutions, sizes, etc.")
-                        ChangelogItem(text: "Added Gaze Control cursor adjustment in settings. If the gaze control cursor is slightly off for you, use this to make minor adjustments")
-                        ChangelogItem(text: "Added Gaze / Touch Control to Flat Display Mode.")
-                        ChangelogItem(text: "Added Classic Display Mode for improved compatibility with keyboard and mouse input")
-                        ChangelogItem(text: "Added keyboard support to Flat Display mode")
-                        ChangelogItem(text: "Added 'Reactive V1, V2 and Starfield' lighting presets that dynamically adjust based on screen content")
-                        ChangelogItem(text: "Added 5 new 360° environments")
-                        ChangelogItem(text: "Added star distance toggle that appears when Starfield is enabled with 3 presets (Close, Medium, Far) to customize star proximity")
-                        ChangelogItem(text: "Curvature and tilt angle settings now persist")
-                        ChangelogItem(text: "Added option in settings to add command button to open Windows Task Manager")
-                        ChangelogItem(text: "Added 3D SBS mode to Flat Display mode")
-                        ChangelogItem(text: "Added long press to control mode button to lock screen input. Useful for eating or resting hands without cursor interference. Long press again to unlock")
-                        ChangelogItem(text: "Added sound stage adjustment via long press on audio button. Cycle through Small, Medium, and Large sound stages when spatial audio is enabled")
-                        ChangelogItem(text: "Added co-op mode button and reorganized main menu layout for improved accessibility and workflow")
-                        ChangelogItem(text: "Added Gaze Control / Screen Adjust / Controller Mode toggle for curved display to easily switch between gaze/touch control, screen adjustment, and controller input. This was added to avoid conflict with screen interaction and the new gaze control. Controller mode must be enabled for gamepads connected directly to the Vision Pro Bluetooth to function")
-                        ChangelogItem(text: "Added option to choose default control mode in settings")
-                        ChangelogItem(text: "Added option to choose preferred cursor control method in settings (Gaze/Touch)")
-                        ChangelogItem(text: "Changed Renderer name to Display Mode in settings")
-                        ChangelogItem(text: "Added co-op mode external IP address help guide")
-                        ChangelogItem(text: "Fixed PS5 controller rumble")
-                        ChangelogItem(text: "Added custom resolution selection in dropdown")
-                        ChangelogItem(text: "Added more screen resolutions and categorized them by aspect ratio")
-                        ChangelogItem(text: "Added keyboard support to curved display mode. This requires the user to click an input bar below the screen to appear. Curved display keyboard solution had to be different due to the limitation of immersive mode and the lack of visibility of external elements")
-                        ChangelogItem(text: "Updated user guide with co-op connection info")
-                        ChangelogItem(text: "Minor UI panel fixes and adjustments")
-                        ChangelogItem(text: "Fixed cursor jitter in curved display mode")
-                        ChangelogItem(text: "Fixed memory leak and various bugs")
-                        ChangelogItem(text: "Fixed keyboard focus stealing from other visionOS apps in flat display mode")
-                        ChangelogItem(text: "Added optional battery meter for primary connected controller. Shows battery level and charging status in the top control bar")
-                        ChangelogItem(text: "Added adjustable brightness for select lighting presets (marked with lightbulb icon). Long press to cycle brightness from dark to light")
-                        ChangelogItem(text: "Added toggle in settings to remove rounded corners from stream display")
-                        ChangelogItem(text: "Added Dark Mode in settings - dims control overlays for a more immersive viewing experience (Flat and Curved modes only)")
-                        ChangelogItem(text: "Added Dynamic Controls Menu — optional collapsible top bar (toggle in Settings). Single center launcher expands to the full icon row")
-                        ChangelogItem(text: "Performance optimizations across streaming and rendering for a smoother experience with improved FPS stability")
-                    }
-                    .padding(24)
-                    .background(
-                        ZStack {
-                            // Depth shadow
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color.black.opacity(0.3))
-                                .offset(y: 6)
-                                .blur(radius: 12)
+                    VStack(spacing: 20) {
+                        // Version 12.2 (June 2026)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Neo Moonlight Version 12.2 - LUNAR EDITION (June 2026)")
+                                .font(.headline)
+                                .foregroundColor(.white)
+
+                            ChangelogItem(text: "Updated Screen Adjust mode with tilt, rotation, and curvature for Curved Display mode.")
+                            ChangelogItem(text: "Renamed Controller Mode to Accessory Mode. Updated for gamepad and mice control.")
+                            ChangelogItem(text: "New Screen Presets panel added to Curved Display mode. Save up to 3 favorite screen positions with scale, curvature, and tilt. Long press to cycle quickly through the 3 presets.")
+                            ChangelogItem(text: "Optional Follow Mode added in settings. The screen stays with you while moving around —use Screen Adjust mode to reposition as needed, hold Digital Crown to reset. Critically damped spring smoothing for natural, gimbal-like motion.")
+                            ChangelogItem(text: "Flat and Curved display: Added a new Pass-Through Mode that dims the display and audio so you can temporarily see and hear your surroundings.")
+                            ChangelogItem(text: "Added option to report PlayStation controller as Xbox to the PC for greater XInput game compatibility. Requires gamepad connected to Vision Pro Bluetooth.")
+                            ChangelogItem(text: "Added option to choose between Scroll or Marquee mode when pinch and dragging in apps, with optional stream-bar quick toggle button.")
+                            ChangelogItem(text: "Bug Fix: Fixed screen position and scale on first launch after a fresh install in curved display mode.")
+                            ChangelogItem(text: "Enhanced Desktop Actions: added function keys, more Windows shortcuts, and a new macOS specific page (App Switch, Spotlight, Mission Control, Spaces, Force Quit).")
+                            ChangelogItem(text: "Flat Display mode: Magic Trackpad support including pointer move and two-finger scroll.")
                             
-                            // Main card
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .strokeBorder(
-                                            LinearGradient(
-                                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            ),
-                                            lineWidth: 1
-                                        )
-                                )
                         }
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(changelogReleaseCardBackground)
+                        .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+
+                        // Version 12.1 (May 2026)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Neo Moonlight Version 12.1 - PLATO EDITION (May 2026)")
+                                .font(.headline)
+                                .foregroundColor(.white)
+
+                            ChangelogItem(text: "HDR: Complete overhaul of the HDR grading pipeline—PQ decoding, gamut mapping, and tone shaping were reworked end-to-end for a more accurate picture on Vision Pro.")
+                            ChangelogItem(text: "HDR: New in-stream Enhanced HDR panel plus optional Reference HDR.")
+                            ChangelogItem(text: "Three optional HDR presets with ability to name them.")
+                            ChangelogItem(text: "Added 19 new themes for the app accessible via the main menu moon toggle at the bottom.")
+                            ChangelogItem(text: "Updated the Streaming Guide (tabbed layout): refreshed Get Started walkthrough.")
+                            ChangelogItem(text: "Added optional stream mute button toggle in settings.")
+                            ChangelogItem(text: "Added a new level of curve (600R) to the Curvature setting.")
+                            ChangelogItem(text: "Settings: Light Mode for the stream control bar (Flat and Curved)—fully visible when idle, half visible when auto-hidden.")
+                            ChangelogItem(text: "360° environment and lighting choice now persists between sessions.")
+                            ChangelogItem(text: "Settings: Added a custom bitrate option in the Bitrate dropdown menu.")
+                            ChangelogItem(text: "Reactive lighting and bloom adjustments; tap the preset in the picker to cycle glow reach tiers.")
+                            ChangelogItem(text: "Updated Windows command option to feature multiple functions including Shift+F1, Home, Alt-Tab, and more.")
+                            ChangelogItem(text: "Added Light Mode toggle in settings for higher visibility of the control bar when idle.")
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(changelogReleaseCardBackground)
+                        .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+                        
+                        // Version 12.0
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Neo Moonlight Version 12.0 - PLATO EDITION (February 2026)")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            
+                            ChangelogItem(text: "Experimental: Couch Co-op via SharePlay - Play couch co-op games with your friend. This is an extremely experimental feature, so please bear with any bugs or issues you may encounter. IMPORTANT: read co-op instructions in the user guide first")
+                            ChangelogItem(text: "Added Gaze / Touch control to curved display mode, this was uber challenging to make work across all curvatures, resolutions, sizes, etc.")
+                            ChangelogItem(text: "Added Gaze Control cursor adjustment in settings. If the gaze control cursor is slightly off for you, use this to make minor adjustments")
+                            ChangelogItem(text: "Added Gaze / Touch Control to Flat Display Mode.")
+                            ChangelogItem(text: "Added Classic Display Mode for improved compatibility with keyboard and mouse input")
+                            ChangelogItem(text: "Added keyboard support to Flat Display mode")
+                            ChangelogItem(text: "Added 'Reactive V1, V2 and Starfield' lighting presets that dynamically adjust based on screen content")
+                            ChangelogItem(text: "Added 5 new 360° environments")
+                            ChangelogItem(text: "Added star distance toggle that appears when Starfield is enabled with 3 presets (Close, Medium, Far) to customize star proximity")
+                            ChangelogItem(text: "Curvature and tilt angle settings now persist")
+                            ChangelogItem(text: "Added option in settings to add command button to open Windows Task Manager")
+                            ChangelogItem(text: "Added 3D SBS mode to Flat Display mode")
+                            ChangelogItem(text: "Added long press to control mode button to lock screen input. Useful for eating or resting hands without cursor interference. Long press again to unlock")
+                            ChangelogItem(text: "Added sound stage adjustment via long press on audio button. Cycle through Small, Medium, and Large sound stages when spatial audio is enabled")
+                            ChangelogItem(text: "Added co-op mode button and reorganized main menu layout for improved accessibility and workflow")
+                            ChangelogItem(text: "Added Gaze Control / Screen Adjust / Controller Mode toggle for curved display to easily switch between gaze/touch control, screen adjustment, and controller input. This was added to avoid conflict with screen interaction and the new gaze control. Controller mode must be enabled for gamepads connected directly to the Vision Pro Bluetooth to function")
+                            ChangelogItem(text: "Added option to choose default control mode in settings")
+                            ChangelogItem(text: "Added option to choose preferred cursor control method in settings (Gaze/Touch)")
+                            ChangelogItem(text: "Changed Renderer name to Display Mode in settings")
+                            ChangelogItem(text: "Added co-op mode external IP address help guide")
+                            ChangelogItem(text: "Fixed PS5 controller rumble")
+                            ChangelogItem(text: "Added custom resolution selection in dropdown")
+                            ChangelogItem(text: "Added more screen resolutions and categorized them by aspect ratio")
+                            ChangelogItem(text: "Added keyboard support to curved display mode. This requires the user to click an input bar below the screen to appear. Curved display keyboard solution had to be different due to the limitation of immersive mode and the lack of visibility of external elements")
+                            ChangelogItem(text: "Updated user guide with co-op connection info")
+                            ChangelogItem(text: "Fixed cursor jitter in curved display mode")
+                            ChangelogItem(text: "Fixed memory leak and various bugs")
+                            ChangelogItem(text: "Fixed keyboard focus stealing from other visionOS apps in flat display mode")
+                            ChangelogItem(text: "Added optional battery meter for primary connected controller. Shows battery level and charging status in the top control bar")
+                            ChangelogItem(text: "Added adjustable brightness for select lighting presets (marked with lightbulb icon). Long press to cycle brightness from dark to light")
+                            ChangelogItem(text: "Added toggle in settings to remove rounded corners from stream display")
+                            ChangelogItem(text: "Added Dark Mode in settings - dims control overlays for a more immersive viewing experience (Flat and Curved modes only)")
+                            ChangelogItem(text: "Added Dynamic Controls Menu — optional collapsible top bar (toggle in Settings). Single center launcher expands to the full icon row")
+                            ChangelogItem(text: "Performance optimizations across streaming and rendering for a smoother experience with improved FPS stability")
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(changelogReleaseCardBackground)
+                        .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 8)
+                    }
                     .padding(.horizontal, 24)
                 }
                 
@@ -177,7 +210,7 @@ struct UpdatesView: View {
                             
                             // Main card - matching ComputerView blue background
                             RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.95))
+                                .fill(MenuCardStyle.fill)
                                 .overlay(
                                     LinearGradient(
                                         colors: [
@@ -323,7 +356,7 @@ struct UpdatesView: View {
                             
                             // Main card - matching ComputerView blue background
                             RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.95))
+                                .fill(MenuCardStyle.fill)
                                 .overlay(
                                     LinearGradient(
                                         colors: [
@@ -383,7 +416,7 @@ struct UpdatesView: View {
                             
                             // Main card - matching ComputerView blue background
                             RoundedRectangle(cornerRadius: 20)
-                                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.95))
+                                .fill(MenuCardStyle.fill)
                                 .overlay(
                                     LinearGradient(
                                         colors: [
@@ -413,6 +446,29 @@ struct UpdatesView: View {
                 }
             }
             .padding(.bottom, 24)
+        }
+    }
+
+    /// Shared card chrome for changelog release sections (matches prior single-card styling).
+    private var changelogReleaseCardBackground: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.3))
+                .offset(y: 6)
+                .blur(radius: 12)
+            RoundedRectangle(cornerRadius: 20)
+                .fill(MenuCardStyle.fill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [.white.opacity(0.2), .white.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
         }
     }
 }

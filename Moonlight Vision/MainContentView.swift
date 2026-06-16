@@ -19,6 +19,116 @@ extension EnvironmentValues {
     }
 }
 
+private enum MenuBackgroundTheme: String, CaseIterable {
+    case neo = "MoonBG-11"
+    case light = "neo-light-background"
+    case darkNight = "dark-night"
+    case img8909 = "IMG_8909"
+    case img8910 = "IMG_8910"
+    case img8911 = "IMG_8911"
+    case img8912 = "IMG_8912"
+    case colornightA = "colornightA"
+    case colornightB = "colornightB"
+    case colornightC = "colornightC"
+    case colornightD = "colornightD"
+    case colornightE = "colornightE"
+    case colornightF = "colornightF"
+    case colornightG = "colornightG"
+    case colornightH = "colornightH"
+    case colornightI = "colornightI"
+    case nightBG1 = "nightBG-1"
+    case nightBG2 = "nightBG-2"
+    case nightBG3 = "nightBG-3"
+    case colornight15 = "color-night15"
+
+    /// Recycled for color-night variants (and overflow) so the footer toggle stays compact.
+    private static let recycledMoonIcons: [String] = [
+        "moon.fill",
+        "moonphase.new.moon",
+        "moon.stars.fill",
+        "moonphase.waxing.crescent",
+        "moonphase.first.quarter",
+        "moonphase.waning.gibbous",
+        "moonphase.last.quarter",
+        "moon.haze.fill",
+        "sparkles",
+        "cloud.moon.fill",
+        "moon.dust.fill",
+        "moon.zzz.fill",
+        "moon.circle.fill",
+    ]
+
+    var iconName: String {
+        switch self {
+        case .neo: return "moon.fill"
+        case .light: return "moonphase.new.moon"
+        case .darkNight: return "moon.stars.fill"
+        case .img8909: return "moonphase.waxing.crescent"
+        case .img8910: return "moonphase.first.quarter"
+        case .img8911: return "moonphase.waning.gibbous"
+        case .img8912: return "moonphase.last.quarter"
+        case .colornightA: return Self.recycledMoonIcons[0]
+        case .colornightB: return Self.recycledMoonIcons[1]
+        case .colornightC: return Self.recycledMoonIcons[2]
+        case .colornightD: return Self.recycledMoonIcons[3]
+        case .colornightE: return Self.recycledMoonIcons[4]
+        case .colornightF: return Self.recycledMoonIcons[5]
+        case .colornightG: return Self.recycledMoonIcons[6]
+        case .colornightH: return Self.recycledMoonIcons[7]
+        case .colornightI: return Self.recycledMoonIcons[8]
+        case .nightBG1: return Self.recycledMoonIcons[9]
+        case .nightBG2: return Self.recycledMoonIcons[10]
+        case .nightBG3: return Self.recycledMoonIcons[11]
+        case .colornight15: return Self.recycledMoonIcons[12]
+        }
+    }
+
+    var next: MenuBackgroundTheme {
+        let all = Self.allCases
+        let index = all.firstIndex(of: self) ?? 0
+        return all[(index + 1) % all.count]
+    }
+
+    var accessibilityName: String {
+        switch self {
+        case .neo: return "default"
+        case .light: return "light"
+        case .darkNight: return "dark night"
+        case .img8909: return "alternate 1"
+        case .img8910: return "alternate 2"
+        case .img8911: return "alternate 3"
+        case .img8912: return "alternate 4"
+        case .colornightA: return "color night A"
+        case .colornightB: return "color night B"
+        case .colornightC: return "color night C"
+        case .colornightD: return "color night D"
+        case .colornightE: return "color night E"
+        case .colornightF: return "color night F"
+        case .colornightG: return "color night G"
+        case .colornightH: return "color night H"
+        case .colornightI: return "color night I"
+        case .nightBG1: return "night background 1"
+        case .nightBG2: return "night background 2"
+        case .nightBG3: return "night background 3"
+        case .colornight15: return "color night 15"
+        }
+    }
+}
+
+private enum MenuBackgroundStorage {
+    static let themeKey = "menu.backgroundTheme"
+    static let legacyLightKey = "menu.useLightBackground"
+
+    static func migrateLegacyLightPreferenceIfNeeded(themeRaw: inout String) {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: themeKey) == nil,
+              defaults.object(forKey: legacyLightKey) != nil else { return }
+        themeRaw = defaults.bool(forKey: legacyLightKey)
+            ? MenuBackgroundTheme.light.rawValue
+            : MenuBackgroundTheme.neo.rawValue
+    }
+}
+
 struct MainContentView: View {
     @EnvironmentObject private var viewModel: MainViewModel
     @Environment(\.openWindow) private var openWindow
@@ -33,8 +143,14 @@ struct MainContentView: View {
     @State private var isRefreshingDiscovery = false
     @State private var showDeletionTriggeredMessage = false
     @State private var selectedTab = 0
+    @State private var guideScrollResetID = 0
     @State private var showCannotCloseAlert = false
+    @AppStorage(MenuBackgroundStorage.themeKey) private var menuThemeRaw = MenuBackgroundTheme.neo.rawValue
     @Environment(\.scenePhase) private var scenePhase
+
+    private var menuBackgroundTheme: MenuBackgroundTheme {
+        MenuBackgroundTheme(rawValue: menuThemeRaw) ?? .neo
+    }
     
     /// Gatekeeper for modals. Prevents presentation when the Curved Display renderer is active.
     private var canShowModal: Bool {
@@ -52,12 +168,11 @@ struct MainContentView: View {
     
     var body: some View {
         ZStack {
-            // Background image
-            Image("MoonBG-11")
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
+            // Active theme only (avoids decoding all 19 full-screen backgrounds at once).
+            menuThemeBackgroundImage(menuBackgroundTheme)
+                .id(menuThemeRaw)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.25), value: menuThemeRaw)
 
             // Outer glow aura
             RoundedRectangle(cornerRadius: 32)
@@ -75,7 +190,7 @@ struct MainContentView: View {
                 )
                 .blur(radius: 50)
                 .scaleEffect(1.05)
-            
+
             RoundedRectangle(cornerRadius: 32)
                 .fill(
                     LinearGradient(
@@ -131,7 +246,11 @@ struct MainContentView: View {
                         gradient: [brandViolet, brandViolet.opacity(0.7)]
                     ) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 2
+                            if selectedTab == 2 {
+                                guideScrollResetID += 1
+                            } else {
+                                selectedTab = 2
+                            }
                         }
                     }
                     
@@ -156,7 +275,7 @@ struct MainContentView: View {
                             .blur(radius: 12)
                         
                         RoundedRectangle(cornerRadius: 20)
-                            .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                            .fill(MenuCardStyle.fill)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 20)
                                     .strokeBorder(
@@ -193,7 +312,7 @@ struct MainContentView: View {
                         .tag(1)
                     
                     // Guide Tab
-                    UserGuideView()
+                    UserGuideView(scrollResetID: guideScrollResetID)
                         .tag(2)
                     
                     // About Tab
@@ -203,9 +322,14 @@ struct MainContentView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .padding(.top, 16)
                 .onChange(of: selectedTab) { oldValue, newValue in
+                    if newValue == 2 {
+                        guideScrollResetID += 1
+                    }
                     if canShowModal {
                         if newValue == 0 {
-                            viewModel.beginRefresh()
+                            if !viewModel.activelyStreaming {
+                                viewModel.beginRefresh()
+                            }
                         } else {
                             viewModel.stopRefresh()
                         }
@@ -228,6 +352,8 @@ struct MainContentView: View {
             }
         }
         .onAppear {
+            MenuBackgroundStorage.migrateLegacyLightPreferenceIfNeeded(themeRaw: &menuThemeRaw)
+
             guard !isEmbeddedInCurved else {
                 print("MainContentView: Embedded in Curved - skipping host load/refresh")
                 return
@@ -265,6 +391,15 @@ struct MainContentView: View {
         .onDisappear {
             viewModel.isMainViewVisible = false
         }
+    }
+
+    @ViewBuilder
+    private func menuThemeBackgroundImage(_ theme: MenuBackgroundTheme) -> some View {
+        Image(theme.rawValue)
+            .resizable()
+            .scaledToFill()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
     }
 }
 
@@ -429,61 +564,70 @@ struct ComputersTabView: View {
     private var canShowModal: Bool { !isEmbeddedInCurved }
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(spacing: 20) {
-                        if viewModel.hostsWithPairState.isEmpty {
-                            EmptyStateCard().padding(.top, 16)
-                        } else {
-                            ForEach(viewModel.hostsWithPairState, id: \.id) { host in
-                                ComputerCard3D(
-                                    host: host,
-                                    isSelected: selectedHost?.id == host.id,
-                                    onTap: { handleTap(on: host) },
-                                    onWake: { viewModel.wakeHost(host) },
-                                    onPair: { viewModel.tryPairHost(host) },
-                                    onDelete: {
-                                        hostToDelete = host
-                                        isDeletingHost = true
-                                    }
-                                )
-                                .transition(.asymmetric(
-                                    insertion: .scale.combined(with: .opacity),
-                                    removal: .scale.combined(with: .opacity)
-                                ))
+        ScrollView {
+            VStack(spacing: 20) {
+                if viewModel.hostsWithPairState.isEmpty {
+                    EmptyStateCard().padding(.top, 16)
+                } else {
+                    ForEach(viewModel.hostsWithPairState, id: \.id) { host in
+                        ComputerCard3D(
+                            host: host,
+                            isSelected: selectedHost?.id == host.id,
+                            onTap: { handleTap(on: host) },
+                            onWake: { viewModel.wakeHost(host) },
+                            onPair: { viewModel.tryPairHost(host) },
+                            onDelete: {
+                                hostToDelete = host
+                                isDeletingHost = true
                             }
-                        }
-                        
-                        // Standalone Co-op Card (always visible)
-                        StandaloneCoopCard(onTap: {
-                            showCoopFlow = true
-                        })
-                        .padding(.top, 32)
-                        
-                        Spacer().frame(height: 240)
+                        )
+                        .transition(.asymmetric(
+                            insertion: .scale.combined(with: .opacity),
+                            removal: .scale.combined(with: .opacity)
+                        ))
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 40)
                 }
-            }
-            
-            // Management cards and version text at bottom (fixed position)
-            VStack(spacing: 8) {
-                Spacer()
                 
+                StandaloneCoopCard(onTap: {
+                    showCoopFlow = true
+                })
+                .padding(.top, 32)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 40)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 16) {
+            VStack(spacing: 10) {
                 header
                     .padding(.horizontal, 24)
                 
-                Text("PLATO EDITION V12.0")
-                    .font(.custom("Fredoka-Medium", size: 14))
-                    .kerning(2.0)
-                    .foregroundColor(Color(red: 0.482, green: 0.502, blue: 0.863))
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 8)
-                    .padding(.bottom, 16)
-                    .allowsHitTesting(false)
+                ZStack {
+                    Text("LUNAR EDITION V12.2")
+                        .font(.custom("Fredoka-Medium", size: 14))
+                        .kerning(2.0)
+                        .foregroundColor(Color(red: 0.482, green: 0.502, blue: 0.863))
+                        .frame(maxWidth: .infinity)
+                        .allowsHitTesting(false)
+                    
+                    HStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            MenuBackgroundThemeToggle()
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            KoFiSupportButton()
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 24)
             }
+            .padding(.bottom, 12)
         }
         .sheet(item: $selectedHostForDetail) { host in
              if canShowModal, let index = viewModel.hosts.firstIndex(where: { $0.id == host.id }) {
@@ -675,6 +819,10 @@ struct ComputersTabView: View {
                 }
                 
                 Button {
+                    guard !viewModel.activelyStreaming else {
+                        isRefreshingDiscovery = false
+                        return
+                    }
                     isRefreshingDiscovery.toggle()
                     if isRefreshingDiscovery { viewModel.beginRefresh() }
                     else { viewModel.stopRefresh() }
@@ -719,7 +867,7 @@ struct ComputersTabView: View {
     
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 24)
-            .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
+            .fill(MenuCardStyle.fill)
             .overlay(
                 RoundedRectangle(cornerRadius: 24)
                     .strokeBorder(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
@@ -1024,7 +1172,7 @@ struct ComputerCard3D: View {
     private var cardBackground: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                .fill(MenuCardStyle.fill)
                 .offset(y: 6)
                 .blur(radius: 12)
 
@@ -1058,8 +1206,8 @@ struct ComputerCard3D: View {
             }
 
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.92))
-            
+                .fill(MenuCardStyle.fill)
+
             // Sharp gradient stroke border to enhance/define the glow - NOW ON TOP
             if shouldShowGradientGlow {
                 RoundedRectangle(cornerRadius: 20)
@@ -1232,12 +1380,12 @@ struct DiscoveryToggleCard: View {
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                    .fill(MenuCardStyle.fill)
                     .offset(y: 6)
                     .blur(radius: 12)
 
                 RoundedRectangle(cornerRadius: 20)
-                    .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                    .fill(MenuCardStyle.fill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 20)
                             .strokeBorder(LinearGradient(colors: [.white.opacity(0.15), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
@@ -1351,13 +1499,13 @@ struct StandaloneCoopCard: View {
                 ZStack {
                     // Shadow layer
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                        .fill(MenuCardStyle.fill)
                         .offset(y: 6)
                         .blur(radius: 12)
                     
                     // Main background with gradient border
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                        .fill(MenuCardStyle.fill)
                         .overlay(
                             RoundedRectangle(cornerRadius: 20)
                                 .strokeBorder(
@@ -1373,6 +1521,78 @@ struct StandaloneCoopCard: View {
             )
         }
         .buttonStyle(ScaleButtonStyle())
+    }
+}
+
+// MARK: - Footer actions
+
+private enum KoFiLinks {
+    static let supportURL = URL(string: "https://ko-fi.com/neovectorx")!
+}
+
+private struct KoFiSupportButton: View {
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Button {
+            openURL(KoFiLinks.supportURL)
+        } label: {
+            Image("kofi")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 22, height: 22)
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(.white.opacity(0.08))
+                        .overlay(
+                            Circle()
+                                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(ScaleButtonStyle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Support Neo Moonlight on Ko-fi")
+    }
+}
+
+// MARK: - Menu background theme
+
+private struct MenuBackgroundThemeToggle: View {
+    @AppStorage(MenuBackgroundStorage.themeKey) private var menuThemeRaw = MenuBackgroundTheme.neo.rawValue
+
+    private var menuBackgroundTheme: MenuBackgroundTheme {
+        MenuBackgroundTheme(rawValue: menuThemeRaw) ?? .neo
+    }
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                menuThemeRaw = menuBackgroundTheme.next.rawValue
+            }
+        } label: {
+            Image(systemName: menuBackgroundTheme.iconName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle()
+                        .fill(.white.opacity(0.08))
+                        .overlay(
+                            Circle()
+                                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                        )
+                )
+        }
+        .buttonStyle(ScaleButtonStyle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Cycle menu background. Current: \(menuBackgroundTheme.accessibilityName)")
+        .onAppear {
+            MenuBackgroundStorage.migrateLegacyLightPreferenceIfNeeded(themeRaw: &menuThemeRaw)
+        }
     }
 }
 

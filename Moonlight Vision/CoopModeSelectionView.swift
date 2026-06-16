@@ -48,7 +48,7 @@ struct CoopModeSelectionView: View {
                     .font(.system(size: 36, weight: .bold))
                     .foregroundColor(.white)
                 
-                Text("Play local co-op games with a friend")
+                Text("Play couch co-op games with a friend locally or online. Only the host needs to own the game.")
                     .font(.system(size: 18))
                     .foregroundColor(.white.opacity(0.7))
             }
