@@ -78,9 +78,6 @@ import Combine
     }
     
     func rumble(_ controllerNumber: UInt16, lowFreqMotor: UInt16, highFreqMotor: UInt16) {
-        print("Rumble controller \(controllerNumber), LowFreq: \(lowFreqMotor), HighFreq: \(highFreqMotor)")
-        
-        // Forward rumble to ControllerSupport which will handle haptics
         controllerSupport?.rumble(controllerNumber, lowFreqMotor: lowFreqMotor, highFreqMotor: highFreqMotor)
     }
     
@@ -95,9 +92,6 @@ import Combine
     }
     
     func rumbleTriggers(_ controllerNumber: UInt16, leftTrigger: UInt16, rightTrigger: UInt16) {
-        print("Rumble triggers for controller \(controllerNumber): Left \(leftTrigger), Right \(rightTrigger)")
-        
-        // Forward trigger rumble to ControllerSupport
         controllerSupport?.rumbleTriggers(controllerNumber, leftTrigger: leftTrigger, rightTrigger: rightTrigger)
     }
     

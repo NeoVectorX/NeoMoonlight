@@ -468,10 +468,11 @@ struct _HDRTestStreamView: View {
                             contrast: hdrSettings.contrast,
                             saturation: hdrSettings.saturation,
                             brightness: 0.0,
+                            pqExposure: hdrSettings.pqExposure,
                             mode: hdrSettings.mode
                         )
                     },
-                    callbackToRender: { texture, correctedResolution in
+                    callbackToRender: { texture, _, correctedResolution in
                         DispatchQueue.main.async {
                             if let correctedResolution = correctedResolution {
                                 streamConfig.width = Int32(correctedResolution.0)
@@ -683,8 +684,9 @@ struct _HDRTestStreamView: View {
 }
 
 final class HDRTestParams: ObservableObject {
-    @Published var boost: Float = 1.0
-    @Published var contrast: Float = 1.0
+    @Published var boost:      Float = 1.0
+    @Published var contrast:   Float = 1.0
     @Published var saturation: Float = 1.0
-    @Published var mode: Int32 = 1
+    @Published var pqExposure: Float = 1.0
+    @Published var mode:       Int32 = 1
 }

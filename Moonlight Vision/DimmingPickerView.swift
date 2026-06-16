@@ -7,6 +7,13 @@
 
 import SwiftUI
 
+/// Baseline sizing for the lighting preset sheet; multiply with ``pt(_:)`` for uniform layout/fonts.
+private enum DimmingPickerMetrics {
+    /// 30% smaller than original design (`1 − 0.30`).
+    static let scale: CGFloat = 0.7
+    static func pt(_ base: CGFloat) -> CGFloat { base * scale }
+}
+
 struct DimmingPickerView: View {
     @Binding var dimLevel: Int
     @Binding var isPresented: Bool
@@ -14,11 +21,10 @@ struct DimmingPickerView: View {
     @Binding var newsetLevel: Int
     @Binding var presetBrightness: [Int: Double]
     let defaultPresetBrightness: [Int: Double]
-    /// When set, long-pressing the Starfield preset calls this when hold starts (e.g. start cycling star distance). Curved display only.
-    var onStarfieldLongPress: (() -> Void)? = nil
-    /// When set, called when the user releases after a Starfield long-press (e.g. stop cycling).
-    var onStarfieldLongPressEnd: (() -> Void)? = nil
-    
+    /// Starfield: each tap selects preset and advances star distance one step (curved display only).
+    var onStarfieldTapCycle: (() -> Void)? = nil
+    /// Reactive 1 (Chromosphere): each tap expands glow size / reach (curved display only).
+    var onReactive1TapCycle: (() -> Void)? = nil
     // Dimming preset items
     struct DimItem: Identifiable {
         let id: String
@@ -28,14 +34,13 @@ struct DimmingPickerView: View {
     }
     
     // Presets that support brightness adjustment via long-press
-    private let adjustablePresets: Set<Int> = [1, 5, 6, 7, 8, 9, 14]
+    private let adjustablePresets: Set<Int> = [1, 5, 6, 7, 8, 9, 10, 14]
     
     private var allItems: [DimItem] {
         [
             DimItem(id: "0", displayName: "Off", dimLevel: 0, supportsAdjustment: false),
             DimItem(id: "1", displayName: "Night", dimLevel: 1, supportsAdjustment: true),
-            DimItem(id: "2", displayName: "Reactive V1", dimLevel: 2, supportsAdjustment: false),
-            DimItem(id: "10", displayName: "Reactive V2", dimLevel: 10, supportsAdjustment: false),
+            DimItem(id: "2", displayName: "Reactive", dimLevel: 2, supportsAdjustment: false),
             DimItem(id: "12", displayName: "Starfield", dimLevel: 12, supportsAdjustment: false),
             DimItem(id: "4", displayName: "Eclipse", dimLevel: 4, supportsAdjustment: false),
             DimItem(id: "5", displayName: "Midnight", dimLevel: 5, supportsAdjustment: true),
@@ -43,23 +48,23 @@ struct DimmingPickerView: View {
             DimItem(id: "7", displayName: "Dawn", dimLevel: 7, supportsAdjustment: true),
             DimItem(id: "8", displayName: "Sunrise", dimLevel: 8, supportsAdjustment: true),
             DimItem(id: "9", displayName: "Woodland", dimLevel: 9, supportsAdjustment: true),
+            DimItem(id: "10", displayName: "Tide", dimLevel: 10, supportsAdjustment: true),
             DimItem(id: "14", displayName: "Desert", dimLevel: 14, supportsAdjustment: true)
         ]
     }
     
     // Theme Colors
-    private let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
     private let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
     
     // State for tracking which preset is currently being adjusted
     @State private var cyclingPresetLevel: Int? = nil
     
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DimmingPickerMetrics.pt(20)) {
             // Header
             HStack {
                 Text("Select Lighting Preset")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.system(size: DimmingPickerMetrics.pt(24), weight: .bold))
                     .foregroundColor(.white)
                 
                 Spacer()
@@ -68,15 +73,16 @@ struct DimmingPickerView: View {
                     withAnimation { isPresented = false }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 32))
+                        .font(.system(size: DimmingPickerMetrics.pt(32)))
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)
+                .neoMenuItemGazeHighlight(.circle)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, DimmingPickerMetrics.pt(8))
             
             // Grid (6 columns × 2 rows)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 20) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: DimmingPickerMetrics.pt(20)) {
                 ForEach(allItems) { item in
                     if item.supportsAdjustment {
                         // Adjustable preset with long-press for brightness cycling
@@ -91,12 +97,12 @@ struct DimmingPickerView: View {
                             isPickerOpen: isPresented,
                             onSelect: { selectItem(item) }
                         )
-                    } else if item.dimLevel == 12, onStarfieldLongPress != nil {
-                        // Starfield preset: tap selects, long-press cycles star distance (curved display)
-                        Button {
-                            selectItem(item)
-                        } label: {
-                            VStack(spacing: 8) {
+                    } else if item.dimLevel == 2, onReactive1TapCycle != nil {
+                        // Reactive 1 — each tap selects preset and advances chromosphere reach one tier (curved).
+                        lightingPresetGridCell(
+                            isSelected: isSelected(item),
+                            brandOrange: brandOrange,
+                            thumbnail: {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -104,41 +110,59 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
-                                )
-                                
-                                HStack(spacing: 3) {
+                            },
+                            label: {
+                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
                                     Text(item.displayName)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
+                                        .foregroundColor(isSelected(item) ? brandOrange : .white)
+                                        .lineLimit(1)
+                                    Image(systemName: "rays")
+                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
+                                        .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+                                }
+                            },
+                            action: {
+                                selectItem(item)
+                                onReactive1TapCycle?()
+                            }
+                        )
+                    } else if item.dimLevel == 12, onStarfieldTapCycle != nil {
+                        // Starfield — each tap selects preset and advances star distance one step (curved).
+                        lightingPresetGridCell(
+                            isSelected: isSelected(item),
+                            brandOrange: brandOrange,
+                            thumbnail: {
+                                DimmingThumbnailView(
+                                    displayName: item.displayName,
+                                    dimLevel: item.dimLevel,
+                                    isPickerOpen: isPresented,
+                                    brightness: nil,
+                                    isCycling: false
+                                )
+                            },
+                            label: {
+                                HStack(spacing: DimmingPickerMetrics.pt(3)) {
+                                    Text(item.displayName)
+                                        .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                         .foregroundColor(isSelected(item) ? brandOrange : .white)
                                         .lineLimit(1)
                                     Image(systemName: "lightbulb.circle")
-                                        .font(.system(size: 9))
+                                        .font(.system(size: DimmingPickerMetrics.pt(9)))
                                         .foregroundColor(isSelected(item) ? brandOrange.opacity(0.7) : .white.opacity(0.5))
                                 }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(HoldablePlainButtonStyle(
-                            onHold: {
+                            },
+                            action: {
                                 selectItem(item)
-                                onStarfieldLongPress?()
-                            },
-                            onRelease: {
-                                onStarfieldLongPressEnd?()
-                            },
-                            minimumHoldDuration: 0.2
-                        ))
+                                onStarfieldTapCycle?()
+                            }
+                        )
                     } else {
                         // Non-adjustable preset (tap only)
-                        Button {
-                            selectItem(item)
-                        } label: {
-                            VStack(spacing: 8) {
+                        lightingPresetGridCell(
+                            isSelected: isSelected(item),
+                            brandOrange: brandOrange,
+                            thumbnail: {
                                 DimmingThumbnailView(
                                     displayName: item.displayName,
                                     dimLevel: item.dimLevel,
@@ -146,48 +170,39 @@ struct DimmingPickerView: View {
                                     brightness: nil,
                                     isCycling: false
                                 )
-                                .frame(height: 80)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(isSelected(item) ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected(item) ? 3 : 1)
-                                )
-                                
+                            },
+                            label: {
                                 Text(item.displayName)
-                                    .font(.system(size: 14, weight: .medium))
+                                    .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
                                     .foregroundColor(isSelected(item) ? brandOrange : .white)
                                     .lineLimit(1)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                            },
+                            action: { selectItem(item) }
+                        )
                     }
                 }
             }
-            .frame(minHeight: 220)
+            .frame(minHeight: DimmingPickerMetrics.pt(220))
             
-            // Hint for adjustable presets
-            HStack(spacing: 4) {
+            // Hint for adjustable presets (top-align icon with first line when text wraps)
+            HStack(alignment: .top, spacing: DimmingPickerMetrics.pt(8)) {
                 Image(systemName: "lightbulb.circle")
-                    .font(.system(size: 10))
+                    .font(.system(size: DimmingPickerMetrics.pt(11)))
                     .foregroundColor(.white.opacity(0.5))
-                Text("Dimmable Preset: Long press (pinch hold) on preset to adjust dimming.")
-                    .font(.system(size: 11))
+                    .padding(.top, DimmingPickerMetrics.pt(1.5))
+                Text("Long press on dimmable presets adjusts brightness. Tap Reactive to expand glow size. Tap Starfield to cycle star distance.")
+                    .font(.system(size: DimmingPickerMetrics.pt(11)))
                     .foregroundColor(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.top, 4)
+            .padding(.top, DimmingPickerMetrics.pt(4))
         }
-        .padding(32)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(brandNavy.opacity(0.95))
-                .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+        .padding(DimmingPickerMetrics.pt(32))
+        .neoClearBluePanelChrome(
+            cornerRadius: DimmingPickerMetrics.pt(24),
+            layoutScale: DimmingPickerMetrics.scale
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-        )
-        .frame(width: 700)
+        .frame(width: DimmingPickerMetrics.pt(700))
     }
     
     private func isSelected(_ item: DimItem) -> Bool {
@@ -203,6 +218,51 @@ struct DimmingPickerView: View {
             newsetLevel = 0
         }
     }
+}
+
+// MARK: - Lighting preset icon chrome
+
+@ViewBuilder
+private func lightingPresetCircularIcon<Content: View>(
+    isSelected: Bool,
+    brandOrange: Color,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    let size = DimmingPickerMetrics.pt(80)
+    content()
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(
+            Circle()
+                .stroke(
+                    isSelected ? brandOrange : Color.white.opacity(0.2),
+                    lineWidth: isSelected ? DimmingPickerMetrics.pt(3) : DimmingPickerMetrics.pt(1)
+                )
+        )
+        .neoMenuItemGazeHighlight(.circle)
+        .contentShape(Circle())
+}
+
+@ViewBuilder
+private func lightingPresetGridCell<Label: View, Thumbnail: View>(
+    isSelected: Bool,
+    brandOrange: Color,
+    @ViewBuilder thumbnail: () -> Thumbnail,
+    @ViewBuilder label: () -> Label,
+    action: @escaping () -> Void
+) -> some View {
+    VStack(spacing: DimmingPickerMetrics.pt(8)) {
+        Button(action: action) {
+            lightingPresetCircularIcon(isSelected: isSelected, brandOrange: brandOrange, content: thumbnail)
+        }
+        .buttonStyle(.plain)
+
+        label()
+            .hoverEffectDisabled(true)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+    }
+    .frame(maxWidth: .infinity)
 }
 
 // MARK: - Adjustable Dim Item View (supports long-press brightness cycling)
@@ -230,52 +290,54 @@ private struct AdjustableDimItemView: View {
     }
     
     var body: some View {
-        Button {
-            if !isCycling {
-                onSelect()
-            }
-        } label: {
-            VStack(spacing: 8) {
-                DimmingThumbnailView(
-                    displayName: item.displayName,
-                    dimLevel: item.dimLevel,
-                    isPickerOpen: isPickerOpen,
-                    brightness: currentBrightness,
-                    isCycling: isCycling
-                )
-                .frame(height: 80)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(isSelected ? brandOrange : Color.white.opacity(0.2), lineWidth: isSelected ? 3 : 1)
-                )
-                // Glow effect during cycling
-                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.8 : 0.0), radius: isCycling ? 12 : 0)
-                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.4 : 0.0), radius: isCycling ? 24 : 0)
+        VStack(spacing: DimmingPickerMetrics.pt(8)) {
+            Button {
+                if !isCycling {
+                    onSelect()
+                }
+            } label: {
+                lightingPresetCircularIcon(isSelected: isSelected, brandOrange: brandOrange) {
+                    DimmingThumbnailView(
+                        displayName: item.displayName,
+                        dimLevel: item.dimLevel,
+                        isPickerOpen: isPickerOpen,
+                        brightness: currentBrightness,
+                        isCycling: isCycling
+                    )
+                }
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.8 : 0.0), radius: isCycling ? DimmingPickerMetrics.pt(12) : 0)
+                .shadow(color: .white.opacity(isCycling ? currentBrightness * 0.4 : 0.0), radius: isCycling ? DimmingPickerMetrics.pt(24) : 0)
                 .animation(.easeInOut(duration: 0.15), value: currentBrightness)
                 .animation(.easeOut(duration: 0.4), value: isCycling)
-                
-                HStack(spacing: 3) {
-                    Text(item.displayName)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(isSelected ? brandOrange : .white)
-                        .lineLimit(1)
-                    
-                    Image(systemName: "lightbulb.circle")
-                        .font(.system(size: 9))
-                        .foregroundColor(isSelected ? brandOrange.opacity(0.7) : .white.opacity(0.5))
-                }
             }
+            .buttonStyle(HoldablePlainButtonStyle(
+                onHold: { startBrightnessCycle() },
+                onRelease: {
+                    if isCycling {
+                        stopBrightnessCycle()
+                    }
+                }
+            ))
+
+            HStack(spacing: DimmingPickerMetrics.pt(3)) {
+                Text(item.displayName)
+                    .font(.system(size: DimmingPickerMetrics.pt(14), weight: .medium))
+                    .foregroundColor(isSelected ? brandOrange : .white)
+                    .lineLimit(1)
+
+                Image(systemName: "lightbulb.circle")
+                    .font(.system(size: DimmingPickerMetrics.pt(9)))
+                    .foregroundColor(isSelected ? brandOrange.opacity(0.7) : .white.opacity(0.5))
+            }
+            .hoverEffectDisabled(true)
             .contentShape(Rectangle())
-        }
-        .buttonStyle(HoldablePlainButtonStyle(
-            onHold: { startBrightnessCycle() },
-            onRelease: {
-                if isCycling {
-                    stopBrightnessCycle()
+            .onTapGesture {
+                if !isCycling {
+                    onSelect()
                 }
             }
-        ))
+        }
+        .frame(maxWidth: .infinity)
         .onDisappear {
             cycleTask?.cancel()
             cycleTask = nil
@@ -331,9 +393,6 @@ private struct DimmingThumbnailView: View {
     let brightness: Double?  // User-adjustable brightness for applicable presets
     let isCycling: Bool      // Whether brightness is currently being cycled via long-press
     
-    @State private var animationPhase: Double = 0
-    @State private var animationTask: Task<Void, Never>?
-    
     var body: some View {
         Group {
             if dimLevel == 12, let _ = UIImage(named: "starfield") {
@@ -341,46 +400,67 @@ private struct DimmingThumbnailView: View {
                 Image("starfield")
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 80, height: 80)
+                    .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
                     .clipShape(Circle())
+            } else if usesAnimatedReactiveGradient {
+                TimelineView(.animation(minimumInterval: 0.15, paused: !isPickerOpen)) { context in
+                    Circle()
+                        .fill(gradientForPreset(animationPhase: reactiveAnimationPhase(for: context.date)))
+                        .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
+                        .opacity(thumbnailOpacity)
+                }
+            } else if usesAnimatedTideGradient {
+                TimelineView(.animation(minimumInterval: 0.12, paused: !isPickerOpen)) { context in
+                    let phase = tideAnimationPhase(for: context.date)
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: TideGradientPalette.swiftUIColors(atPhase: phase),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
+                        .opacity(thumbnailOpacity)
+                }
             } else {
                 // Use gradient for all other presets
                 Circle()
                     .fill(gradientForPreset())
-                    .frame(width: 80, height: 80)
+                    .frame(width: DimmingPickerMetrics.pt(80), height: DimmingPickerMetrics.pt(80))
                     // Apply brightness to thumbnail opacity for adjustable presets
                     .opacity(thumbnailOpacity)
                     .overlay(
                         Group {
                             if dimLevel == 0 {
                                 Image(systemName: "slash.circle")
-                                    .font(.system(size: 40))
+                                    .font(.system(size: DimmingPickerMetrics.pt(40)))
                                     .foregroundColor(.white.opacity(0.8))
                             }
                         }
                     )
             }
         }
-            .onChange(of: isPickerOpen) { _, isOpen in
-                // Cancel existing animation when picker closes
-                if !isOpen {
-                    animationTask?.cancel()
-                    animationTask = nil
-                    animationPhase = 0
-                } else if dimLevel == 2 || dimLevel == 10 || dimLevel == 12 {
-                    // Start animation when picker opens (Reactive V1, V2, and Starfield)
-                    startAnimation()
-                }
-            }
-            .onAppear {
-                if isPickerOpen && (dimLevel == 2 || dimLevel == 10 || dimLevel == 12) {
-                    startAnimation()
-                }
-            }
-            .onDisappear {
-                animationTask?.cancel()
-                animationTask = nil
-            }
+    }
+
+    private var usesAnimatedReactiveGradient: Bool {
+        dimLevel == 2
+    }
+
+    private var usesAnimatedTideGradient: Bool {
+        dimLevel == 10
+    }
+
+    private func tideAnimationPhase(for date: Date) -> CGFloat {
+        let cycle = TideGradientPalette.cycleDuration
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
+        return CGFloat(t)
+    }
+
+    private func reactiveAnimationPhase(for date: Date) -> Double {
+        let cycle: Double = 6.0
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
+        return t
     }
     
     private var thumbnailOpacity: Double {
@@ -393,22 +473,7 @@ private struct DimmingThumbnailView: View {
         return dimLevel == 2 ? 0.8 : 1.0
     }
     
-    private func startAnimation() {
-        animationTask?.cancel()
-        animationTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms updates (much slower, less CPU)
-                if !Task.isCancelled {
-                    animationPhase += 0.015 // Slightly larger steps to compensate
-                    if animationPhase >= 1.0 {
-                        animationPhase = 0
-                    }
-                }
-            }
-        }
-    }
-    
-    private func gradientForPreset() -> LinearGradient {
+    private func gradientForPreset(animationPhase: Double = 0) -> LinearGradient {
         switch dimLevel {
         case 0: // Off
             return LinearGradient(
@@ -551,52 +616,6 @@ private struct DimmingThumbnailView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-        case 10: // Reactive V2 - Offset color cycle (starts at Cyan instead of Purple)
-            // Cycle through distinct colors based on animation phase
-            // Offset by 0.4 (40%) to start at Cyan instead of Purple
-            let progress = fmod(animationPhase + 0.4, 1.0)
-            let color1: Color
-            let color2: Color
-            let color3: Color
-            
-            // Smooth color transitions through spectrum (offset from V1)
-            if progress < 0.2 {
-                // Purple to Blue
-                let t = progress / 0.2
-                color1 = Color(red: 0.5 - 0.2 * t, green: 0.0 + 0.3 * t, blue: 0.8 + 0.2 * t)
-                color2 = Color(red: 0.3 - 0.1 * t, green: 0.0 + 0.5 * t, blue: 0.9 + 0.1 * t)
-                color3 = Color(red: 0.6 - 0.3 * t, green: 0.1 + 0.4 * t, blue: 0.7 + 0.2 * t)
-            } else if progress < 0.4 {
-                // Blue to Cyan
-                let t = (progress - 0.2) / 0.2
-                color1 = Color(red: 0.3 - 0.3 * t, green: 0.3 + 0.4 * t, blue: 1.0)
-                color2 = Color(red: 0.2 - 0.2 * t, green: 0.5 + 0.3 * t, blue: 1.0)
-                color3 = Color(red: 0.3 - 0.3 * t, green: 0.5 + 0.3 * t, blue: 0.9 + 0.1 * t)
-            } else if progress < 0.6 {
-                // Cyan to Green
-                let t = (progress - 0.4) / 0.2
-                color1 = Color(red: 0.0, green: 0.7 + 0.2 * t, blue: 1.0 - 0.3 * t)
-                color2 = Color(red: 0.0, green: 0.8 + 0.1 * t, blue: 0.8 - 0.4 * t)
-                color3 = Color(red: 0.0 + 0.2 * t, green: 0.8 + 0.1 * t, blue: 1.0 - 0.5 * t)
-            } else if progress < 0.8 {
-                // Green to Yellow/Orange
-                let t = (progress - 0.6) / 0.2
-                color1 = Color(red: 0.0 + 0.9 * t, green: 0.9, blue: 0.7 - 0.5 * t)
-                color2 = Color(red: 0.0 + 1.0 * t, green: 0.9 - 0.2 * t, blue: 0.4 - 0.4 * t)
-                color3 = Color(red: 0.2 + 0.6 * t, green: 0.9 - 0.1 * t, blue: 0.5 - 0.3 * t)
-            } else {
-                // Orange to Purple (completing cycle)
-                let t = (progress - 0.8) / 0.2
-                color1 = Color(red: 0.9 - 0.4 * t, green: 0.7 - 0.7 * t, blue: 0.2 + 0.6 * t)
-                color2 = Color(red: 1.0 - 0.7 * t, green: 0.7 - 0.7 * t, blue: 0.0 + 0.9 * t)
-                color3 = Color(red: 0.8 - 0.2 * t, green: 0.8 - 0.7 * t, blue: 0.2 + 0.5 * t)
-            }
-            
-            return LinearGradient(
-                colors: [color1, color2, color3],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
         case 12: // Starfield - Deep black space with subtle deep blue tint
             return LinearGradient(
                 colors: [
@@ -655,6 +674,11 @@ private struct DimmingThumbnailView: View {
     }
 }
 
+extension DimmingPickerView {
+    /// Curved-display RealityKit sizing: historically `0.96` screen fraction at 1.0 UI scale; scale with ``DimmingPickerMetrics`` so spatial size matches SwiftUI shrink.
+    static var curvedDesiredLocalWidth: Float { 0.96 * Float(DimmingPickerMetrics.scale) }
+}
+
 // MARK: - Holdable Plain Button Style (tap = native sound + select; hold = start cycle; release = stop cycle)
 
 struct HoldablePlainButtonStyle: ButtonStyle {
@@ -682,5 +706,163 @@ struct HoldablePlainButtonStyle: ButtonStyle {
                     onRelease()
                 }
             }
+    }
+}
+
+// MARK: - Tide morphing gradient (water hues: navy → blue → teal → teal-green)
+
+enum TideGradientPalette {
+    struct Stop {
+        var r: CGFloat
+        var g: CGFloat
+        var b: CGFloat
+        var a: CGFloat
+    }
+
+    /// Full loop duration (~50% slower than the original 36s).
+    static let cycleDuration: TimeInterval = 54.0
+
+    private static let locations: [CGFloat] = [0.0, 0.30, 0.60, 1.0]
+    private static let fixedAlphas: [CGFloat] = [0.65, 0.75, 0.88, 0.98]
+
+    typealias RGB = (r: CGFloat, g: CGFloat, b: CGFloat)
+
+    /// RGB-only keyframes; alpha held constant per stop to avoid brightness flicker.
+    private static let keyframes: [[RGB]] = [
+        // Deep navy abyss
+        [(0.02, 0.06, 0.16), (0.03, 0.12, 0.26), (0.04, 0.18, 0.32), (0.02, 0.08, 0.14)],
+        // Midnight ocean
+        [(0.03, 0.10, 0.28), (0.04, 0.18, 0.36), (0.06, 0.26, 0.42), (0.02, 0.10, 0.18)],
+        // Ocean blue
+        [(0.04, 0.14, 0.34), (0.05, 0.22, 0.42), (0.07, 0.30, 0.48), (0.03, 0.12, 0.22)],
+        // Teal
+        [(0.04, 0.22, 0.38), (0.06, 0.30, 0.44), (0.08, 0.38, 0.46), (0.03, 0.14, 0.24)],
+        // Teal-green
+        [(0.04, 0.28, 0.36), (0.06, 0.34, 0.40), (0.08, 0.40, 0.42), (0.03, 0.16, 0.22)],
+        // Shallow aqua (wraps smoothly back to deep navy)
+        [(0.05, 0.30, 0.40), (0.06, 0.28, 0.38), (0.05, 0.22, 0.34), (0.02, 0.08, 0.16)]
+    ]
+
+    static func stops(atPhase phase: CGFloat) -> [Stop] {
+        let wrapped = phase - floor(phase)
+        let segmentCount = CGFloat(keyframes.count)
+        let segment = wrapped * segmentCount
+        let index = Int(segment) % keyframes.count
+        // Linear drift — no ease-in/out pauses at keyframe boundaries.
+        let localT = segment - floor(segment)
+        let from = keyframes[index]
+        let to = keyframes[(index + 1) % keyframes.count]
+        return zip(zip(from, to), fixedAlphas).map { rgbPair, alpha in
+            let (fromRGB, toRGB) = rgbPair
+            return Stop(
+                r: fromRGB.r + (toRGB.r - fromRGB.r) * localT,
+                g: fromRGB.g + (toRGB.g - fromRGB.g) * localT,
+                b: fromRGB.b + (toRGB.b - fromRGB.b) * localT,
+                a: alpha
+            )
+        }
+    }
+
+    static func swiftUIColors(atPhase phase: CGFloat) -> [Color] {
+        stops(atPhase: phase).map { Color(red: $0.r, green: $0.g, blue: $0.b) }
+    }
+
+    static func makeCGImage(size: Int, phase: CGFloat) -> CGImage? {
+        let s = max(size, 32)
+        let rect = CGRect(x: 0, y: 0, width: s, height: s)
+        let stops = stops(atPhase: phase)
+        let colors = stops.map {
+            UIColor(red: $0.r, green: $0.g, blue: $0.b, alpha: $0.a).cgColor
+        }
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: s, height: s))
+        let image = renderer.image { ctx in
+            ctx.cgContext.setFillColor(UIColor.clear.cgColor)
+            ctx.cgContext.fill(rect)
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            if let gradient = CGGradient(
+                colorsSpace: colorSpace,
+                colors: colors as CFArray,
+                locations: locations
+            ) {
+                ctx.cgContext.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: rect.midX, y: rect.minY),
+                    end: CGPoint(x: rect.midX, y: rect.maxY),
+                    options: [.drawsAfterEndLocation]
+                )
+            }
+        }
+        return image.cgImage
+    }
+}
+
+// MARK: - Persisted lighting preset (flat + curved)
+
+enum AmbientDimmingPersistence {
+    static let userDefaultsKey = "ambient.dimming.level"
+
+    /// All dim levels exposed in `DimmingPickerView` plus legacy moonlight cycle (11).
+    static let validLevels: Set<Int> = [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]
+
+    static func load() -> Int {
+        let raw = UserDefaults.standard.integer(forKey: userDefaultsKey)
+        return validLevels.contains(raw) ? raw : 0
+    }
+
+    static func save(_ level: Int) {
+        let clamped = validLevels.contains(level) ? level : 0
+        UserDefaults.standard.set(clamped, forKey: userDefaultsKey)
+    }
+}
+
+// MARK: - Persisted 360° environment (curved display)
+
+enum CurvedEnvironmentPersistence {
+    static let sphereKey = "curved.environmentSphereLevel"
+    static let newsetKey = "curved.newsetLevel"
+
+    static func maxSphereLevel(extraSkyboxCount: Int) -> Int {
+        SkyboxCatalog.builtinNames.count + extraSkyboxCount
+    }
+
+    static func load(extraSkyboxCount: Int) -> (sphere: Int, newset: Int) {
+        let maxSphere = maxSphereLevel(extraSkyboxCount: extraSkyboxCount)
+        let maxNewset = SkyboxCatalog.newsetNames.count
+
+        var sphere = UserDefaults.standard.integer(forKey: sphereKey)
+        var newset = UserDefaults.standard.integer(forKey: newsetKey)
+
+        if newset < 0 || newset > maxNewset { newset = 0 }
+        if sphere < 0 { sphere = 0 }
+        if sphere > maxSphere {
+            // Extra skyboxes load asynchronously; keep saved index until bundle extras arrive.
+            if extraSkyboxCount == 0, sphere <= SkyboxCatalog.builtinNames.count + 64 {
+                // defer clamp
+            } else {
+                sphere = 0
+            }
+        }
+
+        if newset > 0 {
+            sphere = 0
+        } else if sphere > 0 {
+            newset = 0
+        }
+
+        return (sphere, newset)
+    }
+
+    static func save(sphere: Int, newset: Int) {
+        let maxNewset = SkyboxCatalog.newsetNames.count
+        let clampedNewset = (newset >= 0 && newset <= maxNewset) ? newset : 0
+        let clampedSphere = max(0, sphere)
+
+        if clampedNewset > 0 {
+            UserDefaults.standard.set(0, forKey: sphereKey)
+            UserDefaults.standard.set(clampedNewset, forKey: newsetKey)
+        } else {
+            UserDefaults.standard.set(clampedSphere, forKey: sphereKey)
+            UserDefaults.standard.set(0, forKey: newsetKey)
+        }
     }
 }

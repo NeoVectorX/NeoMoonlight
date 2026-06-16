@@ -12,11 +12,13 @@ import CoreVideo
 import Foundation
 import Metal
 import MetalKit
-import QuartzCore // For CADisplayLink
+import QuartzCore
 import RealityKit
 import SwiftUI
+import UIKit
 import VideoToolbox
 import CoreFoundation
+import simd
 
 // Add these constants after your existing constants
 let kCVPixelBufferYCbCrMatrixKey = "YCbCrMatrix" as CFString
@@ -28,8 +30,23 @@ struct HDRParams {
     var contrast: Float
     var saturation: Float
     var brightness: Float
-    var mode: Int32  // 0 = Power Curve, 1 = ACES, 2 = ACES + Vibrance
+    var pqExposure: Float  // PQ-only exposure trim; 1.0 = neutral
+    var mode: Int32
+    /// Bit 0 (`1`): Reference HDR — minimal client grading (PQ + gamut + tone map only). See `Shaders.metal` `FullHDRParams.hdrGradeFlags`.
+    var hdrGradeFlags: UInt32 = 0
 }
+
+/// ChromaHalo / Chromosphere: halo drawable / RealityKit texture size is full frame `>> mipShift`.
+/// Rim pass samples **mip 0**; a **separable 13-tap blur** on the halo buffer spreads that into a smooth wash (GPU-heavy, quality-first).
+enum ChromaHaloDownsample {
+    /// `1` → half resolution per axis (vs stream). Pairs with separable blur for Hue-like gradients.
+    static let mipShift: Int = 1
+}
+
+private let chromaHaloSourceMipLevel = 0
+
+/// Multiplies halo texel step in separable blur (wider bleed ≈ Ambilight wall wash).
+private let chromaHaloAmbilightBlurSpread: Float = 1.45
 
 private struct ColorEnhancementUniforms {
     var saturation: Float
@@ -38,7 +55,107 @@ private struct ColorEnhancementUniforms {
     var padding1: Float
 }
 
+// Must match ShaderHDRParams in Shaders.metal exactly (field order + alignment).
+// Metal float3x3 is stored as 3 × float4 columns (48 bytes); float3 is 16 bytes (padded).
+private struct ShaderHDRParams {
+    var isPQ:           UInt32         // 1 = PQ/HDR path, 0 = SDR / extended
+    var primariesType: UInt32         // 0=709/P3, 1=2020, 2=SMPTE-C (gamut selector)
+    var extendedScene: UInt32        // 1 = Moonlight HDR + non-PQ (matches `Shaders.metal` ShaderHDRParams.extendedScene)
+    var reserved0:      UInt32 = 0
+    var edrHeadroom:    Float          // Tone map ceiling (2.0 on visionOS)
+    var pad:            Float = 0
+    var alignPad:       SIMD2<Float> = .zero
+    /// Sunshine maxCLL / maxFALL (nits); 0 = omit CLL-driven shoulder (see `Shaders.metal` hdrUchimuraShoulderP).
+    var maxContentNits: Float = 0
+    var maxFrameAvgNits: Float = 0
+    var padHdrMeta:     SIMD2<Float> = .zero
+    var yuvMatrix:      simd_float3x3  // Precomputed YUV→RGB matrix (CPU-selected)
+    var yuvOffset:      simd_float3    // Subtract before matrix multiply
+}
+
+// Build the YUV→RGB matrix and offset for the given format on the CPU.
+// Shared by DrawableVideoDecoder (RealityKit path) and MetalVideoDecoderRenderer (UIKit path).
+// Eliminates all if/else branching in the fragment shader.
+// Coefficients from ITU-R BT.709-6, BT.2020-2, BT.601-7.
+func buildYUVMatrix(matrixType: UInt32, isFullRange: Bool, is10Bit: Bool) -> (simd_float3x3, simd_float3) {
+    let yBlack:  Float = isFullRange ? 0.0        : (is10Bit ? 64.0  / 1023.0 : 16.0  / 255.0)
+    let uvCenter: Float =               is10Bit ? 512.0 / 1023.0 : 128.0 / 255.0
+    let yScale:  Float = isFullRange ? 1.0        : (is10Bit ? 1023.0 / 876.0  : 255.0 / 219.0)
+
+    let offset = simd_float3(yBlack, uvCenter, uvCenter)
+
+    let m: simd_float3x3
+    switch matrixType {
+    case 1: // BT.2020
+        if isFullRange {
+            m = simd_float3x3(columns: (
+                simd_float3( 1.0,      1.0,      1.0     ),
+                simd_float3( 0.0,     -0.164553, 1.8814  ),
+                simd_float3( 1.4746,  -0.571353, 0.0     )
+            ))
+        } else {
+            let s = yScale
+            m = simd_float3x3(columns: (
+                simd_float3( s,        s,        s       ),
+                simd_float3( 0.0,     -0.18732610 * s, 2.14177232 * s ),
+                simd_float3( 1.67867411 * s, -0.65042432 * s, 0.0 )
+            ))
+        }
+    case 2: // BT.601 / SMPTE-C
+        if isFullRange {
+            m = simd_float3x3(columns: (
+                simd_float3( 1.0,      1.0,      1.0     ),
+                simd_float3( 0.0,     -0.344136, 1.77200 ),
+                simd_float3( 1.40200, -0.714136, 0.0     )
+            ))
+        } else {
+            let s = yScale
+            m = simd_float3x3(columns: (
+                simd_float3( s,        s,        s       ),
+                simd_float3( 0.0,     -0.391762 * s, 2.017232 * s ),
+                simd_float3( 1.596027 * s, -0.812968 * s, 0.0 )
+            ))
+        }
+    default: // BT.709
+        if isFullRange {
+            m = simd_float3x3(columns: (
+                simd_float3( 1.0,      1.0,      1.0     ),
+                simd_float3( 0.0,     -0.187324, 1.8556  ),
+                simd_float3( 1.5748,  -0.468124, 0.0     )
+            ))
+        } else {
+            let s = yScale
+            m = simd_float3x3(columns: (
+                simd_float3( s,        s,        s       ),
+                simd_float3( 0.0,     -0.21324861 * s, 2.11240179 * s ),
+                simd_float3( 1.79274107 * s, -0.53290933 * s, 0.0 )
+            ))
+        }
+    }
+    return (m, offset)
+}
+
+// Must match FullHDRParams in Shaders.metal exactly.
 private struct ShaderFullHDRParams {
+    var boost:       Float
+    var contrast:    Float
+    var saturation:  Float
+    var brightness:  Float
+    var pqExposure:  Float
+    var mode:        Int32
+    var hdrGradeFlags: UInt32
+}
+
+/// Buffer 0 for TestFlight SDR fragments (`copyFragmentShaderHDR_EDR` / `_HEVC_EDR`) — matches `LegacySDRFrameParams` in Shaders.metal.
+private struct LegacySDRFrameParams {
+    var presetIndex: UInt32 = 0
+    var isPQ: UInt32
+    var isBT2020Matrix: UInt32
+    var isBT2020Primaries: UInt32
+}
+
+/// Buffer 1 for legacy SDR fragments — matches `LegacySDRFullParams` in Shaders.metal (no pqExposure).
+private struct LegacySDRFullParams {
     var boost: Float
     var contrast: Float
     var saturation: Float
@@ -62,7 +179,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
     private var callbacks: ConnectionCallbacks
     private var streamAspectRatio: Float
 
-    let callbackToRender: @MainActor (TextureResource.DrawableQueue, (Int, Int)?) -> Void
+    let callbackToRender: @MainActor (TextureResource.DrawableQueue, TextureResource.DrawableQueue?, (Int, Int)?) -> Void
     private var hdrSettingsProvider: (() -> HDRParams)? = nil
 
     /// Format and frame info
@@ -98,6 +215,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
 
     var session: VTDecompressionSession?
     var decoderCallback: VTDecompressionOutputCallbackRecord
+
+    // Limits GPU command buffer depth to 3 in-flight frames.
+    // Prevents memory pressure and watchdog kills when the decoder runs faster than the GPU.
+    private let inflightSemaphore = DispatchSemaphore(value: 3)
+
     lazy var mtlDevice: MTLDevice = {
         guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError()
@@ -119,12 +241,36 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
     private var copyPipelineStateYUV: MTLRenderPipelineState?
     private var lastCopyFragment: String?
 
+    // ChromaHalo: downsampled drawable queue for the edge bloom layer
+    var chromaHaloQueue: TextureResource.DrawableQueue?
+    private var chromaHaloRimPipelineState: MTLRenderPipelineState?
+    private var chromaHaloBlurHPipelineState: MTLRenderPipelineState?
+    private var chromaHaloBlurVPipelineState: MTLRenderPipelineState?
+    /// Ping-pong scratch: rim → A, horizontal blur → B, vertical blur (+ temporal) → drawable.
+    private var chromaHaloScratchA: MTLTexture?
+    private var chromaHaloScratchB: MTLTexture?
+    private var prevChromaHaloTexture: MTLTexture?
+
     private var firstFrameEmitted = false
 
+    private var lastPresentTime: CFAbsoluteTime = 0
+    private var lastStallRecoveryTime: CFAbsoluteTime = 0
+    private var stallWatchdogSource: DispatchSourceTimer?
+    private let stallPresentThreshold: CFAbsoluteTime = 0.45
+    private let stallRecoveryCooldown: CFAbsoluteTime = 2.0
+    private let presentTimeLock = NSLock()
+
     private static let ambientEngine: AmbientLightEngine? = AmbientLightEngine()
-    
-    // Flag to control whether we spawn the ambient analysis task
+
+    // Flag to control whether we spawn the ambient analysis task (zone colors for dome modes)
     var isReactiveDimmingEnabled: Bool = false
+    // ChromaHalo intensity for edge bloom (0.0 = off, 1.0 = normal)
+    var chromaHaloIntensity: Float = 0.0
+    // ChromaHalo scale (how much larger than video the halo mesh is)
+    /// Geometric margin for bloom vs display — keep equal to `_CurvedDisplayStreamView.chromosphereDiameterScale`.
+    var chromaHaloScale: Float = 1.55
+    /// Reactive 2: wider rim + stronger emission in `chromaHaloRimFragment`.
+    var chromaHaloCoronaMode: UInt32 = 0
 
     // MARK: - Initialization
 
@@ -136,7 +282,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         enableHDR: Bool = false,
         hdrSettingsProvider: (() -> HDRParams)? = nil,
         enhancementsProvider: (() -> (Float, Float, Float))? = nil,
-        callbackToRender: @MainActor @escaping (TextureResource.DrawableQueue, (Int, Int)?) -> Void
+        callbackToRender: @MainActor @escaping (TextureResource.DrawableQueue, TextureResource.DrawableQueue?, (Int, Int)?) -> Void
     ) {
         metalFormat = enableHDR ? .rgba16Float : .bgra8Unorm_srgb
 
@@ -181,84 +327,106 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         presentationTimeStamp _: CMTime,
         presentationDuration _: CMTime?
     ) {
+        guard let imageBuffer = imageBuffer else { return }
+
+        // Back-pressure: drop the frame silently if 3 frames are already queued on the GPU.
+        if inflightSemaphore.wait(timeout: .now()) != .success { return }
+
+        autoreleasepool {
+            renderFrame(imageBuffer: imageBuffer)
+        }
+    }
+
+    private func renderFrame(imageBuffer: CVImageBuffer) {
         guard
-            let imageBuffer = imageBuffer,
             let commandBuffer = commandQueue?.makeCommandBuffer(),
-            let textureCache = textureCache
+            let textureCache  = textureCache
         else {
-            print("DrawableVideoDecoder: Missing imageBuffer/commandBuffer/textureCache")
+            inflightSemaphore.signal()
             return
         }
 
-        let pf = CVPixelBufferGetPixelFormatType(imageBuffer)
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            self?.inflightSemaphore.signal()
+        }
+
+        let pf         = CVPixelBufferGetPixelFormatType(imageBuffer)
         let planeCount = CVPixelBufferGetPlaneCount(imageBuffer)
 
-        // 1. PQ Detection (With Force-Fix)
-        // If the user enabled HDR, we MUST assume PQ, even if the stream metadata is missing.
-        var isPQ = hdrEnabled
-        
-        // (Optional) If not already forced, check metadata as fallback
-        if !isPQ {
-            if let tfVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue(),
-               CFGetTypeID(tfVal) == CFStringGetTypeID() {
-                isPQ = CFEqual(tfVal as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
+        // --- PQ detection (ST.2084) ---
+        // 1) Prefer attachment on the decoded pixel buffer.
+        // 2) Else use transfer from CMVideoFormatDescription (must match AV1 sequence header — see AV1Parser tcMap).
+        //    VideoToolbox often omits kCVImageBufferTransferFunctionKey on the buffer even when the format desc is correct.
+        var isPQ = false
+        if let tfVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferTransferFunctionKey, nil)?.takeUnretainedValue(),
+           CFGetTypeID(tfVal) == CFStringGetTypeID() {
+            isPQ = CFEqual(tfVal as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
+        }
+        if !isPQ, let fd = formatDesc,
+           let tfAny = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction) {
+            if CFGetTypeID(tfAny) == CFStringGetTypeID() {
+                isPQ = CFEqual(tfAny as! CFString, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)
             }
         }
 
-        // 2. Primaries Detection (Gamut)
-        var isBT2020Primaries = false
+        // --- Primaries Detection ---
+        var primariesFromAttachment = false
+        var primariesType: UInt32 = 0  // 0=709, 1=2020, 2=SMPTE-C
         if let primVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferColorPrimariesKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(primVal) == CFStringGetTypeID() {
+            primariesFromAttachment = true
             let prim = primVal as! CFString
-            if CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_2020) {
-                isBT2020Primaries = true
-            } else if CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_709_2) {
-                isBT2020Primaries = false
-            }
+            if      CFEqual(prim, kCVImageBufferColorPrimaries_ITU_R_2020)  { primariesType = 1 }
+            else if CFEqual(prim, "SMPTE_C" as CFString)                    { primariesType = 2 }
+            // else stays 0 (BT.709)
         } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Primaries = hdrEnabled
+            // Infer BT.2020 only for PQ HDR without tags; 10‑bit SDR without primaries stays 709 (avoids green cast).
+            primariesType = (hdrEnabled && pixelFormatIs10Bit(pf) && isPQ) ? 1 : 0
         }
 
-        // 3. Matrix Detection (YUV Coeffs)
-        var isBT2020Matrix = false
+        // --- Matrix Detection ---
+        var matrixFromAttachment = false
+        var matrixType: UInt32 = 0  // 0=709, 1=2020, 2=601
         if let mtxVal = CVBufferGetAttachment(imageBuffer, kCVImageBufferYCbCrMatrixKey, nil)?.takeUnretainedValue(),
            CFGetTypeID(mtxVal) == CFStringGetTypeID() {
+            matrixFromAttachment = true
             let mtx = mtxVal as! CFString
-            if CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_2020) {
-                isBT2020Matrix = true
-            } else if CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_709_2) {
-                isBT2020Matrix = false
-            }
+            if      CFEqual(mtx, kCVImageBufferYCbCrMatrix_ITU_R_2020)  { matrixType = 1 }
+            else if CFEqual(mtx, "ITU_R_601_4" as CFString)             { matrixType = 2 }
+            // else stays 0 (BT.709)
         } else {
-            // Fallback: If HDR is on, assume Rec.2020
-            isBT2020Matrix = hdrEnabled
+            matrixType = (hdrEnabled && pixelFormatIs10Bit(pf) && isPQ) ? 1 : 0
         }
 
-        guard
-            let drawable = try? drawableQueue?.nextDrawable()
-        else {
-            print("DrawableVideoDecoder: nextDrawable() returned nil")
-            return
+        // PQ tag but no colorimetry attachments is common for Windows HDR desktop in Moonlight — treat as non-PQ.
+        if isPQ && hdrEnabled && !matrixFromAttachment && !primariesFromAttachment {
+            isPQ = false
+            matrixType = 0
+            primariesType = 0
         }
-        
-        if hdrEnabled {
-            updateHDRMetadata()
+        // PQ with explicit BT.709 primaries + 709 matrix is usually SDR-in-HDR container, not PQ code values.
+        if isPQ && primariesFromAttachment && matrixFromAttachment && primariesType == 0 && matrixType == 0 {
+            isPQ = false
         }
 
-        // Explicit bi-planar detection
-        var isBiPlanar = false
-        var yFormat: MTLPixelFormat = .invalid
+        let is10Bit    = pixelFormatIs10Bit(pf)    ? UInt32(1) : 0
+        let isFullRange = pixelFormatIsFullRange(pf) ? UInt32(1) : 0
+
+        if hdrEnabled { updateHDRMetadata() }
+
+        // --- Texture Format Selection ---
+        // When HDR is off, use the same CV→Metal mapping as pre–HDR-overhaul builds (and as
+        // MetalVideoDecoderRenderer): 10-bit SDR stays on r16/rg16 (or packed YCbCr), not r8/rg8.
+        var isBiPlanar  = false
+        var yFormat:    MTLPixelFormat = .invalid
         var cbcrFormat: MTLPixelFormat = .invalid
 
         if planeCount >= 2 {
-            // Prefer native formats derived from CVPixelBuffer
             let srcMetalFormats = CVMetalHelpers.getTextureTypesForFormat(pf)
             if srcMetalFormats.count > 0 { yFormat = srcMetalFormats[0] }
             if srcMetalFormats.count > 1 { cbcrFormat = srcMetalFormats[1] }
             isBiPlanar = (cbcrFormat != .invalid)
-            
-            // If HDR enabled, ensure P010 path where possible
+
             if hdrEnabled {
                 yFormat = .r16Unorm
                 cbcrFormat = .rg16Unorm
@@ -266,20 +434,40 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             }
         }
 
-        // DEBUG: First-frame log (once)
         if !firstFrameEmitted {
             let fmtStr = CVMetalHelpers.coreVideoPixelFormatToStr[pf] ?? "\(pf)"
-            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), PQ=\(isPQ), 2020Primaries=\(isBT2020Primaries), 2020Matrix=\(isBT2020Matrix)")
+            let tfDesc: String = {
+                guard let fd = formatDesc,
+                      let tfAny = CMFormatDescriptionGetExtension(fd, extensionKey: kCMFormatDescriptionExtension_TransferFunction)
+                else { return "-" }
+                if let s = tfAny as? String { return s }
+                if CFGetTypeID(tfAny) == CFStringGetTypeID() { return (tfAny as! CFString) as String }
+                return "-"
+            }()
+            let cllLog = hdrEnabled ? " maxCLL=\(hdrMetadata.maxContentLightLevel) maxFALL=\(hdrMetadata.maxFrameAverageLightLevel)" : ""
+            print("[DrawableVideoDecoder] PF=\(fmtStr), planes=\(planeCount), hdr=\(hdrEnabled), isPQ=\(isPQ), tfDesc=\(tfDesc), fullRange=\(isFullRange==1), 10bit=\(is10Bit==1), matrix=\(matrixType), primaries=\(primariesType)\(cllLog)")
         }
 
-        let fragment: String = isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+        guard let drawable = try? drawableQueue?.nextDrawable() else {
+            commandBuffer.commit()
+            return
+        }
+
+        // SDR uses default TestFlight entry points; HDR uses separate Metal symbols (never shares SDR shader body).
+        let fragment: String = {
+            if hdrEnabled {
+                return isBiPlanar ? "copyFragmentShaderHDR_HDRUnified" : "copyFragmentShaderHEVC_HDRUnified"
+            }
+            return isBiPlanar ? "copyFragmentShaderHDR_EDR" : "copyFragmentShaderHEVC_EDR"
+        }()
 
         if isBiPlanar {
             if copyPipelineStateYUV == nil || lastCopyFragment != fragment {
                 copyPipelineStateYUV = buildCopyPipeline(fragment: fragment)
                 lastCopyFragment = fragment
-                if copyPipelineStateYUV == nil {
+                guard copyPipelineStateYUV != nil else {
                     print("DrawableVideoDecoder: Failed to build YUV pipeline")
+                    commandBuffer.commit()
                     return
                 }
             }
@@ -287,20 +475,21 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             if copyPipelineState == nil || lastCopyFragment != fragment {
                 copyPipelineState = buildCopyPipeline(fragment: fragment)
                 lastCopyFragment = fragment
-                if copyPipelineState == nil {
+                guard copyPipelineState != nil else {
                     print("DrawableVideoDecoder: Failed to build single-plane pipeline")
+                    commandBuffer.commit()
                     return
                 }
             }
         }
 
         let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = drawable.texture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].texture    = drawable.texture
+        renderPassDescriptor.colorAttachments[0].loadAction  = .clear
         renderPassDescriptor.colorAttachments[0].storeAction = .store
 
         guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            print("DrawableVideoDecoder: Failed to create render encoder")
+            commandBuffer.commit()
             return
         }
 
@@ -310,90 +499,104 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             let w1 = CVPixelBufferGetWidthOfPlane(imageBuffer, 1)
             let h1 = CVPixelBufferGetHeightOfPlane(imageBuffer, 1)
 
-            var yTexRef: CVMetalTexture?
-            var cbcrTexRef: CVMetalTexture?
-
-            let res0 = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                yFormat, w0, h0, 0, &yTexRef
-            )
-            let res1 = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                cbcrFormat, w1, h1, 1, &cbcrTexRef
-            )
-            if res0 != 0 || res1 != 0 {
-                print("DrawableVideoDecoder: CVMetalTexture (YUV) failed: \(res0), \(res1)")
+            var yRef:    CVMetalTexture?
+            var cbcrRef: CVMetalTexture?
+            let r0 = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, yFormat,    w0, h0, 0, &yRef)
+            let r1 = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, cbcrFormat, w1, h1, 1, &cbcrRef)
+            guard r0 == 0, r1 == 0,
+                  let yTex   = yRef.flatMap(CVMetalTextureGetTexture),
+                  let uvTex  = cbcrRef.flatMap(CVMetalTextureGetTexture) else {
                 renderEncoder.endEncoding()
                 commandBuffer.commit()
                 return
             }
-
-            guard let yTex = yTexRef.flatMap(CVMetalTextureGetTexture),
-                  let cbcrTex = cbcrTexRef.flatMap(CVMetalTextureGetTexture) else {
-                print("DrawableVideoDecoder: Failed to get Y/CBCR textures")
-                renderEncoder.endEncoding()
-                commandBuffer.commit()
-                return
-            }
-
             renderEncoder.setRenderPipelineState(copyPipelineStateYUV!)
-            renderEncoder.setFragmentTexture(yTex, index: 0)
-            renderEncoder.setFragmentTexture(cbcrTex, index: 1)
+            renderEncoder.setFragmentTexture(yTex,  index: 0)
+            renderEncoder.setFragmentTexture(uvTex, index: 1)
         } else {
-            var imageTexture: CVMetalTexture?
+            var imgRef: CVMetalTexture?
             let w = CVPixelBufferGetWidthOfPlane(imageBuffer, 0)
             let h = CVPixelBufferGetHeightOfPlane(imageBuffer, 0)
-            let srcFormat = CVMetalHelpers.getTextureTypesForFormat(pf)[0]
-
-            let result = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, textureCache, imageBuffer, nil,
-                srcFormat, w, h, 0, &imageTexture
-            )
-            guard result == 0, let imageTexture, let sourceTexture = CVMetalTextureGetTexture(imageTexture) else {
-                print("DrawableVideoDecoder: CVMetalTexture (single-plane) failed: \(result)")
+            let srcFmt = CVMetalHelpers.getTextureTypesForFormat(pf)[0]
+            let result = CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, textureCache, imageBuffer, nil, srcFmt, w, h, 0, &imgRef)
+            guard result == 0, let srcTex = imgRef.flatMap(CVMetalTextureGetTexture) else {
                 renderEncoder.endEncoding()
                 commandBuffer.commit()
                 return
             }
-
             renderEncoder.setRenderPipelineState(copyPipelineState!)
-            renderEncoder.setFragmentTexture(sourceTexture, index: 0)
+            renderEncoder.setFragmentTexture(srcTex, index: 0)
         }
 
-        // --- 1. FORCE PQ FIX (The "Washed Out" Fix) ---
-        // If HDR is enabled, we assume the signal is PQ, even if metadata is missing.
-        // This prevents the "Gray Screen" issue.
-        if hdrEnabled { isPQ = true }
-        
-        // --- 2. THE STRUCT FIX (Type Mismatch Fix) ---
-        // We defined the struct properties as UInt32 (to match Metal 'uint').
-        // We convert our Swift Bools to 1 or 0 here.
-        struct ShaderHDRParams { var presetIndex: UInt32; var isPQ: UInt32; var isBT2020Matrix: UInt32; var isBT2020Primaries: UInt32 }
-        
-        var shaderParams = ShaderHDRParams(
-            presetIndex: 0,
-            isPQ: isPQ ? 1 : 0,               // Convert Bool -> UInt32
-            isBT2020Matrix: isBT2020Matrix ? 1 : 0,
-            isBT2020Primaries: isBT2020Primaries ? 1 : 0
-        )
-        
-        if let pb = mtlDevice.makeBuffer(bytes: &shaderParams, length: MemoryLayout<ShaderHDRParams>.size, options: .storageModeShared) {
-            renderEncoder.setFragmentBuffer(pb, offset: 0, index: 0)
+        // Buffer 0: ShaderHDRParams — frame signal description
+        // visionOS has fixed EDR headroom (Vision Pro's micro-OLED peak capability).
+        // On other platforms, query UIScreen dynamically.
+        // Only use HDR slider values when HDR is actually enabled.
+        let userParams: HDRParams = hdrEnabled
+            ? (hdrSettingsProvider?() ?? HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0))
+            : HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
+
+        // Always compute once so first-frame logging (and HDR shader params) share the same binding.
+        let edrHeadroom: Float = {
+            #if os(visionOS)
+            return 2.0
+            #else
+            let raw = UIScreen.main.currentEDRHeadroom
+            return Float(raw > 1.0 ? raw : UIScreen.main.potentialEDRHeadroom)
+            #endif
+        }()
+
+        if hdrEnabled {
+            let is10BitBool = is10Bit == 1
+            let isFullRangeBool = isFullRange == 1
+            let (yuvMatrix, yuvOffset) = buildYUVMatrix(matrixType: matrixType, isFullRange: isFullRangeBool, is10Bit: is10BitBool)
+            let extendedScene: UInt32 = (hdrEnabled && !isPQ) ? 1 : 0
+            var shaderHDR = ShaderHDRParams(
+                isPQ:              isPQ ? 1 : 0,
+                primariesType:     primariesType,
+                extendedScene:     extendedScene,
+                reserved0:         0,
+                edrHeadroom:       edrHeadroom,
+                pad:               0,
+                alignPad:          .zero,
+                maxContentNits:    Float(hdrMetadata.maxContentLightLevel),
+                maxFrameAvgNits:   Float(hdrMetadata.maxFrameAverageLightLevel),
+                padHdrMeta:        .zero,
+                yuvMatrix:         yuvMatrix,
+                yuvOffset:         yuvOffset
+            )
+            renderEncoder.setFragmentBytes(&shaderHDR, length: MemoryLayout<ShaderHDRParams>.size, index: 0)
+
+            var fullParams = ShaderFullHDRParams(
+                boost:      userParams.boost,
+                contrast:   userParams.contrast,
+                saturation: userParams.saturation,
+                brightness: userParams.brightness,
+                pqExposure: userParams.pqExposure,
+                mode:       userParams.mode,
+                hdrGradeFlags: userParams.hdrGradeFlags
+            )
+            renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
+        } else {
+            var legacyFrame = LegacySDRFrameParams(
+                presetIndex: 0,
+                isPQ: isPQ ? 1 : 0,
+                isBT2020Matrix: matrixType == 1 ? 1 : 0,
+                isBT2020Primaries: primariesType == 1 ? 1 : 0
+            )
+            renderEncoder.setFragmentBytes(&legacyFrame, length: MemoryLayout<LegacySDRFrameParams>.size, index: 0)
+
+            var legacyFull = LegacySDRFullParams(
+                boost: userParams.boost,
+                contrast: userParams.contrast,
+                saturation: userParams.saturation,
+                brightness: userParams.brightness,
+                mode: userParams.mode
+            )
+            renderEncoder.setFragmentBytes(&legacyFull, length: MemoryLayout<LegacySDRFullParams>.size, index: 1)
         }
 
-        var full = hdrSettingsProvider?() ?? HDRParams(
-            boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 1
-        )
-        var fullParams = ShaderFullHDRParams(
-            boost: full.boost,
-            contrast: full.contrast,
-            saturation: full.saturation,
-            brightness: full.brightness,
-            mode: full.mode
-        )
-        renderEncoder.setFragmentBytes(&fullParams, length: MemoryLayout<ShaderFullHDRParams>.size, index: 1)
-
-        // Existing enhancements (buffer 2)
+        // Buffer 2: ColorEnhancementUniforms — warmth / per-renderer adjustments
         let satConWarm = enhancementsProvider?() ?? (1.0, 1.0, 0.0)
         var enh = ColorEnhancementUniforms(saturation: satConWarm.0, contrast: satConWarm.1, warmth: satConWarm.2, padding1: 0)
         renderEncoder.setFragmentBytes(&enh, length: MemoryLayout<ColorEnhancementUniforms>.size, index: 2)
@@ -401,21 +604,176 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         renderEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         renderEncoder.endEncoding()
 
-        // --- ENABLE MIPMAP GENERATION (The Shimmer Fix) ---
+        // Mipmap generation — used by both ChromaHalo bloom and ambient zone sampling
         if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
             blitEncoder.generateMipmaps(for: drawable.texture)
             blitEncoder.endEncoding()
         }
 
+        // ChromaHalo: rim (mip 0) → two rounds separable blur (Ambilight diffusion) → temporal on final V-pass.
+        if chromaHaloIntensity > 0.0,
+           let haloQueue = chromaHaloQueue,
+           let haloDrawable = try? haloQueue.nextDrawable() {
+
+            let sampleMip = min(chromaHaloSourceMipLevel, drawable.texture.mipmapLevelCount - 1)
+
+            if chromaHaloRimPipelineState == nil {
+                chromaHaloRimPipelineState = buildCopyPipeline(fragment: "chromaHaloRimFragment")
+            }
+            if chromaHaloBlurHPipelineState == nil {
+                chromaHaloBlurHPipelineState = buildCopyPipeline(fragment: "chromaHaloBlurHFragment")
+            }
+            if chromaHaloBlurVPipelineState == nil {
+                chromaHaloBlurVPipelineState = buildCopyPipeline(fragment: "chromaHaloBlurVFragment")
+            }
+
+            var didAllocatePrevChroma = false
+            if prevChromaHaloTexture == nil
+                || prevChromaHaloTexture!.width != haloDrawable.texture.width
+                || prevChromaHaloTexture!.height != haloDrawable.texture.height {
+                let desc = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: haloDrawable.texture.pixelFormat,
+                    width: haloDrawable.texture.width,
+                    height: haloDrawable.texture.height,
+                    mipmapped: false)
+                desc.usage = [.shaderRead, .renderTarget]
+                prevChromaHaloTexture = mtlDevice.makeTexture(descriptor: desc)
+                didAllocatePrevChroma = prevChromaHaloTexture != nil
+            }
+
+            if didAllocatePrevChroma, let freshPrev = prevChromaHaloTexture {
+                let clearDesc = MTLRenderPassDescriptor()
+                clearDesc.colorAttachments[0].texture = freshPrev
+                clearDesc.colorAttachments[0].loadAction = .clear
+                clearDesc.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                clearDesc.colorAttachments[0].storeAction = .store
+                if let clearEnc = commandBuffer.makeRenderCommandEncoder(descriptor: clearDesc) {
+                    clearEnc.endEncoding()
+                }
+            }
+
+            ensureChromaHaloBlurScratchMatches(haloDrawable.texture)
+
+            if let mipView = drawable.texture.makeTextureView(
+                pixelFormat: drawable.texture.pixelFormat,
+                textureType: .type2D,
+                levels: sampleMip..<(sampleMip + 1),
+                slices: 0..<1),
+               let rimPS = chromaHaloRimPipelineState,
+               let blurHPS = chromaHaloBlurHPipelineState,
+               let blurVPS = chromaHaloBlurVPipelineState,
+               let scratchA = chromaHaloScratchA,
+               let scratchB = chromaHaloScratchB,
+               let prevTex = prevChromaHaloTexture {
+
+                let w = Float(scratchA.width)
+                let h = Float(scratchA.height)
+                var texelUV = simd_float2(
+                    chromaHaloAmbilightBlurSpread / max(w, 1),
+                    chromaHaloAmbilightBlurSpread / max(h, 1))
+
+                // Pass 1 — rim → scratch A
+                let passRim = MTLRenderPassDescriptor()
+                passRim.colorAttachments[0].texture = scratchA
+                passRim.colorAttachments[0].loadAction = .clear
+                passRim.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passRim.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passRim) {
+                    enc.setRenderPipelineState(rimPS)
+                    enc.setFragmentTexture(mipView, index: 0)
+                    var scale = chromaHaloScale
+                    var intensity = chromaHaloIntensity
+                    var coronaMode = chromaHaloCoronaMode
+                    enc.setFragmentBytes(&scale, length: MemoryLayout<Float>.size, index: 1)
+                    enc.setFragmentBytes(&intensity, length: MemoryLayout<Float>.size, index: 2)
+                    enc.setFragmentBytes(&coronaMode, length: MemoryLayout<UInt32>.size, index: 3)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 2 — horizontal blur A → B
+                let passH = MTLRenderPassDescriptor()
+                passH.colorAttachments[0].texture = scratchB
+                passH.colorAttachments[0].loadAction = .clear
+                passH.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passH.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passH) {
+                    enc.setRenderPipelineState(blurHPS)
+                    enc.setFragmentTexture(scratchA, index: 0)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 3 — first vertical blur → scratch A (Ambilight diffusion pass 2/4)
+                let passV1 = MTLRenderPassDescriptor()
+                passV1.colorAttachments[0].texture = scratchA
+                passV1.colorAttachments[0].loadAction = .clear
+                passV1.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passV1.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passV1) {
+                    enc.setRenderPipelineState(blurVPS)
+                    enc.setFragmentTexture(scratchB, index: 0)
+                    enc.setFragmentTexture(prevTex, index: 1)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    var vTemporalOff: UInt32 = 0
+                    enc.setFragmentBytes(&vTemporalOff, length: MemoryLayout<UInt32>.size, index: 1)
+                    var mixPlaceholder: Float = 0
+                    enc.setFragmentBytes(&mixPlaceholder, length: MemoryLayout<Float>.size, index: 2)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 4 — horizontal blur scratch A → B
+                let passH2 = MTLRenderPassDescriptor()
+                passH2.colorAttachments[0].texture = scratchB
+                passH2.colorAttachments[0].loadAction = .clear
+                passH2.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passH2.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passH2) {
+                    enc.setRenderPipelineState(blurHPS)
+                    enc.setFragmentTexture(scratchA, index: 0)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                // Pass 5 — vertical blur + temporal → halo drawable
+                let passV2 = MTLRenderPassDescriptor()
+                passV2.colorAttachments[0].texture = haloDrawable.texture
+                passV2.colorAttachments[0].loadAction = .clear
+                passV2.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+                passV2.colorAttachments[0].storeAction = .store
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passV2) {
+                    enc.setRenderPipelineState(blurVPS)
+                    enc.setFragmentTexture(scratchB, index: 0)
+                    enc.setFragmentTexture(prevTex, index: 1)
+                    enc.setFragmentBytes(&texelUV, length: MemoryLayout<simd_float2>.size, index: 0)
+                    var vTemporalOn: UInt32 = 1
+                    enc.setFragmentBytes(&vTemporalOn, length: MemoryLayout<UInt32>.size, index: 1)
+                    var mix = chromaHaloTemporalFrameMix()
+                    enc.setFragmentBytes(&mix, length: MemoryLayout<Float>.size, index: 2)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+
+                if let blitEnc = commandBuffer.makeBlitCommandEncoder() {
+                    blitEnc.copy(from: haloDrawable.texture, to: prevTex)
+                    blitEnc.endEncoding()
+                }
+            }
+
+            haloDrawable.present()
+        }
+
         let outTextureForAmbient = drawable.texture
 
-        // Present only after GPU finishes (async; avoids blocking decoder thread and OOM/watchdog crashes)
-        commandBuffer.addCompletedHandler { _ in
+        commandBuffer.addCompletedHandler { [weak self] _ in
             drawable.present()
+            self?.noteFramePresented()
         }
         commandBuffer.commit()
 
-        // Fire and forget. The engine handles the math and notification on its own timeline.
         if isReactiveDimmingEnabled, let engine = Self.ambientEngine {
             Task.detached {
                 await engine.analyze(texture: outTextureForAmbient)
@@ -426,8 +784,66 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             firstFrameEmitted = true
             DispatchQueue.main.async {
                 self.callbacks.videoContentShown()
-                print("DrawableVideoDecoder: First frame presented (PQ=\(isPQ), 2020Primaries=\(isBT2020Primaries), 2020Matrix=\(isBT2020Matrix))")
+                print("DrawableVideoDecoder: First frame presented (PQ=\(isPQ), primaries=\(primariesType), matrix=\(matrixType), edrHeadroom=\(edrHeadroom))")
             }
+        }
+    }
+
+    // MARK: - Pixel Format Helpers
+
+    private func pixelFormatIs10Bit(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func pixelFormatIsFullRange(_ pf: OSType) -> Bool {
+        switch pf {
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarFullRange:
+            return true
+        // Studio (limited) range is fixed by the OSType. Some streams incorrectly set FullRangeVideo on the
+        // CMFormatDescription; trusting that here used full-range YUV offsets on limited buffers → lifted blacks
+        // and the milky HDR desktop look (PQ path and extended path both start from the same decode).
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossy_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_422YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10PackedBiPlanarVideoRange:
+            return false
+        default:
+            // Match MetalVideoDecoderRenderer: unknown layouts default to studio (limited) range.
+            // Relying on CMFormatDescription FullRangeVideo has produced false positives for Moonlight HDR
+            // (washed desktop); only OSTypes in the explicit `true` branch above are treated as full range.
+            return false
         }
     }
 
@@ -456,9 +872,34 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 }
             }()
 
+            // ChromaHalo: downsampled queue (see `ChromaHaloDownsample.mipShift`)
+            self.chromaHaloQueue = {
+                let mipShift = ChromaHaloDownsample.mipShift
+                let cw = max(1, videoWidth  >> mipShift)
+                let ch = max(1, videoHeight >> mipShift)
+                let descriptor = TextureResource.DrawableQueue.Descriptor(
+                    pixelFormat: metalFormat,
+                    width: cw,
+                    height: ch,
+                    usage: [.renderTarget, .shaderWrite, .shaderRead],
+                    mipmapsMode: .none
+                )
+                do {
+                    let q = try TextureResource.DrawableQueue(descriptor)
+                    q.allowsNextDrawableTimeout = true
+                    return q
+                } catch {
+                    print("DrawableVideoDecoder: Could not create ChromaHalo queue: \(error)")
+                    return nil
+                }
+            }()
+
+            self.chromaHaloScratchA = nil
+            self.chromaHaloScratchB = nil
+
             region = MTLRegionMake2D(0, 0, videoWidth, videoHeight)
 
-            self.callbackToRender(self.drawableQueue!, (videoWidth, videoHeight))
+            self.callbackToRender(self.drawableQueue!, self.chromaHaloQueue, (videoWidth, videoHeight))
         }
     }
 
@@ -504,9 +945,57 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         setupLowLevelTexture()
     }
 
+    private func noteFramePresented() {
+        presentTimeLock.lock()
+        lastPresentTime = CFAbsoluteTimeGetCurrent()
+        presentTimeLock.unlock()
+    }
+
+    private func startStallWatchdog() {
+        stopStallWatchdog()
+
+        let queue = DispatchQueue(label: "com.neomoonlight.video-stall-watchdog", qos: .utility)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.25)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard self.firstFrameEmitted else { return }
+
+            self.presentTimeLock.lock()
+            let lastPresent = self.lastPresentTime
+            let lastRecovery = self.lastStallRecoveryTime
+            self.presentTimeLock.unlock()
+
+            guard lastPresent > 0 else { return }
+
+            let now = CFAbsoluteTimeGetCurrent()
+            let elapsed = now - lastPresent
+            guard elapsed > self.stallPresentThreshold else { return }
+            guard LiGetPendingVideoFrames() > 0 else { return }
+            guard now - lastRecovery > self.stallRecoveryCooldown else { return }
+
+            self.presentTimeLock.lock()
+            self.lastStallRecoveryTime = now
+            self.presentTimeLock.unlock()
+
+            let pending = LiGetPendingVideoFrames()
+            print("[DrawableVideoDecoder] Video stall detected (\(String(format: "%.2f", elapsed))s, pending=\(pending)) — requesting IDR")
+            LiRequestIdrFrame()
+        }
+        timer.resume()
+        stallWatchdogSource = timer
+    }
+
+    private func stopStallWatchdog() {
+        stallWatchdogSource?.cancel()
+        stallWatchdogSource = nil
+    }
+
     /// Start the rendering loop (via CADisplayLink)
     func start() {
         print("DrawableVideoDecoder: start() display link")
+        noteFramePresented()
+        startStallWatchdog()
         displayLink = CADisplayLink(target: self, selector: #selector(displayLinkCallback(_:)))
         if #available(iOS 15.0, tvOS 15.0, *) {
             displayLink?.preferredFrameRateRange = CAFrameRateRange(
@@ -524,8 +1013,13 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
     /// Stop the rendering loop
     func stop() {
         print("DrawableVideoDecoder: stop()")
+        stopStallWatchdog()
         displayLink?.invalidate()
         displayLink = nil
+        presentTimeLock.lock()
+        lastPresentTime = 0
+        lastStallRecoveryTime = 0
+        presentTimeLock.unlock()
         
         // Invalidate VTDecompressionSession
         if let session = session {
@@ -543,7 +1037,13 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         textureCache = nil
         copyPipelineState = nil
         copyPipelineFormat = nil
-        
+        chromaHaloRimPipelineState = nil
+        chromaHaloBlurHPipelineState = nil
+        chromaHaloBlurVPipelineState = nil
+        chromaHaloScratchA = nil
+        chromaHaloScratchB = nil
+        prevChromaHaloTexture = nil
+
         print("DrawableVideoDecoder: Stopped and cleaned up all state")
     }
 
@@ -612,7 +1112,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                     kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder as String: true,
                 ]
                 
-                // Don’t force a pixel format for HDR; allow native YUV bi-planar output
+                // HDR: request 10-bit bi-planar YUV. AV1 HDR: also tag the decoder pixel pool (original fork parity).
                 var attributes: [CFString: Any] = [
                     kCVPixelBufferMetalCompatibilityKey: true,
                     kCVPixelBufferPoolMinimumBufferCountKey: 3
@@ -629,7 +1129,6 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
                 
                 VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: formatDesc, decoderSpecification: decoderConfiguration as CFDictionary, imageBufferAttributes: attributes as CFDictionary, outputCallback: &decoderCallback, decompressionSessionOut: &session)
 
-                AudioHelpers.fixAudioForSurroundForCurrentWindow()
             } else {
                 return DR_NEED_IDR
             }
@@ -762,7 +1261,11 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         do {
             return try frameData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> CMVideoFormatDescription in
                 var mutableBuffer = UnsafeMutableBufferPointer<UInt8>(mutating: buffer.bindMemory(to: UInt8.self))
-                let fd = try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(mutableBuffer)
+                let fd = try CMVideoFormatDescriptionCreateFromAV1SequenceHeaderOBUWithAV1C(
+                    mutableBuffer,
+                    masteringDisplayColorVolume: masteringDisplayColorVolume,
+                    contentLightLevelInfo: contentLightLevelInfo
+                )
                 return fd as CMVideoFormatDescription
             }
         } catch {
@@ -1046,6 +1549,32 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
         }
     }
 
+    /// Sync constants with `Shaders.metal` `chromaHaloRimFragment` / `Reactive1ChromosphereReach`.
+    private func chromaHaloTemporalFrameMix() -> Float {
+        let kBase: Float = 1.55
+        let kSpan: Float = 1.93
+        let reachT = min(1, max(0, (chromaHaloScale - kBase) / max(kSpan, 1e-4)))
+        return 0.27 + reachT * 0.055
+    }
+
+    private func ensureChromaHaloBlurScratchMatches(_ haloTex: MTLTexture) {
+        let w = haloTex.width
+        let h = haloTex.height
+        let pf = haloTex.pixelFormat
+        if let a = chromaHaloScratchA,
+           a.width == w, a.height == h, a.pixelFormat == pf,
+           let b = chromaHaloScratchB,
+           b.width == w, b.height == h, b.pixelFormat == pf {
+            return
+        }
+        chromaHaloScratchA = nil
+        chromaHaloScratchB = nil
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pf, width: w, height: h, mipmapped: false)
+        desc.usage = [.shaderRead, .renderTarget]
+        chromaHaloScratchA = mtlDevice.makeTexture(descriptor: desc)
+        chromaHaloScratchB = mtlDevice.makeTexture(descriptor: desc)
+    }
+
     // Builds a simple copy pipeline with no input buffers, just
     // draw 4 vertices to copy the input texture to the output
     private func buildCopyPipeline(fragment: String) -> MTLRenderPipelineState? {
@@ -1085,6 +1614,7 @@ class DrawableVideoDecoder: NSObject, AnyVideoDecoderRenderer {
             contrast: 1.0,
             saturation: 1.0,
             brightness: 0.0,
+            pqExposure: 1.0,
             mode: 0
         )
 

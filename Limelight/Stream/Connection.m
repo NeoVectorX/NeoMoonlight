@@ -248,9 +248,9 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
     SDL_PauseAudioDevice(audioDevice, 0);
     
 #ifdef TARGET_OS_VISION
-    // Force direct stereo and voice chat microphone by default
+    // Playback-only with .default mode so Neo does not claim the mic route (MicStreamer coexist).
     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
-    [[AVAudioSession sharedInstance] setMode:AVAudioSessionModeVoiceChat error:nil];
+    [[AVAudioSession sharedInstance] setMode:AVAudioSessionModeDefault error:nil];
     [[AVAudioSession sharedInstance] setIntendedSpatialExperience:AVAudioSessionSpatialExperienceBypassed options:@{} error:nil];
 #else
     // Disable lowering volume of other audio streams (SDL sets AVAudioSessionCategoryOptionDuckOthers by default)
@@ -367,9 +367,7 @@ void ClLogMessage(const char* format, ...)
 
 void ClRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsigned short highFreqMotor)
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [_callbacks rumble:controllerNumber lowFreqMotor:lowFreqMotor highFreqMotor:highFreqMotor];
-    });
+    [_callbacks rumble:controllerNumber lowFreqMotor:lowFreqMotor highFreqMotor:highFreqMotor];
 }
 
 void ClConnectionStatusUpdate(int status)
@@ -389,9 +387,7 @@ void ClSetHdrMode(bool enabled)
 
 void ClRumbleTriggers(uint16_t controllerNumber, uint16_t leftTriggerMotor, uint16_t rightTriggerMotor)
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [_callbacks rumbleTriggers:controllerNumber leftTrigger:leftTriggerMotor rightTrigger:rightTriggerMotor];
-    });
+    [_callbacks rumbleTriggers:controllerNumber leftTrigger:leftTriggerMotor rightTrigger:rightTriggerMotor];
 }
 
 void ClSetMotionEventState(uint16_t controllerNumber, uint8_t motionType, uint16_t reportRateHz)
