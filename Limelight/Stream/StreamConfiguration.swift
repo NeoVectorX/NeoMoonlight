@@ -33,6 +33,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
     var optimizeGameSettings: Bool
     var playAudioOnPC: Bool
     var swapABXYButtons: Bool
+    var reportControllerAsXbox: Bool
     var audioConfiguration: Int
     var supportedVideoFormats: Int32
     var multiController: Bool
@@ -60,6 +61,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         optimizeGameSettings: Bool,
         playAudioOnPC: Bool,
         swapABXYButtons: Bool,
+        reportControllerAsXbox: Bool,
         audioConfiguration: Int,
         supportedVideoFormats: Int32,
         multiController: Bool,
@@ -85,6 +87,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         self.optimizeGameSettings = optimizeGameSettings
         self.playAudioOnPC = playAudioOnPC
         self.swapABXYButtons = swapABXYButtons
+        self.reportControllerAsXbox = reportControllerAsXbox
         self.audioConfiguration = audioConfiguration
         self.supportedVideoFormats = supportedVideoFormats
         self.multiController = multiController
@@ -113,6 +116,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
         self.optimizeGameSettings = false
         self.playAudioOnPC = false
         self.swapABXYButtons = false
+        self.reportControllerAsXbox = false
         self.audioConfiguration = 0
         self.supportedVideoFormats = 0
         self.multiController = false
@@ -142,6 +146,7 @@ class StreamConfiguration: NSObject, Encodable, Decodable, NSCopying {
             optimizeGameSettings: self.optimizeGameSettings,
             playAudioOnPC: self.playAudioOnPC,
             swapABXYButtons: self.swapABXYButtons,
+            reportControllerAsXbox: self.reportControllerAsXbox,
             audioConfiguration: self.audioConfiguration,
             supportedVideoFormats: self.supportedVideoFormats,
             multiController: self.multiController,
