@@ -10,12 +10,92 @@ import SwiftUI
 
 struct SettingsView: View {
     @Binding public var settings: TemporarySettings
-    @AppStorage("classic.absoluteTouchMode") private var classicAbsoluteTouchMode: Bool = false
+    @AppStorage("classic.absoluteTouchMode") private var classicAbsoluteTouchMode: Bool = true
+    @AppStorage("settings.customBitrateMbps") private var savedCustomBitrateMbps: Int = 0
     @State private var selectedAspectRatio: AspectRatio?
     @State private var isCustomAspectRatio: Bool = false
     @State private var isCustomResolution: Bool = false
+    @State private var isCustomBitrate: Bool = false
     @State private var customWidth: String = ""
     @State private var customHeight: String = ""
+    @State private var customBitrateString: String = ""
+    /// Inline editor after picking Custom; dismisses when the user taps Confirm.
+    @State private var showCustomBitrateEntryRow: Bool = false
+
+    private static func isPresetBitrate(_ bitrate: Int32) -> Bool {
+        bitrateTable.contains(bitrate)
+    }
+
+    private var micButtonColorStyleBinding: Binding<MicButtonColorStyle> {
+        Binding(
+            get: { MicButtonColorStyle.from(raw: settings.micButtonColorStyleRaw) },
+            set: { newValue in
+                settings.micButtonColorStyleRaw = newValue.rawValue
+                UserDefaults.standard.set(newValue.rawValue, forKey: "stream.micButtonColorStyle")
+            }
+        )
+    }
+
+    private func syncCustomBitrateUIFromSettings() {
+        if Self.isPresetBitrate(settings.bitrate) {
+            isCustomBitrate = false
+            showCustomBitrateEntryRow = false
+            return
+        }
+        isCustomBitrate = true
+        showCustomBitrateEntryRow = false
+        let mbps = max(1, Int(settings.bitrate / 1000))
+        customBitrateString = "\(mbps)"
+        savedCustomBitrateMbps = mbps
+    }
+
+    private var customBitrateMbpsDraft: Int? {
+        let digits = customBitrateString.filter { $0.isNumber }
+        guard let m = Int(digits), m > 0 else { return nil }
+        return m
+    }
+
+    /// Digits-only while typing; bitrate applies when the user taps Confirm.
+    private func sanitizeCustomBitrateDraft() {
+        let filtered = customBitrateString.filter { $0.isNumber }
+        if filtered != customBitrateString {
+            customBitrateString = filtered
+        }
+    }
+
+    private func confirmCustomBitrateEntry() {
+        guard let mbps = customBitrateMbpsDraft else { return }
+        savedCustomBitrateMbps = mbps
+        settings.bitrate = Int32(mbps) * 1000
+        showCustomBitrateEntryRow = false
+    }
+
+    /// Single-line capsule title so the bitrate row stays the same height as other menu pickers.
+    private var bitrateMenuCapsuleTitle: String {
+        if isCustomBitrate {
+            let n = max(1, Int(settings.bitrate / 1000))
+            return "Custom (\(n) Mbps)".replacingOccurrences(of: " ", with: "\u{00A0}")
+        }
+        return "\(settings.bitrate / 1000) Mbps"
+    }
+    
+    private var resolutionSelection: Binding<Resolution> {
+        Binding(
+            get: {
+                isCustomResolution ? Resolution(width: -1, height: -1) : settings.resolution
+            },
+            set: { newValue in
+                if newValue.width == -1 && newValue.height == -1 {
+                    isCustomResolution = true
+                    customWidth = String(settings.resolution.width)
+                    customHeight = String(settings.resolution.height)
+                } else {
+                    isCustomResolution = false
+                    settings.resolution = newValue
+                }
+            }
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -34,21 +114,7 @@ struct SettingsView: View {
                         Text("Resolution")
                             .foregroundColor(.white)
                         Spacer()
-                        Picker("", selection: Binding(
-                            get: {
-                                isCustomResolution ? Resolution(width: -1, height: -1) : settings.resolution
-                            },
-                            set: { newValue in
-                                if newValue.width == -1 && newValue.height == -1 {
-                                    isCustomResolution = true
-                                    customWidth = String(settings.resolution.width)
-                                    customHeight = String(settings.resolution.height)
-                                } else {
-                                    isCustomResolution = false
-                                    settings.resolution = newValue
-                                }
-                            }
-                        )) {
+                        Picker("", selection: resolutionSelection) {
                             Text("Custom").tag(Resolution(width: -1, height: -1))
                             
                             ForEach(Self.resolutionsGroupedByType, id: \.0) { aspectRatio, resolutions in
@@ -175,24 +241,88 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                     
-                    HStack {
-                        Text("Bitrate")
-                            .foregroundColor(.white)
-                        Spacer()
-                        Picker("", selection: $settings.bitrate) {
-                            ForEach(Self.bitrateTable, id: \.self) { bitrate in
-                                Text("\(bitrate / 1000) Mbps").tag(bitrate)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Bitrate")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Menu {
+                                Button("Custom…") {
+                                    isCustomBitrate = true
+                                    showCustomBitrateEntryRow = true
+                                    if savedCustomBitrateMbps > 0 {
+                                        customBitrateString = "\(savedCustomBitrateMbps)"
+                                    } else {
+                                        customBitrateString = "\(max(1, Int(settings.bitrate / 1000)))"
+                                    }
+                                }
+                                Divider()
+                                ForEach(Self.bitrateTable, id: \.self) { br in
+                                    Button("\(br / 1000) Mbps") {
+                                        isCustomBitrate = false
+                                        showCustomBitrateEntryRow = false
+                                        settings.bitrate = br
+                                    }
+                                }
+                            } label: {
+                                Text(bitrateMenuCapsuleTitle)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.72)
                             }
                         }
-                        .pickerStyle(.menu)
-                    }
-                    .padding(.vertical, 4)
-                    
-                    if settings.bitrate > 300000 {
-                        Label("Bitrates exceeding 300 Mbps require an extreme high-performance network.", systemImage: "wifi.exclamationmark")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                        .padding(.vertical, 4)
+                        
+                        if isCustomBitrate && showCustomBitrateEntryRow {
+                            HStack(spacing: 10) {
+                                TextField("", text: $customBitrateString)
+                                    .textFieldStyle(.plain)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.center)
+                                    .font(.system(size: 17, weight: .medium, design: .rounded).monospacedDigit())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 10)
+                                    .frame(width: 88)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.white.opacity(0.1))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                                    .onChange(of: customBitrateString) { _, _ in
+                                        sanitizeCustomBitrateDraft()
+                                    }
+
+                                Text("Mbps")
+                                    .font(.subheadline)
+                                    .foregroundColor(.white.opacity(0.85))
+
+                                Button(action: confirmCustomBitrateEntry) {
+                                    Text("Confirm")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.white.opacity(0.92))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .fill(Color.white.opacity(0.18))
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(customBitrateMbpsDraft == nil)
+
+                                Spacer(minLength: 0)
+                            }
                             .padding(.top, 8)
+                        }
+                        
+                        if settings.bitrate > 300000 {
+                            Label("Bitrates exceeding 300 Mbps require an extreme high-performance network.", systemImage: "wifi.exclamationmark")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                     
                     VStack(alignment: .leading, spacing: 8) {
@@ -241,7 +371,7 @@ struct SettingsView: View {
                             Picker("", selection: $settings.curvedDefaultControlMode) {
                                 Text("Gaze/Touch Control").tag(2)      // gazeControl = 2
                                 Text("Screen Adjust").tag(0)    // screenMove = 0
-                                Text("Controller").tag(1)       // controller = 1
+                                Text("Accessory Mode").tag(1)       // controller = 1
                             }
                             .pickerStyle(.menu)
                             .onChange(of: settings.curvedDefaultControlMode) { _, newValue in
@@ -249,7 +379,7 @@ struct SettingsView: View {
                             }
                         }
                         
-                        Text("Choose the default control at the top when streaming. **Gaze Control/Touch Control**: Move the cursor with your eyes or drag and double pinch to click. **Screen Adjust**: Drag or resize the display using hand gestures. **Controller**: Use a game controller connected to Vision Pro bluetooth. You can switch between modes anytime during streaming.")
+                        Text("Choose the default control at the top when streaming. **Gaze Control/Touch Control**: Move the cursor with your eyes or drag and double pinch to click. **Screen Adjust**: Resposition, curve, or scale the screen. **Accessory Mode**: Enable to use a gamepad or mouse. You can switch between modes anytime during streaming.")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -278,7 +408,7 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, 4)
                         
-                        Text("**Gaze (Eye Tracking)**: Look where you want the cursor to go, then pinch to click. Quick double pinch = click, hold pinch = right-click.")
+                        Text("**Gaze (Eye Tracking)**: Look where you want the cursor to go, then pinch to click. Pinch and drag scrolls by default (or drags if set in Settings). Quick double pinch = click, hold pinch = right-click.")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -288,6 +418,40 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Pinch and Drag")
+                                .foregroundColor(.white)
+                            Spacer()
+                            Picker("", selection: $settings.gazePinchDragScrollMode) {
+                                Text("Scroll Mode").tag(true)
+                                Text("Marquee/Drag").tag(false)
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: settings.gazePinchDragScrollMode) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "gaze.pinchDragScroll")
+                            }
+                        }
+                        
+                        Text("In Gaze Control Mode, choose between Marquee/Drag or a page Scrolling option.")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show Scroll / Marquee button on stream bar", isOn: $settings.showPinchDragToggle)
+                            .onChange(of: settings.showPinchDragToggle) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "stream.showPinchDragToggle")
+                            }
+                        
+                        Text("Adds a button on the stream top bar to switch between Scroll or Marquee Mode without opening Settings. Uses your default above when a stream starts.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                     }
                     .padding(.vertical, 4)
                     
@@ -408,9 +572,12 @@ struct SettingsView: View {
                                 Text("Gaze Control").tag(true)
                             }
                             .pickerStyle(.menu)
+                            .onChange(of: settings.absoluteTouchMode) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "flat.absoluteTouchMode")
+                            }
                         }
                         
-                        Text("Choose your default cursor control method. **Gaze Control**: Use your eyes and pinch to control the cursor. Quick double pinch = click, hold pinch = right-click. **Touch Control**: Use trackpad-style hand dragging with pinch to control cursor. Quick double pinch = click, hold pinch = right-click. Toggle between modes anytime during streaming.")
+                        Text("Choose your default cursor control method. **Gaze Control**: Use your eyes and pinch to control the cursor. Pinch-drag scrolls by default (or drags per Settings). Quick double pinch = click, hold pinch = right-click. **Touch Control**: Use trackpad-style hand dragging with pinch to control cursor. Quick double pinch = click, hold pinch = right-click. Toggle between modes anytime during streaming.")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -485,8 +652,14 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                     
-                    Toggle("Swap A/B and X/Y Buttons", isOn: $settings.swapABXYButtons)
-                        .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Swap A/B and X/Y Buttons", isOn: $settings.swapABXYButtons)
+                        
+                        Text("Swaps gamepad buttons for games that use different button assignments.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
                     
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("Play Audio on PC", isOn: $settings.playAudioOnPC)
@@ -498,16 +671,80 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
                     
                     VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Mic Streamer Compatibility Mode", isOn: $settings.showMicButton)
+                        Toggle("Show stream mute button", isOn: $settings.showStreamMuteButton)
+                            .onChange(of: settings.showStreamMuteButton) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "stream.showMuteButton")
+                            }
                         
-                        Text("Adds a mute button to control Mic Streamer app while in Curved Display mode.")
+                        Text("Adds a mute button to the stream top bar.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Pass Through Mode", isOn: $settings.showPeekThroughButton)
+                            .onChange(of: settings.showPeekThroughButton) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "stream.showPeekThroughButton")
+                            }
+
+                        Text("Adds a top-bar control in Flat and Curved display to enter Pass Through mode — fades out the stream and volume so you can see your surroundings.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Follow Mode (Curved)", isOn: $settings.showHeadFollowButton)
+                            .onChange(of: settings.showHeadFollowButton) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "stream.showHeadFollowButton")
+                            }
+
+                        Text("Adds a Follow Mode button to the curved stream top bar. The screen tracks your head while you move; use Screen Adjust to drag and resize it, hold Digital Crown to reset position and size, and tap Follow Mode again to turn off.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Restore Screen Preset on launch", isOn: Binding(
+                            get: { UserDefaults.standard.bool(forKey: "curved.restoreScreenPresetOnLaunch") },
+                            set: { UserDefaults.standard.set($0, forKey: "curved.restoreScreenPresetOnLaunch") }
+                        ))
+
+                        Text("When on, curved mode loads your last Screen Preset position and settings at stream launch.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Mic Streamer Compatibility Mode", isOn: $settings.showMicButton)
+                            .onChange(of: settings.showMicButton) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "stream.showMicButton")
+                                settings.save()
+                            }
+
+                        if settings.showMicButton {
+                            Picker("", selection: micButtonColorStyleBinding) {
+                                ForEach(MicButtonColorStyle.allCases) { style in
+                                    Text(style.displayName).tag(style)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 2)
+                            .padding(.bottom, 4)
+                        }
+                        
+                        Text("Adds a mute button to control Mic Streamer while streaming. White uses the default pill; Green / Red shows green when live and red when muted.")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
                     .padding(.vertical, 4)
                     
                     VStack(alignment: .leading, spacing: 4) {
-                        Toggle("Show Task Manager Button", isOn: Binding(
+                        Toggle("Show Desktop Actions Button", isOn: Binding(
                             get: { settings.showTaskManagerButton },
                             set: { newValue in
                                 settings.showTaskManagerButton = newValue
@@ -515,7 +752,7 @@ struct SettingsView: View {
                             }
                         ))
                         
-                        Text("Adds a button to the top controls that quickly opens Task Manager on your PC.")
+                        Text("Adds a Desktop button in stream controls with Windows and MacOS commands, and function keys.")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
@@ -530,7 +767,22 @@ struct SettingsView: View {
                             }
                         ))
                         
-                        Text("Displays battery level and charging status for the primary controller.")
+                        Text("Displays battery level and charging status for the primary controller connected to Vision Pro via Bluetooth.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Report Playstation Controller as Xbox to PC", isOn: Binding(
+                            get: { settings.reportControllerAsXbox },
+                            set: { newValue in
+                                settings.reportControllerAsXbox = newValue
+                                UserDefaults.standard.set(newValue, forKey: "reportControllerAsXbox")
+                            }
+                        ))
+                        
+                        Text("Adds compatibility for XInput-only PC games when using a PlayStation controller connected to Vision Pro Bluetooth. Requires relaunch.")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
@@ -572,10 +824,33 @@ struct SettingsView: View {
                             set: { newValue in
                                 settings.darkControlsMode = newValue
                                 UserDefaults.standard.set(newValue, forKey: "darkControlsMode")
+                                if newValue {
+                                    settings.lightControlsMode = false
+                                    UserDefaults.standard.set(false, forKey: "lightControlsMode")
+                                }
                             }
                         ))
                         
                         Text("Further reduces control bar visibility for enhanced immersion in dark environments. (Flat and Curved display mode only)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Light Mode", isOn: Binding(
+                            get: { settings.lightControlsMode },
+                            set: { newValue in
+                                settings.lightControlsMode = newValue
+                                UserDefaults.standard.set(newValue, forKey: "lightControlsMode")
+                                if newValue {
+                                    settings.darkControlsMode = false
+                                    UserDefaults.standard.set(false, forKey: "darkControlsMode")
+                                }
+                            }
+                        ))
+                        
+                        Text("Makes the stream control bar fully visible when idle and half visible when auto-hidden — helpful in bright rooms. (Flat and Curved display mode only)")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
@@ -663,7 +938,19 @@ struct SettingsView: View {
             }
             
             // Load curved display default control mode from UserDefaults
-            settings.curvedDefaultControlMode = UserDefaults.standard.integer(forKey: "curved.defaultControlMode")
+            if UserDefaults.standard.object(forKey: "curved.defaultControlMode") == nil {
+                settings.curvedDefaultControlMode = 2
+                UserDefaults.standard.set(2, forKey: "curved.defaultControlMode")
+            } else {
+                settings.curvedDefaultControlMode = UserDefaults.standard.integer(forKey: "curved.defaultControlMode")
+            }
+            
+            if UserDefaults.standard.object(forKey: "flat.absoluteTouchMode") == nil {
+                settings.absoluteTouchMode = true
+                UserDefaults.standard.set(true, forKey: "flat.absoluteTouchMode")
+            } else {
+                settings.absoluteTouchMode = UserDefaults.standard.bool(forKey: "flat.absoluteTouchMode")
+            }
             
             // Load gaze control method from UserDefaults
             settings.curvedGazeUseTouchMode = UserDefaults.standard.bool(forKey: "curved.gazeUseTouchMode")
@@ -671,6 +958,23 @@ struct SettingsView: View {
             // Load gaze cursor calibration from UserDefaults
             settings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
             settings.gazeCursorOffsetY = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetY")
+            settings.showStreamMuteButton = UserDefaults.standard.bool(forKey: "stream.showMuteButton")
+            settings.showPeekThroughButton = UserDefaults.standard.bool(forKey: "stream.showPeekThroughButton")
+            settings.showHeadFollowButton = UserDefaults.standard.bool(forKey: "stream.showHeadFollowButton")
+            if UserDefaults.standard.object(forKey: "stream.showMicButton") != nil {
+                settings.showMicButton = UserDefaults.standard.bool(forKey: "stream.showMicButton")
+            }
+            if let micColorRaw = UserDefaults.standard.string(forKey: "stream.micButtonColorStyle") {
+                settings.micButtonColorStyleRaw = micColorRaw
+            }
+            if UserDefaults.standard.object(forKey: "gaze.pinchDragScroll") == nil {
+                settings.gazePinchDragScrollMode = true
+            } else {
+                settings.gazePinchDragScrollMode = UserDefaults.standard.bool(forKey: "gaze.pinchDragScroll")
+            }
+            settings.showPinchDragToggle = UserDefaults.standard.bool(forKey: "stream.showPinchDragToggle")
+
+            syncCustomBitrateUIFromSettings()
         }
         .onChange(of: settings.resolution) { _, newValue in
             selectedAspectRatio = newValue.aspectRatio
@@ -717,7 +1021,7 @@ struct SettingsSection<Content: View>: View {
                     
                     // Main card
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(Color(red: 0.12, green: 0.18, blue: 0.37).opacity(0.90))
+                        .fill(MenuCardStyle.fill)
                         .overlay(
                             RoundedRectangle(cornerRadius: 20)
                                 .strokeBorder(

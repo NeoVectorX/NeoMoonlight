@@ -27,6 +27,8 @@
 @interface ControllerSupport : NSObject
 
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate;
+-(void) registerMouseCallbacks:(GCMouse*)mouse API_AVAILABLE(ios(14.0));
+-(void) unregisterMouseCallbacks:(GCMouse*)mouse API_AVAILABLE(ios(14.0));
 -(void) connectionEstablished;
 
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
@@ -55,10 +57,20 @@
 +(int) getGamepadMaskForSlot:(int)slot;
 
 -(void) setSwapABXYButtons:(BOOL)swap;
+-(void) setReportControllerAsXbox:(BOOL)reportAsXbox;
 
 -(NSUInteger) getConnectedGamepadCount;
 
 - (void) attachGCEventInteractionToView:(UIView *)view;
 - (void) detachGCEventInteractionFromView:(UIView *)view;
+
+/// Sample digital input on input queue (~30 Hz + events); resample analog axes at 60 Hz on send queue.
+- (void) setInputSyncEnabled:(BOOL)enabled;
+/// Pushes current gamepad state to the host immediately (e.g. entering Controller mode).
+- (void) refreshControllerStates;
+/// Re-attaches gamepad value handlers after foreground (OS may clear physicalInputProfile callbacks).
+- (void) restoreGamepadHandlersAfterForeground;
+/// Sends a neutral gamepad packet (releases buttons/sticks) without re-enabling sync.
+- (void) releaseHeldInputsToHost;
 
 @end

@@ -11,6 +11,8 @@
 
 @interface HapticContext : NSObject
 
+@property (nonatomic, readonly) BOOL isReady;
+
 -(void)setMotorAmplitude:(unsigned short)amplitude;
 -(void)cleanup;
 

@@ -2,7 +2,7 @@
 //  ControllerBatteryState.swift
 //  Moonlight Vision
 //
-//  Created by NeoVectorX
+//  Created by NeoVectorX 2026
 //
 
 import Foundation

@@ -30,8 +30,8 @@ public class TemporarySettings: NSObject {
     @objc public var optimizeGames = false
     @objc public var enableHdr = false
     @objc public var btMouseSupport = false
-    @objc public var absoluteTouchMode = false
-    @objc public var curvedDefaultControlMode = 2  // 0: Screen Adjust, 1: Controller, 2: Gaze (default)
+    @objc public var absoluteTouchMode = true
+    @objc public var curvedDefaultControlMode = 2  // 0: Screen Adjust, 1: Accessory, 2: Gaze (default)
     @objc public var curvedGazeUseTouchMode = false  // false: Eye tracking (gaze), true: Hand drag (touch/trackpad)
     @objc public var gazeCursorOffsetX: Int = 0  // -15 to +15 pixels horizontal calibration
     @objc public var gazeCursorOffsetY: Int = 0  // -15 to +15 pixels vertical calibration
@@ -39,11 +39,24 @@ public class TemporarySettings: NSObject {
     @objc public var dimPassthrough = true
     @objc public var hideSystemCursor = false
     @objc public var showMicButton = false
+    @objc public var micButtonColorStyleRaw: String = "white"
+    @objc public var showStreamMuteButton = false
+    /// Curved display: show top-bar control to fade stream to ~5% opacity and lower volume while peeking at the room.
+    @objc public var showPeekThroughButton = false
+    /// Curved display: show top-bar Head Follow control (must be enabled in Settings before use).
+    @objc public var showHeadFollowButton = false
+    /// When true, gaze pinch-drag sends mouse wheel (scroll). When false, sends click-drag (marquee).
+    @objc public var gazePinchDragScrollMode = true
+    /// When true, show a stream-bar toggle to switch scroll/drag mid-session.
+    @objc public var showPinchDragToggle = false
     @objc public var hideHandsIn360Environment = false
     @objc public var showTaskManagerButton = false
     @objc public var showControllerBattery = false
+    /// When enabled, PlayStation controllers are reported to the host as Xbox for XInput-only PC games.
+    @objc public var reportControllerAsXbox = false
     @objc public var removeRoundedCorners = false
     @objc public var darkControlsMode = false
+    @objc public var lightControlsMode = false
     @objc public var useCollapsedControlsMenu = false
 
     // --- HDR / Color Settings ---
@@ -72,6 +85,7 @@ public class TemporarySettings: NSObject {
         self.hideHandsIn360Environment = false
         self.showTaskManagerButton = false
         self.showControllerBattery = false
+        self.reportControllerAsXbox = false
         self.useCollapsedControlsMenu = false
         
         // HDR Defaults
@@ -124,14 +138,14 @@ public class TemporarySettings: NSObject {
         self.realitykitRendererCurvature = settings.realitykitRendererCurvature?.floatValue ?? 0
         self.dimPassthrough = settings.dimPassthrough?.boolValue ?? false
         self.hideSystemCursor = settings.hideSystemCursor?.boolValue ?? false
-        // TODO: Uncomment after adding showMicButton to Core Data model
-        // self.showMicButton = settings.showMicButton?.boolValue ?? false
-        self.showMicButton = false
+        self.showMicButton = settings.showMicButton?.boolValue ?? false
         self.hideHandsIn360Environment = settings.hideHandsIn360Environment?.boolValue ?? false
         self.showTaskManagerButton = UserDefaults.standard.bool(forKey: "showTaskManagerButton")
         self.showControllerBattery = UserDefaults.standard.bool(forKey: "showControllerBattery")
+        self.reportControllerAsXbox = UserDefaults.standard.bool(forKey: "reportControllerAsXbox")
         self.removeRoundedCorners = UserDefaults.standard.bool(forKey: "removeRoundedCorners")
         self.darkControlsMode = UserDefaults.standard.bool(forKey: "darkControlsMode")
+        self.lightControlsMode = UserDefaults.standard.bool(forKey: "lightControlsMode")
         self.useCollapsedControlsMenu = UserDefaults.standard.bool(forKey: "useCollapsedControlsMenu")
         
         // HDR / COLOR DEFAULTS (not stored in database, local only)

@@ -25,6 +25,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 @implementation ControllerSupport {
     id _controllerConnectObserver;
     id _controllerDisconnectObserver;
+    id _applicationDidBecomeActiveObserver;
+    id _applicationWillEnterForegroundObserver;
     GCMouse *_mouseConnectObserver;
     GCMouse *_mouseDisconnectObserver;
     GCKeyboard *_keyboardConnectObserver;
@@ -51,7 +53,280 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     char _controllerNumbers;
     bool _multiController;
     bool _swapABXYButtons;
+    bool _reportControllerAsXbox;
     int _controllerSlotOffset;  // For co-op: offset added to controller index
+
+    dispatch_source_t _inputSyncSource;
+    dispatch_source_t _sendSource;
+    BOOL _inputSyncEnabled;
+    BOOL _coopInputLogged;
+    NSTimeInterval _lastGamepadHandlerHealthCheck;
+    NSTimeInterval _foregroundRestoreStartTime;
+    NSInteger _foregroundRestoreGeneration;
+    NSTimeInterval _lastReregisterTime;  // Debounce handler reregister
+}
+
+static const double NEO_CONTROLLER_SEND_HZ = 60.0;
+/// Re-register GameController handlers periodically (DualSense profile handler can die mid-session).
+static const NSTimeInterval NEO_GAMEPAD_HANDLER_HEALTH_INTERVAL = 90.0;
+/// Aggressive DualSense prewarm for first N seconds after foreground to unstick frozen D-pad state.
+static const NSTimeInterval NEO_DPAD_AGGRESSIVE_PREWARM_DURATION = 3.0;
+
+static dispatch_queue_t neo_controllerInputQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("com.neomoonlight.controller-input", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static dispatch_queue_t neo_controllerSendQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("com.neomoonlight.controller-send", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static dispatch_queue_t neo_hapticsQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("com.neomoonlight.haptics", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static const float NEO_DPAD_AXIS_THRESHOLD = 0.25f;
+
+static BOOL neo_dpadDirectionPressed(GCControllerButtonInput *button) {
+    if (button == nil) {
+        return NO;
+    }
+    if (button.pressed) {
+        return YES;
+    }
+    return fabsf((float)button.value) > NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadUpPressed(GCExtendedGamepad *gamepad) {
+    if (neo_dpadDirectionPressed(gamepad.dpad.up)) {
+        return YES;
+    }
+    return gamepad.dpad.yAxis.value > NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadDownPressed(GCExtendedGamepad *gamepad) {
+    if (neo_dpadDirectionPressed(gamepad.dpad.down)) {
+        return YES;
+    }
+    return gamepad.dpad.yAxis.value < -NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadLeftPressed(GCExtendedGamepad *gamepad) {
+    if (neo_dpadDirectionPressed(gamepad.dpad.left)) {
+        return YES;
+    }
+    return gamepad.dpad.xAxis.value < -NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadRightPressed(GCExtendedGamepad *gamepad) {
+    if (neo_dpadDirectionPressed(gamepad.dpad.right)) {
+        return YES;
+    }
+    return gamepad.dpad.xAxis.value > NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadUpFromDirectionPad(GCControllerDirectionPad *dpad) {
+    if (dpad == nil) {
+        return NO;
+    }
+    if (neo_dpadDirectionPressed(dpad.up)) {
+        return YES;
+    }
+    return dpad.yAxis.value > NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadDownFromDirectionPad(GCControllerDirectionPad *dpad) {
+    if (dpad == nil) {
+        return NO;
+    }
+    if (neo_dpadDirectionPressed(dpad.down)) {
+        return YES;
+    }
+    return dpad.yAxis.value < -NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadLeftFromDirectionPad(GCControllerDirectionPad *dpad) {
+    if (dpad == nil) {
+        return NO;
+    }
+    if (neo_dpadDirectionPressed(dpad.left)) {
+        return YES;
+    }
+    return dpad.xAxis.value < -NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_dpadRightFromDirectionPad(GCControllerDirectionPad *dpad) {
+    if (dpad == nil) {
+        return NO;
+    }
+    if (neo_dpadDirectionPressed(dpad.right)) {
+        return YES;
+    }
+    return dpad.xAxis.value > NEO_DPAD_AXIS_THRESHOLD;
+}
+
+static BOOL neo_isTouchpadDpadKey(NSString *key) {
+    if (key == nil) {
+        return NO;
+    }
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        return [key isEqualToString:GCInputDualShockTouchpadOne]
+            || [key isEqualToString:GCInputDualShockTouchpadTwo];
+    }
+    return NO;
+}
+
+static BOOL neo_isDirectionPadElement(GCControllerElement *element, GCControllerDirectionPad *dpad) {
+    if (element == nil || dpad == nil) {
+        return NO;
+    }
+    return element == dpad
+        || element == dpad.up
+        || element == dpad.down
+        || element == dpad.left
+        || element == dpad.right
+        || element == dpad.xAxis
+        || element == dpad.yAxis;
+}
+
+/// Primary menu D-pad on DualSense is often exposed via physicalInputProfile.dpads, not extendedGamepad.dpad.
+static GCControllerDirectionPad *neo_primaryDpadFromProfile(GCPhysicalInputProfile *profile) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (profile == nil) {
+        return nil;
+    }
+    for (NSString *key in profile.dpads) {
+        if (neo_isTouchpadDpadKey(key)) {
+            continue;
+        }
+        GCControllerDirectionPad *pad = profile.dpads[key];
+        if (pad != nil) {
+            return pad;
+        }
+    }
+    return nil;
+}
+
+static GCControllerDirectionPad *neo_primaryDpadFromPhysicalProfile(GCExtendedGamepad *gamepad) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (gamepad == nil) {
+        return nil;
+    }
+    return neo_primaryDpadFromProfile(gamepad.controller.physicalInputProfile);
+}
+
+/// DualSense often exposes menu D-pad as named profile buttons as well as dpads.
+static void neo_orDpadFromProfileButtons(GCPhysicalInputProfile *profile,
+                                          BOOL *up, BOOL *down, BOOL *left, BOOL *right) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (profile == nil || profile.buttons == nil) {
+        return;
+    }
+
+    GCControllerButtonInput *btn = profile.buttons[@"Direction Pad Up"];
+    if (neo_dpadDirectionPressed(btn)) {
+        *up = YES;
+    }
+    btn = profile.buttons[@"Direction Pad Down"];
+    if (neo_dpadDirectionPressed(btn)) {
+        *down = YES;
+    }
+    btn = profile.buttons[@"Direction Pad Left"];
+    if (neo_dpadDirectionPressed(btn)) {
+        *left = YES;
+    }
+    btn = profile.buttons[@"Direction Pad Right"];
+    if (neo_dpadDirectionPressed(btn)) {
+        *right = YES;
+    }
+}
+
+static GCControllerButtonInput *neo_profileButtonNamed(GCPhysicalInputProfile *profile,
+                                                       NSString *gcKey,
+                                                       NSString *legacyName) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (profile == nil || profile.buttons == nil) {
+        return nil;
+    }
+    GCControllerButtonInput *btn = nil;
+    if (gcKey != nil) {
+        btn = profile.buttons[gcKey];
+    }
+    if (btn == nil && legacyName != nil) {
+        btn = profile.buttons[legacyName];
+    }
+    return btn;
+}
+
+static BOOL neo_orButtonPressed(GCControllerButtonInput *extendedButton,
+                                GCPhysicalInputProfile *liveProfile,
+                                GCPhysicalInputProfile *capturedProfile,
+                                NSString *gcKey,
+                                NSString *legacyName) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (extendedButton != nil && extendedButton.pressed) {
+        return YES;
+    }
+
+    GCControllerButtonInput *profileButton = neo_profileButtonNamed(liveProfile, gcKey, legacyName);
+    if (neo_dpadDirectionPressed(profileButton)) {
+        return YES;
+    }
+
+    profileButton = neo_profileButtonNamed(capturedProfile, gcKey, legacyName);
+    return neo_dpadDirectionPressed(profileButton);
+}
+
+static void neo_orDpadFromProfile(GCPhysicalInputProfile *profile,
+                                BOOL *up, BOOL *down, BOOL *left, BOOL *right) API_AVAILABLE(ios(14.0), tvos(14.0)) {
+    if (profile == nil) {
+        return;
+    }
+
+    GCControllerDirectionPad *pad = neo_primaryDpadFromProfile(profile);
+    if (neo_dpadUpFromDirectionPad(pad)) {
+        *up = YES;
+    }
+    if (neo_dpadDownFromDirectionPad(pad)) {
+        *down = YES;
+    }
+    if (neo_dpadLeftFromDirectionPad(pad)) {
+        *left = YES;
+    }
+    if (neo_dpadRightFromDirectionPad(pad)) {
+        *right = YES;
+    }
+
+    neo_orDpadFromProfileButtons(profile, up, down, left, right);
+}
+
+static BOOL neo_isDpadElement(GCControllerElement *element, GCExtendedGamepad *gamepad) {
+    if (element == nil || gamepad == nil) {
+        return NO;
+    }
+    if (neo_isDirectionPadElement(element, gamepad.dpad)) {
+        return YES;
+    }
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        for (NSString *key in gamepad.controller.physicalInputProfile.dpads) {
+            if (neo_isTouchpadDpadKey(key)) {
+                continue;
+            }
+            if (neo_isDirectionPadElement(element, gamepad.controller.physicalInputProfile.dpads[key])) {
+                return YES;
+            }
+        }
+    }
+    return NO;
 }
 
 // UPDATE_BUTTON_FLAG(controller, flag, pressed)
@@ -155,8 +430,11 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     }
 }
 
-// Attach the interaction to the view
+// Attach the interaction to the view (idempotent — safe to call repeatedly)
 - (void)attachGCEventInteractionToView:(UIView *)view {
+    if ([view.interactions containsObject:_gcEventInteraction]) {
+        return;
+    }
     [view addInteraction:_gcEventInteraction];
     NSLog(@"Attached GCEventInteraction to view!");
 }
@@ -170,39 +448,52 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(void) rumble:(unsigned short)controllerNumber lowFreqMotor:(unsigned short)lowFreqMotor highFreqMotor:(unsigned short)highFreqMotor
 {
-    // FIX: Adjust the controller number by subtracting the offset to find the LOCAL controller index.
-    // Host sends command for "Controller 1" (Guest), but locally it is index 0.
-    int localIndex = controllerNumber - _controllerSlotOffset;
-    
-    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
-    if (controller == nil && localIndex == 0 && _oscEnabled) {
-        // TODO: Rumble emulation for OSC
-    }
-    if (controller == nil) {
-        // No connected controller for this player
-        return;
-    }
-    
-    [controller.lowFreqMotor setMotorAmplitude:lowFreqMotor];
-    [controller.highFreqMotor setMotorAmplitude:highFreqMotor];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(neo_hapticsQueue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+
+        // FIX: Adjust the controller number by subtracting the offset to find the LOCAL controller index.
+        // Host sends command for "Controller 1" (Guest), but locally it is index 0.
+        int localIndex = controllerNumber - strongSelf->_controllerSlotOffset;
+
+        Controller* controller = [strongSelf->_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
+        if (controller == nil && localIndex == 0 && strongSelf->_oscEnabled) {
+            // TODO: Rumble emulation for OSC
+        }
+        if (controller == nil) {
+            return;
+        }
+
+        [controller.lowFreqMotor setMotorAmplitude:lowFreqMotor];
+        [controller.highFreqMotor setMotorAmplitude:highFreqMotor];
+    });
 }
 
 -(void) rumbleTriggers:(uint16_t)controllerNumber leftTrigger:(uint16_t)leftTrigger rightTrigger:(uint16_t)rightTrigger
 {
-    // FIX: Subtract offset to find local controller
-    int localIndex = controllerNumber - _controllerSlotOffset;
-    
-    Controller* controller = [_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
-    if (controller == nil && localIndex == 0 && _oscEnabled) {
-        // TODO: Trigger rumble emulation for OSC
-    }
-    if (controller == nil) {
-        // No connected controller for this player
-        return;
-    }
-    
-    [controller.leftTriggerMotor setMotorAmplitude:leftTrigger];
-    [controller.rightTriggerMotor setMotorAmplitude:rightTrigger];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(neo_hapticsQueue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+
+        int localIndex = controllerNumber - strongSelf->_controllerSlotOffset;
+
+        Controller* controller = [strongSelf->_controllers objectForKey:[NSNumber numberWithInteger:localIndex]];
+        if (controller == nil && localIndex == 0 && strongSelf->_oscEnabled) {
+            // TODO: Trigger rumble emulation for OSC
+        }
+        if (controller == nil) {
+            return;
+        }
+
+        [controller.leftTriggerMotor setMotorAmplitude:leftTrigger];
+        [controller.rightTriggerMotor setMotorAmplitude:rightTrigger];
+    });
 }
 
 - (void) setMotionEventState:(uint16_t)controllerNumber motionType:(uint8_t)motionType reportRateHz:(uint16_t)reportRateHz
@@ -451,55 +742,102 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     return baseMask;
 }
 
--(void) updateFinished:(Controller*)controller
+/// Quit combo and other local side effects after state changes (does not send to host).
+-(void) neo_handleControllerStateDidChange:(Controller *)controller
 {
+    if (controller == nil) {
+        return;
+    }
+
     BOOL exitRequested = NO;
-    
-    [_controllerStreamLock lock];
     @synchronized(controller) {
-        // Handle Start+Select+L1+R1 gamepad quit combo
         if (controller.lastButtonFlags == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG)) {
             controller.lastButtonFlags = 0;
             exitRequested = YES;
         }
-        
-        // Only send controller events if we successfully reported controller arrival
-        if ([self reportControllerArrival:controller]) {
-            uint32_t buttonFlags = controller.lastButtonFlags;
-            uint8_t leftTrigger = controller.lastLeftTrigger;
-            uint8_t rightTrigger = controller.lastRightTrigger;
-            int16_t leftStickX = controller.lastLeftStickX;
-            int16_t leftStickY = controller.lastLeftStickY;
-            int16_t rightStickX = controller.lastRightStickX;
-            int16_t rightStickY = controller.lastRightStickY;
-            
-            // If this is merged with another controller, combine the inputs
-            if (controller.mergedWithController) {
-                buttonFlags |= controller.mergedWithController.lastButtonFlags;
-                leftTrigger = MAX(leftTrigger, controller.mergedWithController.lastLeftTrigger);
-                rightTrigger = MAX(rightTrigger, controller.mergedWithController.lastRightTrigger);
-                leftStickX = MAX_MAGNITUDE(leftStickX, controller.mergedWithController.lastLeftStickX);
-                leftStickY = MAX_MAGNITUDE(leftStickY, controller.mergedWithController.lastLeftStickY);
-                rightStickX = MAX_MAGNITUDE(rightStickX, controller.mergedWithController.lastRightStickX);
-                rightStickY = MAX_MAGNITUDE(rightStickY, controller.mergedWithController.lastRightStickY);
-            }
-            
-            // Player 1 is always present for OSC
-            // Apply co-op slot offset to controller number (guest sends as controller 1, not 0)
-            int controllerNumber = (_multiController ? controller.playerIndex : 0) + _controllerSlotOffset;
-            LiSendMultiControllerEvent(controllerNumber, [self getActiveGamepadMask],
-                                       buttonFlags, leftTrigger, rightTrigger,
-                                       leftStickX, leftStickY, rightStickX, rightStickY);
-        }
     }
-    [_controllerStreamLock unlock];
-    
+
     if (exitRequested) {
-        // Invoke the delegate callback on the main thread
         dispatch_async(dispatch_get_main_queue(), ^{
             [self->_delegate streamExitRequested];
         });
     }
+}
+
+/// Sends the latest sampled state to the host. Must run on the send queue so LiSend cannot block sampling.
+-(void) neo_sendLatestControllerState:(Controller *)controller
+{
+    if (controller == nil) {
+        return;
+    }
+
+    [_controllerStreamLock lock];
+    @synchronized(controller) {
+        if (![self reportControllerArrival:controller]) {
+            [_controllerStreamLock unlock];
+            return;
+        }
+
+        uint32_t buttonFlags = controller.lastButtonFlags;
+        uint8_t leftTrigger = controller.lastLeftTrigger;
+        uint8_t rightTrigger = controller.lastRightTrigger;
+        int16_t leftStickX = controller.lastLeftStickX;
+        int16_t leftStickY = controller.lastLeftStickY;
+        int16_t rightStickX = controller.lastRightStickX;
+        int16_t rightStickY = controller.lastRightStickY;
+
+        if (controller.mergedWithController) {
+            buttonFlags |= controller.mergedWithController.lastButtonFlags;
+            leftTrigger = MAX(leftTrigger, controller.mergedWithController.lastLeftTrigger);
+            rightTrigger = MAX(rightTrigger, controller.mergedWithController.lastRightTrigger);
+            leftStickX = MAX_MAGNITUDE(leftStickX, controller.mergedWithController.lastLeftStickX);
+            leftStickY = MAX_MAGNITUDE(leftStickY, controller.mergedWithController.lastLeftStickY);
+            rightStickX = MAX_MAGNITUDE(rightStickX, controller.mergedWithController.lastRightStickX);
+            rightStickY = MAX_MAGNITUDE(rightStickY, controller.mergedWithController.lastRightStickY);
+        }
+
+        int controllerNumber = (_multiController ? controller.playerIndex : 0) + _controllerSlotOffset;
+
+        if (_controllerSlotOffset > 0 && !_coopInputLogged) {
+            _coopInputLogged = YES;
+            Log(LOG_I, @"Co-op input: slotOffset=%d playerIndex=%d controllerNumber=%d mask=0x%x",
+                _controllerSlotOffset, controller.playerIndex, controllerNumber, [self getActiveGamepadMask]);
+        }
+
+        LiSendMultiControllerEvent(controllerNumber, [self getActiveGamepadMask],
+                                   buttonFlags, leftTrigger, rightTrigger,
+                                   leftStickX, leftStickY, rightStickX, rightStickY);
+    }
+    [_controllerStreamLock unlock];
+}
+
+/// Transmit current in-memory state on the send queue (does not re-read hardware).
+-(void) neo_sendLatestStateForController:(Controller *)controller
+{
+    if (controller == nil || !_inputSyncEnabled) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(neo_controllerSendQueue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_inputSyncEnabled) {
+            return;
+        }
+        [strongSelf neo_sendLatestControllerState:controller];
+    });
+}
+
+/// Flush one controller immediately (OSC, release-held). Caller must already have updated in-memory state.
+-(void) neo_sendControllerStateNow:(Controller *)controller
+{
+    [self neo_sendLatestStateForController:controller];
+}
+
+-(void) updateFinished:(Controller*)controller
+{
+    [self neo_handleControllerStateDidChange:controller];
+    [self neo_sendControllerStateNow:controller];
 }
 
 +(BOOL) hasKeyboardOrMouse {
@@ -528,6 +866,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             }
             
             controller.extendedGamepad.valueChangedHandler = NULL;
+            controller.physicalInputProfile.valueDidChangeHandler = nil;
         } else if (controller.microGamepad != NULL) {
             // Re-enable system gestures on the gamepad buttons now
             if (@available(iOS 14.0, tvOS 14.0, *)) {
@@ -549,12 +888,57 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     controller.rightTriggerMotor = [HapticContext createContextForRightTrigger:controller.gamepad];
 }
 
+-(void) initializeControllerHapticsAsync:(Controller*) controller
+{
+    GCController* gamepad = controller.gamepad;
+    if (gamepad == nil) {
+        return;
+    }
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        HapticContext* lowFreq = [HapticContext createContextForLowFreqMotor:gamepad];
+        HapticContext* highFreq = [HapticContext createContextForHighFreqMotor:gamepad];
+        HapticContext* leftTrigger = [HapticContext createContextForLeftTrigger:gamepad];
+        HapticContext* rightTrigger = [HapticContext createContextForRightTrigger:gamepad];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (controller.gamepad == gamepad) {
+                controller.lowFreqMotor = lowFreq;
+                controller.highFreqMotor = highFreq;
+                controller.leftTriggerMotor = leftTrigger;
+                controller.rightTriggerMotor = rightTrigger;
+                Log(LOG_I, @"[NeoMoonlight] Haptic engines assigned to controller %d", controller.playerIndex);
+            } else {
+                [lowFreq cleanup];
+                [highFreq cleanup];
+                [leftTrigger cleanup];
+                [rightTrigger cleanup];
+            }
+        });
+    });
+}
+
 -(void) cleanupControllerHaptics:(Controller*) controller
 {
-    [controller.lowFreqMotor cleanup];
-    [controller.highFreqMotor cleanup];
-    [controller.leftTriggerMotor cleanup];
-    [controller.rightTriggerMotor cleanup];
+    if (controller == nil) {
+        return;
+    }
+
+    dispatch_sync(neo_hapticsQueue(), ^{
+        HapticContext* lowFreq = controller.lowFreqMotor;
+        HapticContext* highFreq = controller.highFreqMotor;
+        HapticContext* leftTrigger = controller.leftTriggerMotor;
+        HapticContext* rightTrigger = controller.rightTriggerMotor;
+        controller.lowFreqMotor = nil;
+        controller.highFreqMotor = nil;
+        controller.leftTriggerMotor = nil;
+        controller.rightTriggerMotor = nil;
+
+        [lowFreq cleanup];
+        [highFreq cleanup];
+        [leftTrigger cleanup];
+        [rightTrigger cleanup];
+    });
 }
 
 -(void) cleanupControllerMotion:(Controller*) controller
@@ -819,6 +1203,13 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                 PLAY_FLAG | BACK_FLAG | UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG |
                 LB_FLAG | RB_FLAG | LS_CLK_FLAG | RS_CLK_FLAG | A_FLAG | B_FLAG | X_FLAG | Y_FLAG;
         }
+
+        if (_reportControllerAsXbox && type == LI_CTYPE_PS) {
+            type = LI_CTYPE_XBOX;
+            supportedButtonFlags &= ~TOUCHPAD_FLAG;
+            capabilities &= ~(LI_CCAP_TOUCHPAD | LI_CCAP_TRIGGER_RUMBLE | LI_CCAP_ACCEL | LI_CCAP_GYRO | LI_CCAP_RGB_LED);
+            Log(LOG_I, @"Reporting PlayStation controller as Xbox to host (XInput compatibility mode)");
+        }
     }
 
     // Report the new controller to the host
@@ -883,6 +1274,574 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     }
 }
 
+/// Sync DualSense extended profile from physical hardware (unsticks stale extendedGamepad.dpad after app switch).
+-(void) neo_prewarmDualSenseGamepadIfNeeded:(GCExtendedGamepad *)gamepad API_AVAILABLE(ios(14.5), tvos(14.5)) {
+    if (gamepad == nil || ![gamepad isKindOfClass:[GCDualSenseGamepad class]]) {
+        return;
+    }
+
+    GCDualSenseGamepad *dualSense = (GCDualSenseGamepad *)gamepad;
+    GCPhysicalInputProfile *profile = gamepad.controller.physicalInputProfile;
+    if (profile == nil) {
+        return;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    if ([dualSense respondsToSelector:@selector(setStateFromPhysicalInput:)]) {
+        [dualSense setStateFromPhysicalInput:profile];
+    }
+#pragma clang diagnostic pop
+}
+
+/// DualSense D-pad: OR extended, live profile, profile buttons, and capture snapshot.
+-(void) neo_applyDpadToController:(GCExtendedGamepad *)gamepad limeController:(Controller *)limeController
+{
+    BOOL up = neo_dpadUpPressed(gamepad);
+    BOOL down = neo_dpadDownPressed(gamepad);
+    BOOL left = neo_dpadLeftPressed(gamepad);
+    BOOL right = neo_dpadRightPressed(gamepad);
+
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        neo_orDpadFromProfile(gamepad.controller.physicalInputProfile, &up, &down, &left, &right);
+
+        GCPhysicalInputProfile *captured = [gamepad.controller.physicalInputProfile capture];
+        neo_orDpadFromProfile(captured, &up, &down, &left, &right);
+    }
+
+    UPDATE_BUTTON_FLAG(limeController, UP_FLAG, up);
+    UPDATE_BUTTON_FLAG(limeController, DOWN_FLAG, down);
+    UPDATE_BUTTON_FLAG(limeController, LEFT_FLAG, left);
+    UPDATE_BUTTON_FLAG(limeController, RIGHT_FLAG, right);
+}
+
+/// Sticks and triggers only — no physicalInputProfile capture (safe at 60 Hz on send queue).
+-(void) neo_applyAnalogAxesFromGamepad:(GCExtendedGamepad *)gamepad toController:(Controller *)limeController
+{
+    short leftStickX = gamepad.leftThumbstick.xAxis.value * 0x7FFE;
+    short leftStickY = gamepad.leftThumbstick.yAxis.value * 0x7FFE;
+    short rightStickX = gamepad.rightThumbstick.xAxis.value * 0x7FFE;
+    short rightStickY = gamepad.rightThumbstick.yAxis.value * 0x7FFE;
+    unsigned char leftTrigger = gamepad.leftTrigger.value * 0xFF;
+    unsigned char rightTrigger = gamepad.rightTrigger.value * 0xFF;
+
+    [self updateLeftStick:limeController x:leftStickX y:leftStickY];
+    [self updateRightStick:limeController x:rightStickX y:rightStickY];
+    [self updateTriggers:limeController left:leftTrigger right:rightTrigger];
+}
+
+/// Buttons, D-pad, and touchpad — uses physicalInputProfile OR path for DualSense D-pad.
+-(void) neo_applyDigitalInputFromGamepad:(GCExtendedGamepad *)gamepad toController:(Controller *)limeController
+{
+    GCPhysicalInputProfile *liveProfile = nil;
+    GCPhysicalInputProfile *capturedProfile = nil;
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        liveProfile = gamepad.controller.physicalInputProfile;
+        capturedProfile = [liveProfile capture];
+    }
+
+    if (self->_swapABXYButtons) {
+        BOOL b = neo_orButtonPressed(gamepad.buttonA, liveProfile, capturedProfile, GCInputButtonA, @"Button A");
+        BOOL a = neo_orButtonPressed(gamepad.buttonB, liveProfile, capturedProfile, GCInputButtonB, @"Button B");
+        BOOL y = neo_orButtonPressed(gamepad.buttonX, liveProfile, capturedProfile, GCInputButtonX, @"Button X");
+        BOOL x = neo_orButtonPressed(gamepad.buttonY, liveProfile, capturedProfile, GCInputButtonY, @"Button Y");
+        UPDATE_BUTTON_FLAG(limeController, B_FLAG, b);
+        UPDATE_BUTTON_FLAG(limeController, A_FLAG, a);
+        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, y);
+        UPDATE_BUTTON_FLAG(limeController, X_FLAG, x);
+    }
+    else {
+        BOOL a = neo_orButtonPressed(gamepad.buttonA, liveProfile, capturedProfile, GCInputButtonA, @"Button A");
+        BOOL b = neo_orButtonPressed(gamepad.buttonB, liveProfile, capturedProfile, GCInputButtonB, @"Button B");
+        BOOL x = neo_orButtonPressed(gamepad.buttonX, liveProfile, capturedProfile, GCInputButtonX, @"Button X");
+        BOOL y = neo_orButtonPressed(gamepad.buttonY, liveProfile, capturedProfile, GCInputButtonY, @"Button Y");
+        UPDATE_BUTTON_FLAG(limeController, A_FLAG, a);
+        UPDATE_BUTTON_FLAG(limeController, B_FLAG, b);
+        UPDATE_BUTTON_FLAG(limeController, X_FLAG, x);
+        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, y);
+    }
+
+    [self neo_applyDpadToController:gamepad limeController:limeController];
+
+    BOOL lb = neo_orButtonPressed(gamepad.leftShoulder, liveProfile, capturedProfile, GCInputLeftShoulder, @"Left Shoulder");
+    BOOL rb = neo_orButtonPressed(gamepad.rightShoulder, liveProfile, capturedProfile, GCInputRightShoulder, @"Right Shoulder");
+    UPDATE_BUTTON_FLAG(limeController, LB_FLAG, lb);
+    UPDATE_BUTTON_FLAG(limeController, RB_FLAG, rb);
+
+    if (@available(iOS 12.1, tvOS 12.1, *)) {
+        if (gamepad.leftThumbstickButton != nil) {
+            BOOL ls = neo_orButtonPressed(gamepad.leftThumbstickButton, liveProfile, capturedProfile, GCInputLeftThumbstickButton, nil);
+            UPDATE_BUTTON_FLAG(limeController, LS_CLK_FLAG, ls);
+        }
+        if (gamepad.rightThumbstickButton != nil) {
+            BOOL rs = neo_orButtonPressed(gamepad.rightThumbstickButton, liveProfile, capturedProfile, GCInputRightThumbstickButton, nil);
+            UPDATE_BUTTON_FLAG(limeController, RS_CLK_FLAG, rs);
+        }
+    }
+
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+        BOOL back = neo_orButtonPressed(gamepad.buttonOptions, liveProfile, capturedProfile, GCInputButtonOptions, @"Button Options");
+        BOOL play = neo_orButtonPressed(gamepad.buttonMenu, liveProfile, capturedProfile, GCInputButtonMenu, @"Button Menu");
+        UPDATE_BUTTON_FLAG(limeController, BACK_FLAG, back);
+        UPDATE_BUTTON_FLAG(limeController, PLAY_FLAG, play);
+    }
+
+    if (@available(iOS 14.0, tvOS 14.0, *)) {
+        BOOL special = neo_orButtonPressed(gamepad.buttonHome, liveProfile, capturedProfile, GCInputButtonHome, @"Button Home");
+        UPDATE_BUTTON_FLAG(limeController, SPECIAL_FLAG, special);
+
+        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne]) {
+            UPDATE_BUTTON_FLAG(limeController, PADDLE1_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne].pressed);
+        }
+        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo]) {
+            UPDATE_BUTTON_FLAG(limeController, PADDLE2_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo].pressed);
+        }
+        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree]) {
+            UPDATE_BUTTON_FLAG(limeController, PADDLE3_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree].pressed);
+        }
+        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour]) {
+            UPDATE_BUTTON_FLAG(limeController, PADDLE4_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour].pressed);
+        }
+        if (@available(iOS 15.0, tvOS 15.0, *)) {
+            if (gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare]) {
+                UPDATE_BUTTON_FLAG(limeController, MISC_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare].pressed);
+            }
+        }
+
+        if (gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton]) {
+            UPDATE_BUTTON_FLAG(limeController, TOUCHPAD_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton].pressed);
+        }
+        if (gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadOne]) {
+            [self handleControllerTouchpad:limeController
+                                     touch:gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadOne]
+                                     index:0];
+        }
+        if (gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadTwo]) {
+            [self handleControllerTouchpad:limeController
+                                     touch:gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadTwo]
+                                     index:1];
+        }
+    }
+}
+
+/// Applies extended gamepad element state to a Moonlight controller (no network send).
+-(void) neo_applyExtendedGamepad:(GCExtendedGamepad *)gamepad toController:(Controller *)limeController
+{
+    [self neo_applyDigitalInputFromGamepad:gamepad toController:limeController];
+    [self neo_applyAnalogAxesFromGamepad:gamepad toController:limeController];
+}
+
+-(BOOL) neo_syncDigitalFromGamepad:(Controller *)limeController gamepad:(GCExtendedGamepad *)gamepad
+{
+    int priorFlags;
+    @synchronized(limeController) {
+        priorFlags = limeController.lastButtonFlags;
+    }
+
+    [self neo_applyDigitalInputFromGamepad:gamepad toController:limeController];
+
+    @synchronized(limeController) {
+        return limeController.lastButtonFlags != priorFlags;
+    }
+}
+
+-(BOOL) neo_isInDualSensePrewarmWindow
+{
+    if (_foregroundRestoreStartTime <= 0) {
+        return NO;
+    }
+    NSTimeInterval elapsed = CFAbsoluteTimeGetCurrent() - _foregroundRestoreStartTime;
+    return elapsed < NEO_DPAD_AGGRESSIVE_PREWARM_DURATION;
+}
+
+-(void) neo_maybeRefreshGamepadHandlersForHealth
+{
+    // Disabled during steady streaming — foreground restore handles handler recovery.
+    (void)NEO_GAMEPAD_HANDLER_HEALTH_INTERVAL;
+}
+
+/// Single digital sample path (buttons/D-pad) on the input queue.
+-(BOOL) neo_sampleDigitalFromHardware:(Controller *)limeController gamepad:(GCExtendedGamepad *)gamepad
+{
+    if (limeController == nil || gamepad == nil || !_inputSyncEnabled) {
+        return NO;
+    }
+
+    if ([self neo_isInDualSensePrewarmWindow]) {
+        if (@available(iOS 14.5, tvOS 14.5, *)) {
+            [self neo_prewarmDualSenseGamepadIfNeeded:gamepad];
+        }
+    }
+
+    if ([self neo_syncDigitalFromGamepad:limeController gamepad:gamepad]) {
+        [self neo_handleControllerStateDidChange:limeController];
+        return YES;
+    }
+    return NO;
+}
+
+-(void) neo_flushLatestStateForAllControllers
+{
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(neo_controllerSendQueue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_inputSyncEnabled) {
+            return;
+        }
+        for (Controller *limeController in [strongSelf->_controllers allValues]) {
+            [strongSelf neo_sendLatestControllerState:limeController];
+        }
+    });
+}
+
+-(void) inputSyncTick
+{
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    [self neo_maybeRefreshGamepadHandlersForHealth];
+
+    for (Controller *limeController in [_controllers allValues]) {
+        GCExtendedGamepad *gamepad = limeController.gamepad.extendedGamepad;
+        if (gamepad == nil) {
+            continue;
+        }
+        [self neo_sampleDigitalFromHardware:limeController gamepad:gamepad];
+    }
+}
+
+-(void) controllerSendTick
+{
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    for (Controller *limeController in [_controllers allValues]) {
+        GCExtendedGamepad *gamepad = limeController.gamepad.extendedGamepad;
+        if (gamepad != nil) {
+            [self neo_applyAnalogAxesFromGamepad:gamepad toController:limeController];
+        }
+        [self neo_sendLatestControllerState:limeController];
+    }
+}
+
+-(void) neo_refreshControllerStateFromHardware:(Controller *)limeController
+{
+    GCExtendedGamepad *gamepad = limeController.gamepad.extendedGamepad;
+    if (gamepad == nil) {
+        return;
+    }
+    (void)[self neo_sampleDigitalFromHardware:limeController gamepad:gamepad];
+}
+
+-(void) startInputSync
+{
+    [self stopInputSync];
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    dispatch_queue_t queue = neo_controllerInputQueue();
+    _inputSyncSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    uint64_t interval = (uint64_t)(NSEC_PER_SEC / 30.0);
+    dispatch_source_set_timer(_inputSyncSource,
+                              dispatch_time(DISPATCH_TIME_NOW, interval),
+                              interval,
+                              (uint64_t)(NSEC_PER_SEC / 300.0));
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(_inputSyncSource, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf inputSyncTick];
+    });
+    dispatch_resume(_inputSyncSource);
+}
+
+-(void) startSendLoop
+{
+    [self stopSendLoop];
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    dispatch_queue_t queue = neo_controllerSendQueue();
+    _sendSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    uint64_t interval = (uint64_t)(NSEC_PER_SEC / NEO_CONTROLLER_SEND_HZ);
+    dispatch_source_set_timer(_sendSource,
+                              dispatch_time(DISPATCH_TIME_NOW, interval),
+                              interval,
+                              (uint64_t)(NSEC_PER_SEC / (NEO_CONTROLLER_SEND_HZ * 10.0)));
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(_sendSource, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf controllerSendTick];
+    });
+    dispatch_resume(_sendSource);
+}
+
+-(void) stopSendLoop
+{
+    if (_sendSource) {
+        dispatch_source_cancel(_sendSource);
+        _sendSource = nil;
+    }
+}
+
+-(void) stopInputSync
+{
+    if (_inputSyncSource) {
+        dispatch_source_cancel(_inputSyncSource);
+        _inputSyncSource = nil;
+    }
+    [self stopSendLoop];
+}
+
+-(void) setInputSyncEnabled:(BOOL)enabled
+{
+    if (enabled) {
+        if (_inputSyncEnabled) {
+            return;  // Already enabled — avoid redundant handler tear-down
+        }
+        _inputSyncEnabled = YES;
+        _lastGamepadHandlerHealthCheck = 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self reregisterConnectedGamepadCallbacksIfNeeded];
+        });
+        [self refreshControllerStates];
+        [self startInputSync];
+        [self startSendLoop];
+        return;
+    }
+    if (!_inputSyncEnabled) {
+        return;
+    }
+    _inputSyncEnabled = NO;
+    [self stopInputSync];
+    [self releaseHeldInputsToHost];
+}
+
+-(Controller *)neo_limeControllerForGamepad:(GCController *)gamepad
+{
+    if (gamepad == nil) {
+        return nil;
+    }
+
+    for (Controller *limeController in [_controllers allValues]) {
+        if (limeController.gamepad == gamepad) {
+            return limeController;
+        }
+    }
+
+    return [_controllers objectForKey:[NSNumber numberWithInteger:gamepad.playerIndex]];
+}
+
+/// Rebinds Moonlight controllers to current GCController instances (playerIndex / object can shift after app switch).
+-(void) resyncConnectedGamepadReferences
+{
+    for (GCController *gamepad in [GCController controllers]) {
+        if (![ControllerSupport isSupportedGamepad:gamepad] || gamepad.extendedGamepad == nil) {
+            continue;
+        }
+
+        Controller *limeController = [self neo_limeControllerForGamepad:gamepad];
+        if (limeController == nil) {
+            limeController = [self assignController:gamepad];
+            if (limeController != nil) {
+                [self reportControllerArrival:limeController];
+            }
+            continue;
+        }
+
+        limeController.gamepad = gamepad;
+    }
+}
+
+/// Sample from hardware when handlers may be stale (post-foreground / profile backup path).
+-(void) neo_pollControllerFromHardware:(Controller *)limeController
+{
+    GCExtendedGamepad *gamepad = limeController.gamepad.extendedGamepad;
+    if (gamepad == nil) {
+        return;
+    }
+    [self neo_sampleDigitalFromHardware:limeController gamepad:gamepad];
+}
+
+/// Must run on the main thread — clears then re-installs handlers iOS may clear when leaving the stream.
+-(void) reregisterConnectedGamepadCallbacks
+{
+    for (GCController *controller in [GCController controllers]) {
+        if ([ControllerSupport isSupportedGamepad:controller] && controller.extendedGamepad != nil) {
+            [self unregisterControllerCallbacks:controller];
+            if (@available(iOS 14.5, tvOS 14.5, *)) {
+                if ([self neo_isInDualSensePrewarmWindow]) {
+                    [self neo_prewarmDualSenseGamepadIfNeeded:controller.extendedGamepad];
+                }
+            }
+            [self registerControllerCallbacks:controller];
+        }
+    }
+}
+
+static const NSTimeInterval NEO_REREGISTER_DEBOUNCE_INTERVAL = 0.25;
+
+-(void) reregisterConnectedGamepadCallbacksIfNeeded
+{
+    NSTimeInterval now = CACurrentMediaTime();
+    if (_lastReregisterTime > 0 && (now - _lastReregisterTime) < NEO_REREGISTER_DEBOUNCE_INTERVAL) {
+        return;
+    }
+    _lastReregisterTime = now;
+    [self reregisterConnectedGamepadCallbacks];
+}
+
+/// After app switch, iOS often clears physicalInputProfile handlers after didBecomeActive returns.
+-(void) restoreGamepadHandlersAfterForeground
+{
+    _foregroundRestoreStartTime = CFAbsoluteTimeGetCurrent();
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf resyncConnectedGamepadReferences];
+        [strongSelf reregisterConnectedGamepadCallbacksIfNeeded];
+    });
+    [self refreshControllerStates];
+}
+
+-(void) handleApplicationDidBecomeActive
+{
+    [self restoreGamepadHandlersAfterForeground];
+}
+
+-(void) releaseHeldInputsToHost
+{
+    for (Controller *limeController in [_controllers allValues]) {
+        @synchronized(limeController) {
+            limeController.lastButtonFlags = 0;
+            limeController.lastLeftTrigger = 0;
+            limeController.lastRightTrigger = 0;
+            limeController.lastLeftStickX = 0;
+            limeController.lastLeftStickY = 0;
+            limeController.lastRightStickX = 0;
+            limeController.lastRightStickY = 0;
+        }
+        [self neo_handleControllerStateDidChange:limeController];
+    }
+    [self neo_flushLatestStateForAllControllers];
+}
+
+-(void) flushNeutralState
+{
+    for (Controller *limeController in [_controllers allValues]) {
+        @synchronized(limeController) {
+            limeController.lastLeftStickX = 0;
+            limeController.lastLeftStickY = 0;
+            limeController.lastRightStickX = 0;
+            limeController.lastRightStickY = 0;
+        }
+        [self neo_handleControllerStateDidChange:limeController];
+    }
+    [self neo_flushLatestStateForAllControllers];
+}
+
+-(void) refreshControllerStates
+{
+    if (!_inputSyncEnabled) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(neo_controllerInputQueue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_inputSyncEnabled) {
+            return;
+        }
+        for (Controller *limeController in [strongSelf->_controllers allValues]) {
+            GCExtendedGamepad *gamepad = limeController.gamepad.extendedGamepad;
+            if (gamepad == nil) {
+                continue;
+            }
+            [strongSelf neo_sampleDigitalFromHardware:limeController gamepad:gamepad];
+        }
+        [strongSelf neo_flushLatestStateForAllControllers];
+    });
+}
+
+static BOOL neo_isStickOrTriggerElement(GCControllerElement *element, GCExtendedGamepad *gamepad) {
+    if (element == nil || gamepad == nil) {
+        return NO;
+    }
+    if (element == gamepad.leftThumbstick || element == gamepad.rightThumbstick) {
+        return YES;
+    }
+    if (element == gamepad.leftThumbstick.xAxis || element == gamepad.leftThumbstick.yAxis) {
+        return YES;
+    }
+    if (element == gamepad.rightThumbstick.xAxis || element == gamepad.rightThumbstick.yAxis) {
+        return YES;
+    }
+    if (element == gamepad.leftTrigger || element == gamepad.rightTrigger) {
+        return YES;
+    }
+    return NO;
+}
+
+/// Backup handler: physicalInputProfile fires for buttons and D-pad (not sticks/triggers).
+/// This catches button/D-pad input when extendedGamepad.valueChangedHandler is broken after app switch.
+-(void) neo_registerProfileHandlerForController:(GCController *)controller
+{
+    GCExtendedGamepad *gamepad = controller.extendedGamepad;
+    if (gamepad == nil) {
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    __weak GCController *weakGamepad = controller;
+
+    controller.physicalInputProfile.valueDidChangeHandler = ^(GCPhysicalInputProfile *profile, GCControllerElement *element) {
+        __strong GCController *gcController = weakGamepad;
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (gcController == nil || strongSelf == nil || !strongSelf->_inputSyncEnabled) {
+            return;
+        }
+
+        GCExtendedGamepad *liveGamepad = gcController.extendedGamepad;
+        if (liveGamepad == nil) {
+            return;
+        }
+
+        if (neo_isStickOrTriggerElement(element, liveGamepad)) {
+            return;
+        }
+
+        Controller *limeController = [strongSelf neo_limeControllerForGamepad:gcController];
+        if (limeController == nil) {
+            return;
+        }
+
+        dispatch_async(neo_controllerInputQueue(), ^{
+            __strong typeof(weakSelf) strongSelf2 = weakSelf;
+            if (!strongSelf2 || !strongSelf2->_inputSyncEnabled) {
+                return;
+            }
+            [strongSelf2 neo_pollControllerFromHardware:limeController];
+        });
+    };
+}
+
 -(void) registerControllerCallbacks:(GCController*) controller
 {
     if (controller != NULL) {
@@ -927,109 +1886,29 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                 }
             }
             if (controller.extendedGamepad != NULL) {
+                __weak typeof(self) weakSelf = self;
+                __weak GCController *weakGamepad = controller;
                 controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
-                    Controller* limeController = [self->_controllers objectForKey:[NSNumber numberWithInteger:gamepad.controller.playerIndex]];
-                    short leftStickX, leftStickY;
-                    short rightStickX, rightStickY;
-                    unsigned char leftTrigger, rightTrigger;
-                    
-                    if (self->_swapABXYButtons) {
-                        UPDATE_BUTTON_FLAG(limeController, B_FLAG, gamepad.buttonA.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, A_FLAG, gamepad.buttonB.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, gamepad.buttonX.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, X_FLAG, gamepad.buttonY.pressed);
+                    __strong typeof(weakSelf) strongSelf = weakSelf;
+                    __strong GCController *gcController = weakGamepad;
+                    if (!strongSelf || !strongSelf->_inputSyncEnabled || gcController == nil) {
+                        return;
                     }
-                    else {
-                        UPDATE_BUTTON_FLAG(limeController, A_FLAG, gamepad.buttonA.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, B_FLAG, gamepad.buttonB.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, X_FLAG, gamepad.buttonX.pressed);
-                        UPDATE_BUTTON_FLAG(limeController, Y_FLAG, gamepad.buttonY.pressed);
-                    }
-                    
-                    UPDATE_BUTTON_FLAG(limeController, UP_FLAG, gamepad.dpad.up.pressed);
-                    UPDATE_BUTTON_FLAG(limeController, DOWN_FLAG, gamepad.dpad.down.pressed);
-                    UPDATE_BUTTON_FLAG(limeController, LEFT_FLAG, gamepad.dpad.left.pressed);
-                    UPDATE_BUTTON_FLAG(limeController, RIGHT_FLAG, gamepad.dpad.right.pressed);
-                    
-                    UPDATE_BUTTON_FLAG(limeController, LB_FLAG, gamepad.leftShoulder.pressed);
-                    UPDATE_BUTTON_FLAG(limeController, RB_FLAG, gamepad.rightShoulder.pressed);
-                    
-                    // Yay, iOS 12.1 now supports analog stick buttons
-                    if (@available(iOS 12.1, tvOS 12.1, *)) {
-                        if (gamepad.leftThumbstickButton != nil) {
-                            UPDATE_BUTTON_FLAG(limeController, LS_CLK_FLAG, gamepad.leftThumbstickButton.pressed);
+
+                    dispatch_async(neo_controllerInputQueue(), ^{
+                        Controller *limeController = [strongSelf neo_limeControllerForGamepad:gcController];
+                        GCExtendedGamepad *liveGamepad = gcController.extendedGamepad;
+                        if (limeController == nil || liveGamepad == nil) {
+                            return;
                         }
-                        if (gamepad.rightThumbstickButton != nil) {
-                            UPDATE_BUTTON_FLAG(limeController, RS_CLK_FLAG, gamepad.rightThumbstickButton.pressed);
+                        if (neo_isStickOrTriggerElement(element, liveGamepad)) {
+                            [strongSelf neo_applyAnalogAxesFromGamepad:liveGamepad toController:limeController];
+                        } else {
+                            [strongSelf neo_sampleDigitalFromHardware:limeController gamepad:liveGamepad];
                         }
-                    }
-                    
-                    if (@available(iOS 13.0, tvOS 13.0, *)) {
-                        // Options button is optional (only present on Xbox One S and PS4 gamepads)
-                        if (gamepad.buttonOptions != nil) {
-                            UPDATE_BUTTON_FLAG(limeController, BACK_FLAG, gamepad.buttonOptions.pressed);
-                            
-                            // For older MFi gamepads, the menu button will already be handled by
-                            // the controllerPausedHandler.
-                            UPDATE_BUTTON_FLAG(limeController, PLAY_FLAG, gamepad.buttonMenu.pressed);
-                        }
-                    }
-                    
-                    if (@available(iOS 14.0, tvOS 14.0, *)) {
-                        // Home/Guide button is optional (only present on Xbox One S and PS4 gamepads)
-                        if (gamepad.buttonHome != nil) {
-                            UPDATE_BUTTON_FLAG(limeController, SPECIAL_FLAG, gamepad.buttonHome.pressed);
-                        }
-                        
-                        // Xbox One/Series controllers
-                        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne]) {
-                            UPDATE_BUTTON_FLAG(limeController, PADDLE1_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleOne].pressed);
-                        }
-                        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo]) {
-                            UPDATE_BUTTON_FLAG(limeController, PADDLE2_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleTwo].pressed);
-                        }
-                        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree]) {
-                            UPDATE_BUTTON_FLAG(limeController, PADDLE3_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleThree].pressed);
-                        }
-                        if (gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour]) {
-                            UPDATE_BUTTON_FLAG(limeController, PADDLE4_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputXboxPaddleFour].pressed);
-                        }
-                        if (@available(iOS 15.0, tvOS 15.0, *)) {
-                            if (gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare]) {
-                                UPDATE_BUTTON_FLAG(limeController, MISC_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputButtonShare].pressed);
-                            }
-                        }
-                        
-                        // DualShock/DualSense controllers
-                        if (gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton]) {
-                            UPDATE_BUTTON_FLAG(limeController, TOUCHPAD_FLAG, gamepad.controller.physicalInputProfile.buttons[GCInputDualShockTouchpadButton].pressed);
-                        }
-                        if (gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadOne]) {
-                            [self handleControllerTouchpad:limeController
-                                                     touch:gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadOne]
-                                                     index:0];
-                        }
-                        if (gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadTwo]) {
-                            [self handleControllerTouchpad:limeController
-                                                     touch:gamepad.controller.physicalInputProfile.dpads[GCInputDualShockTouchpadTwo]
-                                                     index:1];
-                        }
-                    }
-                    
-                    leftStickX = gamepad.leftThumbstick.xAxis.value * 0x7FFE;
-                    leftStickY = gamepad.leftThumbstick.yAxis.value * 0x7FFE;
-                    
-                    rightStickX = gamepad.rightThumbstick.xAxis.value * 0x7FFE;
-                    rightStickY = gamepad.rightThumbstick.yAxis.value * 0x7FFE;
-                    
-                    leftTrigger = gamepad.leftTrigger.value * 0xFF;
-                    rightTrigger = gamepad.rightTrigger.value * 0xFF;
-                    
-                    [self updateLeftStick:limeController x:leftStickX y:leftStickY];
-                    [self updateRightStick:limeController x:rightStickX y:rightStickY];
-                    [self updateTriggers:limeController left:leftTrigger right:rightTrigger];
-                    [self updateFinished:limeController];
+                    });
                 };
+                [self neo_registerProfileHandlerForController:controller];
             } else {
                 Log(LOG_W, @"Found Micro pad with following elements: ", controller.physicalInputProfile.elements.allKeys);
                 controller.microGamepad.valueChangedHandler = ^(GCMicroGamepad *gamepad, GCControllerElement *element) {
@@ -1055,10 +1934,10 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                         UPDATE_BUTTON_FLAG(limeController, Y_FLAG, gamepad.buttons[@"Button Y"].pressed);
                     }
                     
-                    UPDATE_BUTTON_FLAG(limeController, UP_FLAG, gamepad.buttons[@"Direction Pad Up"].pressed);
-                    UPDATE_BUTTON_FLAG(limeController, DOWN_FLAG, gamepad.buttons[@"Direction Pad Down"].pressed);
-                    UPDATE_BUTTON_FLAG(limeController, LEFT_FLAG, gamepad.buttons[@"Direction Pad Left"].pressed);
-                    UPDATE_BUTTON_FLAG(limeController, RIGHT_FLAG, gamepad.buttons[@"Direction Pad Right"].pressed);
+                    UPDATE_BUTTON_FLAG(limeController, UP_FLAG, neo_dpadDirectionPressed(gamepad.buttons[@"Direction Pad Up"]));
+                    UPDATE_BUTTON_FLAG(limeController, DOWN_FLAG, neo_dpadDirectionPressed(gamepad.buttons[@"Direction Pad Down"]));
+                    UPDATE_BUTTON_FLAG(limeController, LEFT_FLAG, neo_dpadDirectionPressed(gamepad.buttons[@"Direction Pad Left"]));
+                    UPDATE_BUTTON_FLAG(limeController, RIGHT_FLAG, neo_dpadDirectionPressed(gamepad.buttons[@"Direction Pad Right"]));
                     
                     UPDATE_BUTTON_FLAG(limeController, LB_FLAG, gamepad.buttons[@"Left Shoulder"].pressed);
                     UPDATE_BUTTON_FLAG(limeController, RB_FLAG, gamepad.buttons[@"Right Shoulder"].pressed);
@@ -1151,18 +2030,26 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 }
 
 -(void) registerMouseCallbacks:(GCMouse*) mouse API_AVAILABLE(ios(14.0)) {
+    __weak typeof(self) weakSelf = self;
+
     mouse.mouseInput.mouseMovedHandler = ^(GCMouseInput * _Nonnull mouse, float deltaX, float deltaY) {
-        self->accumulatedDeltaX += deltaX / MOUSE_SPEED_DIVISOR;
-        self->accumulatedDeltaY += -deltaY / MOUSE_SPEED_DIVISOR;
-        
-        short truncatedDeltaX = (short)self->accumulatedDeltaX;
-        short truncatedDeltaY = (short)self->accumulatedDeltaY;
-        
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        if (fabs(deltaX) < 0.0001f && fabs(deltaY) < 0.0001f) {
+            return;
+        }
+
+        strongSelf->accumulatedDeltaX += deltaX / MOUSE_SPEED_DIVISOR;
+        strongSelf->accumulatedDeltaY += -deltaY / MOUSE_SPEED_DIVISOR;
+
+        short truncatedDeltaX = (short)strongSelf->accumulatedDeltaX;
+        short truncatedDeltaY = (short)strongSelf->accumulatedDeltaY;
+
         if (truncatedDeltaX != 0 || truncatedDeltaY != 0) {
             LiSendMouseMoveEvent(truncatedDeltaX, truncatedDeltaY);
-            
-            self->accumulatedDeltaX -= truncatedDeltaX;
-            self->accumulatedDeltaY -= truncatedDeltaY;
+            strongSelf->accumulatedDeltaX -= truncatedDeltaX;
+            strongSelf->accumulatedDeltaY -= truncatedDeltaY;
         }
     };
     
@@ -1305,8 +2192,8 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
                 }
             }
             
-            // Prepare controller haptics for use
-            [self initializeControllerHaptics:limeController];
+            // Proactively initialize haptics on background thread at connect time
+            [self initializeControllerHapticsAsync:limeController];
 
             [_controllers setObject:limeController forKey:[NSNumber numberWithInteger:controller.playerIndex]];
             
@@ -1390,6 +2277,23 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     Log(LOG_I, @"Swap A/B X/Y buttons updated to: %d", swap);
 }
 
+-(void) setReportControllerAsXbox:(BOOL)reportAsXbox
+{
+    if (_reportControllerAsXbox == reportAsXbox) {
+        return;
+    }
+    _reportControllerAsXbox = reportAsXbox;
+    Log(LOG_I, @"Report controller as Xbox updated to: %d", reportAsXbox);
+
+    for (Controller* limeController in [_controllers allValues]) {
+        if (!limeController.gamepad) {
+            continue;
+        }
+        limeController.reportedArrival = NO;
+        [self reportControllerArrival:limeController];
+    }
+}
+
 -(id) initWithConfig:(StreamConfiguration*)streamConfig delegate:(id<ControllerSupportDelegate>)delegate
 {
     self = [super init];
@@ -1399,9 +2303,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
     _controllerNumbers = 0;
     _multiController = streamConfig.multiController;
     _swapABXYButtons = streamConfig.swapABXYButtons;
+    _reportControllerAsXbox = streamConfig.reportControllerAsXbox;
     _controllerSlotOffset = streamConfig.controllerSlotOffset;
     _delegate = delegate;
-    
     Log(LOG_I, @"ControllerSupport initialized with slotOffset: %d, multiController: %d", _controllerSlotOffset, _multiController);
 
     _oscController = [[Controller alloc] init];
@@ -1545,7 +2449,23 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             [self updateAutoOnScreenControlMode];
         }];
     }
-    
+
+    __weak typeof(self) weakSelf = self;
+    _applicationDidBecomeActiveObserver = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf handleApplicationDidBecomeActive];
+    }];
+    _applicationWillEnterForegroundObserver = [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *note) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        [strongSelf restoreGamepadHandlersAfterForeground];
+    }];
+
     return self;
 }
 
@@ -1559,12 +2479,22 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 - (void)cleanup
 {
+    [self setInputSyncEnabled:NO];
+
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_controllerDisconnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_mouseConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_mouseDisconnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardConnectObserver];
     [[NSNotificationCenter defaultCenter] removeObserver:_keyboardDisconnectObserver];
+    if (_applicationDidBecomeActiveObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_applicationDidBecomeActiveObserver];
+        _applicationDidBecomeActiveObserver = nil;
+    }
+    if (_applicationWillEnterForegroundObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:_applicationWillEnterForegroundObserver];
+        _applicationWillEnterForegroundObserver = nil;
+    }
 
     _controllerConnectObserver = nil;
     _controllerDisconnectObserver = nil;
