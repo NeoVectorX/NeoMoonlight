@@ -39,6 +39,7 @@ static int lastFrameNumber;
 static int activeVideoFormat;
 static video_stats_t currentVideoStats;
 static video_stats_t lastVideoStats;
+static CFTimeInterval streamSessionStartTime;
 static NSLock* videoStatsLock;
 
 static SDL_AudioDeviceID audioDevice;
@@ -62,6 +63,7 @@ int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void*
     [renderer setupWithVideoFormat:videoFormat width:width height:height frameRate:redrawRate];
     lastFrameNumber = 0;
     activeVideoFormat = videoFormat;
+    streamSessionStartTime = 0;
     memset(&currentVideoStats, 0, sizeof(currentVideoStats));
     memset(&lastVideoStats, 0, sizeof(lastVideoStats));
     return 0;
@@ -90,6 +92,13 @@ void DrStop(void)
     // No stats yet
     [videoStatsLock unlock];
     return NO;
+}
+
+-(NSTimeInterval) streamUptimeSeconds {
+    if (streamSessionStartTime == 0) {
+        return 0;
+    }
+    return CACurrentMediaTime() - streamSessionStartTime;
 }
 
 -(NSString*) getActiveCodecName
@@ -132,6 +141,9 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
     }
     
     CFTimeInterval now = CACurrentMediaTime();
+    if (streamSessionStartTime == 0) {
+        streamSessionStartTime = now;
+    }
     if (!lastFrameNumber) {
         currentVideoStats.startTime = now;
         lastFrameNumber = decodeUnit->frameNumber;

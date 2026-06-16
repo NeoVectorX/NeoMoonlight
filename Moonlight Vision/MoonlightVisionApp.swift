@@ -81,7 +81,7 @@ struct MoonlightVisionApp: SwiftUI.App {
             .onDisappear {
                 // Do not mutate streamConfig during swap teardown; coordinator handles lifecycle.
             }
-            .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
+            .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { _, isSwapping in
                 if isSwapping { return }
                 AudioHelpers.fixAudioForSurroundForCurrentWindow()
             }
@@ -107,7 +107,7 @@ struct MoonlightVisionApp: SwiftUI.App {
             .onDisappear {
                 // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
             }
-            .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
+            .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { _, isSwapping in
                 if isSwapping { return }
                 AudioHelpers.fixAudioForSurroundForCurrentWindow()
             }
@@ -125,7 +125,7 @@ struct MoonlightVisionApp: SwiftUI.App {
                 .onDisappear {
                     // Do not clear streamConfig here; lifecycle managed centrally to avoid races.
                 }
-                .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { isSwapping in
+                .onChange(of: appDelegate.mainViewModel.isSwappingRenderers) { _, isSwapping in
                     if isSwapping { return }
                     AudioHelpers.fixAudioForSurroundForCurrentWindow()
                 }
@@ -162,7 +162,7 @@ private struct MainRootView<Content: View>: View {
     
     var body: some View {
         content()
-            .onChange(of: vm.shouldRelaunchStream) { shouldRelaunch in
+            .onChange(of: vm.shouldRelaunchStream) { _, shouldRelaunch in
                 guard shouldRelaunch else { return }
                 vm.shouldRelaunchStream = false
                 Task { await relaunchStream() }
@@ -189,8 +189,8 @@ private struct MainRootView<Content: View>: View {
         if renderer == .curvedDisplay {
             dismissWindow(id: "mainView")
             try? await Task.sleep(for: .milliseconds(300))
-            let result = try? await openImmersiveSpace(id: renderer.windowId, value: config)
-            print("[Relaunch] Immersive space result: \(String(describing: result))")
+            let result = await openImmersiveSpace(id: renderer.windowId, value: config)
+            print("[Relaunch] Immersive space result: \(result)")
         } else {
             try? await Task.sleep(for: .milliseconds(150))
             openWindow(id: renderer.windowId, value: config)

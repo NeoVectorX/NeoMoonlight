@@ -2,7 +2,6 @@
 //  BluetoothMousePointerLock.swift
 //  Neo Moonlight
 //
-//  Pointer lock for Bluetooth mouse relative mode + shared routing helpers.
 //
 
 import GameController

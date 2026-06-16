@@ -57,6 +57,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     CGSize _keyboardSize;
     BOOL _stopStreamCalled;
     BOOL _viewOnlyMode;  // visionOS: view is set up but stream is managed externally
+    int32_t _connectionStatus;
     
     id<AnyVideoDecoderRenderer, MetalPresetControllable> _metalRenderer;
     
@@ -197,6 +198,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
         [_controllerSupport cleanup];
     }
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
+    [self applyBluetoothMouseRouting];
     
     // Recreate the stream manager (same as viewDidLoad)
     _streamMan = [[StreamManager alloc] initWithConfig:self.streamConfig
@@ -245,6 +247,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     // Ensure controller support exists
     if (!_controllerSupport) {
         _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
+        [self applyBluetoothMouseRouting];
     }
     
     // Create and start the stream manager
@@ -342,6 +345,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 #endif
 
     _controllerSupport = [[ControllerSupport alloc] initWithConfig:self.streamConfig delegate:self];
+    [self applyBluetoothMouseRouting];
     _inactivityTimer = nil;
     
     _streamView = [[StreamView alloc] initWithFrame:self.view.frame];
@@ -578,6 +582,10 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 
 - (NSString*)getStatsOverlayText {
     return [_streamMan getStatsOverlayText];
+}
+
+- (NSDictionary*)getBitrateCheckMetrics {
+    return [_streamMan getBitrateCheckMetrics];
 }
 
 - (BOOL)toggleKeyboard {
@@ -954,6 +962,7 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
 
 - (void)connectionStatusUpdate:(int)status {
     Log(LOG_W, @"Connection status update: %d", status);
+    _connectionStatus = status;
 
     // The stats overlay takes precedence over these warnings
     if (_statsUpdateTimer != nil) {
@@ -1102,12 +1111,20 @@ NSString * const StreamControllerDismantledNotification = @"StreamControllerDism
     return YES;
 }
 
+- (void)applyBluetoothMouseRouting {
+#if TARGET_OS_VISION
+    if (@available(iOS 14.0, *)) {
+        [self setNeedsUpdateOfPrefersPointerLocked];
+    }
+#endif
+}
+
+#if TARGET_OS_VISION
 - (BOOL)prefersPointerLocked {
-    // Pointer lock breaks the UIKit mouse APIs, which is a problem because
-    // GCMouse is horribly broken on iOS 14.0 for certain mice. Only lock
-    // the cursor if there is a GCMouse present.
     return [GCMouse mice].count > 0;
 }
+#endif
+
 #endif
 
 - (void)updateRendererHDRParams:(float)brightness saturation:(float)saturation contrast:(float)contrast luminosity:(float)luminosity gamma:(float)gamma {

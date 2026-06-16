@@ -78,11 +78,13 @@ struct _UIKitStreamViewInner: View {
     @State private var controlsExpanded: Bool = false
     @State private var hideTimer: Timer?
     @State private var controlsHighlighted = false
+    @StateObject private var micChromeFade = MicChromeFadeController(style: .classic)
     @State private var isMenuOpen = false
     @State private var isGazingAtControls = false
     
     // Audio state
     @State private var spatialAudioMode: Bool = true
+    @State private var streamSceneID: String?
     @State private var soundStageSize: SoundStageSize = .medium
     
     // Display state
@@ -92,6 +94,8 @@ struct _UIKitStreamViewInner: View {
     
     // Virtual keyboard
     @State private var showVirtualKeyboard = false
+    @State private var showDesktopActionsPicker = false
+    @State private var streamVolumeBeforeMute: Float = 127
     
     // Preset overlay state
     @State private var presetOverlayText: String = ""
@@ -103,6 +107,8 @@ struct _UIKitStreamViewInner: View {
     // Stats overlay
     @State private var statsOverlayText: String = ""
     @State private var statsTimer: Timer?
+    @State private var bitrateSession = BitrateCheckSession()
+    @AppStorage("stream.bitrateAssistantShowFirstRunHint") private var showBitrateFirstRunHint = true
     
     // Co-op state
     @State private var inviteButtonSent: Bool = false
@@ -143,7 +149,30 @@ struct _UIKitStreamViewInner: View {
             .clipShape(RoundedRectangle(cornerRadius: removeRoundedCorners ? 0 : CGFloat(streamConfig.width) * 0.006, style: .continuous))
             
             // Preset popup overlay
-            if showInlinePresetOverlay {
+            if bitrateSession.isActive {
+                BitrateAssistantPanel(
+                    session: bitrateSession,
+                    streamLabel: "\(streamConfig.width)×\(streamConfig.height) @ \(streamConfig.frameRate)",
+                    displayScale: 1.4,
+                    canReconnect: !viewModel.isCoopSession,
+                    showFirstRunHint: showBitrateFirstRunHint,
+                    onCancel: { bitrateSession.cancel() },
+                    onClose: {
+                        showBitrateFirstRunHint = false
+                        bitrateSession.closeReport()
+                    },
+                    onApply: { kbps in
+                        viewModel.applyBitrate(kbps)
+                        bitrateSession.closeReport()
+                    },
+                    onApplyAndReconnect: { kbps in
+                        reconnectForBitrateChange(kbps)
+                    }
+                )
+                .scaleEffect(0.91)
+                .offset(z: 150)
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
+            } else if showInlinePresetOverlay {
                 CenterPresetPopup(text: presetOverlayText, icon: presetOverlayIcon)
                     .scaleEffect(0.65)
                     .offset(z: 150)
@@ -195,8 +224,23 @@ struct _UIKitStreamViewInner: View {
             .ornament(attachmentAnchor: .scene(.bottom), contentAlignment: .top) {
                 bottomOrnaments
             }
+            .ornament(visibility: showDesktopActionsPicker ? .visible : .hidden, attachmentAnchor: .scene(.center), contentAlignment: .center) {
+                DesktopActionsPickerView(
+                    isPresented: $showDesktopActionsPicker,
+                    sizeScale: DesktopActionsPickerView.flatClassicSizeScale,
+                    onActionPerformed: { action in
+                        presentDesktopActionToast(action)
+                    }
+                )
+            }
         .onAppear {
             setupScene()
+        }
+        .onChange(of: showDesktopActionsPicker) { wasOpen, isOpen in
+            guard wasOpen, !isOpen else { return }
+            if !DesktopKeyboardSender.isStickyAltHeldOnHost {
+                DesktopKeyboardSender.releaseStickyModifiersOnHost()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             handleScenePhaseChange(phase)
@@ -212,8 +256,12 @@ struct _UIKitStreamViewInner: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("StreamDidTeardownNotification"))) { _ in
-            // Ungate the serializer — LiStopConnection() has truly finished.
             ConnectionSerializer.shared.notifyStopComplete()
+
+            if viewModel.isBitrateReconnectInProgress {
+                print("[ClassicDisplay] Ignoring StreamDidTeardownNotification — bitrate reconnect in progress")
+                return
+            }
 
             // Ignore teardown notification during background suspend
             guard !viewModel.isSuspendingForBackground else {
@@ -235,11 +283,7 @@ struct _UIKitStreamViewInner: View {
             handleResume()
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainViewWindowClosed)) { _ in
-            isMenuOpen = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                fixAudioForCurrentMode()
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { LiRequestIdrFrame() }
+            restoreStreamAudioAfterMenuDismiss()
         }
         .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
             if shouldClose && !hasPerformedTeardown {
@@ -267,6 +311,7 @@ struct _UIKitStreamViewInner: View {
         .onDisappear {
             hideControls = true
             hideTimer?.invalidate()
+            micChromeFade.invalidate()
             statsTimer?.invalidate()
             guestAggressiveIDRTimer?.invalidate()
             
@@ -363,12 +408,11 @@ struct _UIKitStreamViewInner: View {
             makeControlButton(label: "Home", systemImage: "house.fill") {
                 if isMenuOpen {
                     dismissWindow(id: "mainView")
-                    isMenuOpen = false
+                    restoreStreamAudioAfterMenuDismiss()
                 } else {
                     pushWindow(id: "mainView")
                     isMenuOpen = true
                 }
-                fixAudioForCurrentMode()
             }
             Button {
                 if !controlsHighlighted && hideControls {
@@ -423,9 +467,38 @@ struct _UIKitStreamViewInner: View {
                 }
                 startHideTimer()
             }
+            if viewModel.streamSettings.showBitrateAssistantButton {
+                makeControlButton(
+                    label: bitrateSession.phase == .measuring ? "Analyzing…" : "Bitrate Check",
+                    systemImage: "waveform.path.ecg"
+                ) {
+                    guard bitrateSession.phase == .idle else { return }
+                    runBitrateCheck()
+                }
+            }
             if viewModel.streamSettings.showTaskManagerButton {
-                makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle") {
-                    sendTaskManager()
+                makeControlButton(
+                    label: showDesktopActionsPicker ? "Close Desktop" : "Desktop",
+                    systemImage: "list.bullet.circle"
+                ) {
+                    showDesktopActionsPicker.toggle()
+                    startHideTimer()
+                }
+            }
+            if viewModel.streamSettings.showStreamMuteButton {
+                makeControlButton(
+                    label: viewModel.vol == 0 ? "Unmute Game" : "Mute Game",
+                    systemImage: viewModel.vol == 0 ? "speaker.slash.fill" : "speaker.fill"
+                ) {
+                    if viewModel.vol == 0 {
+                        let restore = streamVolumeBeforeMute > 0 ? streamVolumeBeforeMute : 127
+                        viewModel.vol = restore
+                        StreamVolume.apply(Int32(restore))
+                    } else {
+                        streamVolumeBeforeMute = viewModel.vol
+                        viewModel.vol = 0
+                        StreamVolume.apply(0)
+                    }
                     startHideTimer()
                 }
             }
@@ -473,6 +546,13 @@ struct _UIKitStreamViewInner: View {
     }
 
     // MARK: - Bottom Ornaments
+
+    private func classicMicChromeOpacity() -> CGFloat {
+        StreamMicChromeOpacity.classic(
+            hideControls: micChromeFade.hideControls,
+            controlsHighlighted: micChromeFade.controlsHighlighted
+        )
+    }
     
     @ViewBuilder
     private var bottomOrnaments: some View {
@@ -495,7 +575,14 @@ struct _UIKitStreamViewInner: View {
             
             // Floating mic button
             if viewModel.streamSettings.showMicButton {
-                FloatingMicButton()
+                FloatingMicButton(
+                    chromeOpacity: classicMicChromeOpacity(),
+                    colorStyle: MicButtonColorStyle.from(raw: viewModel.streamSettings.micButtonColorStyleRaw),
+                    onActionPerformed: { micChromeFade.actionPerformed() }
+                )
+                    .padding(.top, 10)
+                    .animation(.easeInOut(duration: 0.25), value: micChromeFade.controlsHighlighted)
+                    .animation(.easeInOut(duration: 0.25), value: micChromeFade.hideControls)
             }
         }
     }
@@ -766,8 +853,14 @@ struct _UIKitStreamViewInner: View {
         // This matches Flat Display's behavior
         applyAspectRatioLockIfReady()
         
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            captureStreamAudioScene()
+            fixAudioForCurrentMode()
+        }
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             startHideTimer()
+            micChromeFade.scheduleClassicInitialFade()
         }
     }
     
@@ -946,8 +1039,7 @@ struct _UIKitStreamViewInner: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { LiRequestIdrFrame() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { LiRequestIdrFrame() }
         } else {
-            // Stream is already running, just fix audio and request IDR
-            fixAudioForCurrentMode()
+            restoreStreamAudioAfterMenuDismiss()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { LiRequestIdrFrame() }
         }
     }
@@ -955,10 +1047,14 @@ struct _UIKitStreamViewInner: View {
     private func tearDownStream() {
         guard !hasPerformedTeardown else { return }
         hasPerformedTeardown = true
+
+        AudioHelpers.pinStreamAudioToScene(nil)
+        streamSceneID = nil
         
         print("[ClassicDisplay] Tearing down stream using external control...")
         
         statsTimer?.invalidate()
+        bitrateSession.cancel()
         guestAggressiveIDRTimer?.invalidate()
         viewModel.isStreamViewAlive = false
         
@@ -966,11 +1062,36 @@ struct _UIKitStreamViewInner: View {
         stopStreamExternal()
     }
     
+    private func captureStreamAudioScene() {
+        let preferred = _UIKitStreamView.controllerReference.object?.view.window?.windowScene?.session.persistentIdentifier
+            ?? AudioHelpers.keyWindowSceneIdentifier()
+        if let sceneID = AudioHelpers.captureAndPinStreamAudioScene(preferredIdentifier: preferred) {
+            streamSceneID = sceneID
+        }
+    }
+
+    private func restoreStreamAudioAfterMenuDismiss() {
+        isMenuOpen = false
+        captureStreamAudioScene()
+        fixAudioForCurrentMode()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.captureStreamAudioScene()
+            self.fixAudioForCurrentMode()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.fixAudioForCurrentMode()
+            LiRequestIdrFrame()
+        }
+    }
+
     // MARK: - Helper Functions
     
     private func fixAudioForCurrentMode() {
         if spatialAudioMode {
-            AudioHelpers.fixAudioForSurroundForCurrentWindow(soundStageSize: soundStageSize)
+            AudioHelpers.fixAudioForSurroundForStream(
+                soundStageSize: soundStageSize,
+                sceneIdentifier: streamSceneID
+            )
         } else {
             AudioHelpers.fixAudioForDirectStereo()
         }
@@ -1045,6 +1166,50 @@ struct _UIKitStreamViewInner: View {
             }
         }
     }
+
+    private func runBitrateCheck() {
+        guard bitrateSession.phase == .idle else { return }
+        let controller = _UIKitStreamView.controllerReference.object
+        bitrateSession.start(
+            extendedScan: viewModel.streamSettings.bitrateAssistantExtendedScan,
+            metricsProvider: {
+                let metrics = controller?.getBitrateCheckMetrics() as? [String: Any]
+                return (metrics, controller?.connectionStatus ?? 0)
+            },
+            streamConfig: streamConfig,
+            settings: viewModel.streamSettings
+        )
+        startHideTimer()
+    }
+
+    private func reconnectForBitrateChange(_ kbps: Int32) {
+        guard !viewModel.isCoopSession else { return }
+        guard let vc = streamVC else { return }
+
+        viewModel.isBitrateReconnectInProgress = true
+        viewModel.applyBitrate(kbps)
+        streamConfig.bitRate = kbps
+        vc.streamConfig = streamConfig
+        bitrateSession.beginReconnectUI()
+
+        Task {
+            if vc.isStreamActive() {
+                ConnectionSerializer.shared.notifyStopBegun()
+                vc.stopStreamExternal()
+                await ConnectionSerializer.shared.waitUntilReadyToStart()
+            }
+
+            await BitrateStreamReconnect.runSettleCountdown(session: bitrateSession)
+
+            vc.streamConfig = streamConfig
+            vc.restartStream()
+            kickFirstFrameWatchdog()
+
+            viewModel.isBitrateReconnectInProgress = false
+            bitrateSession.finishReconnect(success: true)
+            startHideTimer()
+        }
+    }
     
     private func kickFirstFrameWatchdog() {
         guard !idrWatchdogScheduled else { return }
@@ -1085,19 +1250,18 @@ struct _UIKitStreamViewInner: View {
         }
     }
     
-    private func sendTaskManager() {
-        DispatchQueue.global(qos: .userInteractive).async {
-            let MODIFIER_CTRL: Int8 = 0x02
-            let MODIFIER_SHIFT: Int8 = 0x01
-            let modifiers = MODIFIER_CTRL | MODIFIER_SHIFT
-            let ESC_KEY: Int16 = 0x1B
-            
-            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x03, modifiers)
-            usleep(50 * 1000)
-            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x04, modifiers)
+    private func presentDesktopActionToast(_ action: DesktopAction) {
+        presetOverlayText = action.toastLabel
+        presetOverlayIcon = action.systemImage
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+            withAnimation(.easeOut(duration: 0.15)) {
+                showInlinePresetOverlay = false
+            }
         }
     }
-    
+
     private func applyAspectRatioLockIfReady() {
         // Try to get the window from the controller reference
         guard let streamVC = _UIKitStreamView.controllerReference.object else {
@@ -1164,6 +1328,8 @@ struct _UIKitStreamView: UIViewControllerRepresentable {
     
     func updateUIViewController(_ viewController: UIViewControllerType, context: Context) {
         viewController.streamConfig = streamConfig
+        viewController.applyBluetoothMouseRouting()
+        BluetoothMouseRouting.sync()
         _UIKitStreamView.controllerReference.object = viewController
     }
     

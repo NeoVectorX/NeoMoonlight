@@ -212,4 +212,32 @@
             hostProcessingString];
 }
 
+- (NSDictionary*) getBitrateCheckMetrics {
+    video_stats_t stats;
+
+    if (!_connection) {
+        return nil;
+    }
+
+    if (![_connection getVideoStats:&stats]) {
+        return nil;
+    }
+
+    float interval = stats.endTime - stats.startTime;
+    if (interval <= 0) {
+        return nil;
+    }
+
+    uint32_t rtt, variance;
+    BOOL hasRtt = LiGetEstimatedRttInfo(&rtt, &variance);
+
+    return @{
+        @"sampleSeconds": @(interval),
+        @"streamUptimeSeconds": @([_connection streamUptimeSeconds]),
+        @"fps": @(stats.totalFrames / interval),
+        @"dropsPerSecond": @(stats.networkDroppedFrames / interval),
+        @"rttMs": hasRtt ? @(rtt) : @(-1),
+    };
+}
+
 @end

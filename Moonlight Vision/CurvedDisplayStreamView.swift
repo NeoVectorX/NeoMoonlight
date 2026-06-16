@@ -82,10 +82,20 @@ class HeadPositionStorage {
     // Optimization tracking (to avoid redundant updates during RealityView update closure)
     var lastAppliedDimLevel: Int = -1
     var lastEnvironmentSphereLevelApplied: Int = 0
-    /// Live target from curvature slider drag; mesh pump reads this at 12 Hz.
+    /// Live target from curvature slider drag (read directly by updateRealityView for instant cache lookup).
     var curvatureDragTarget: Float?
     /// Cached RealityKit scale for the curvature pill — measured while hidden; reused after Home/Resume churn.
     var curvaturePillStableScale: Float?
+    
+    // MARK: - Curvature Mesh Cache (smooth slider animation)
+    /// Pre-generated meshes at curvature steps for instant swap during slider drag.
+    var curvatureMeshCache: [Int: MeshResource] = [:]
+    /// Step size for cache keys: magnitude × 1000, rounded to nearest step.
+    static let curvatureCacheStep: Int = 25  // 0.025 magnitude granularity
+    /// Resolution for cached preview meshes (higher than old 64×64, lower than final 256×256).
+    static let curvatureCacheResolution: (UInt32, UInt32) = (128, 128)
+    /// Whether the cache has been populated for the current aspect ratio.
+    var curvatureCacheAspect: Float?
 
     // World anchor support for room-fixed screen presets
     var presetWorldTrackingProvider: WorldTrackingProvider?
@@ -956,11 +966,14 @@ struct _CurvedDisplayStreamView: View {
 
     private func startCurvatureDragMeshPump() {
         animationTimer?.invalidate()
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { _ in
+        // Run at 60Hz for smooth animation — mesh updates now use pre-cached meshes,
+        // so instant swap instead of CPU generation. Timer just triggers re-render.
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
             guard self.curvatureSliderDragging,
                   let target = self.headStorage.curvatureDragTarget else { return }
             let clamped = CurvedCurvatureMapping.clampMagnitude(target)
-            guard abs(clamped - self.curveMagnitude) > 0.002 else { return }
+            // Lower threshold for smoother tracking (cache lookup is cheap).
+            guard abs(clamped - self.curveMagnitude) > 0.0005 else { return }
             self.curveMagnitude = clamped
         }
         if let animationTimer {
@@ -1050,6 +1063,8 @@ struct _CurvedDisplayStreamView: View {
     @State private var soundStageSize: SoundStageSize = .medium
     @State private var statsOverlayText: String = ""
     @State private var statsTimer: Timer?
+    @State private var bitrateSession = BitrateCheckSession()
+    @AppStorage("stream.bitrateAssistantShowFirstRunHint") private var showBitrateFirstRunHint = true
     @State private var showScaleHUD: Bool = false
     @State private var showModeLabel: Bool = false
     @State private var modeLabelTimer: Timer?
@@ -1561,7 +1576,28 @@ struct _CurvedDisplayStreamView: View {
             Attachment(id: "stats") { statsAttachment }
             Attachment(id: "tutorial") { tutorialAttachment }
             Attachment(id: "presetPopup") {
-                if showInlinePresetOverlay {
+                if bitrateSession.isActive {
+                    BitrateAssistantPanel(
+                        session: bitrateSession,
+                        streamLabel: "\(streamConfig.width)×\(streamConfig.height) @ \(streamConfig.frameRate)",
+                        displayScale: 1.4,
+                        canReconnect: !viewModel.isCoopSession,
+                        showFirstRunHint: showBitrateFirstRunHint,
+                        onCancel: { bitrateSession.cancel() },
+                        onClose: {
+                            showBitrateFirstRunHint = false
+                            bitrateSession.closeReport()
+                        },
+                        onApply: { kbps in
+                            viewModel.applyBitrate(kbps)
+                            bitrateSession.closeReport()
+                        },
+                        onApplyAndReconnect: { kbps in
+                            reconnectForBitrateChange(kbps)
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
+                } else if showInlinePresetOverlay {
                     CenterPresetPopup(
                         text: presetOverlayText,
                         icon: presetOverlayIcon,
@@ -2133,6 +2169,8 @@ struct _CurvedDisplayStreamView: View {
         
         CurvedCurvatureMapping.runMigrationIfNeeded()
         curveMagnitude = Float(savedCurveMagnitude)
+        
+        populateCurvatureMeshCache()
 
         restorePersistedVisualStateAtStreamStart()
         
@@ -2312,6 +2350,7 @@ struct _CurvedDisplayStreamView: View {
 
         statsTimer?.invalidate()
         statsTimer = nil
+        bitrateSession.cancel()
         stopCurvatureDragMeshPump()
         stopMoonlightCycle()
         stopTideCycle()
@@ -4247,6 +4286,20 @@ struct _CurvedDisplayStreamView: View {
                 viewModel.streamSettings.statsOverlay.toggle()
             }, onTapFeedback: { controlTapFeedbackTrigger += 1 })
             }
+
+            if viewModel.streamSettings.showBitrateAssistantButton {
+                staggeredControl(index: 12) {
+                makeControlButton(
+                    label: bitrateSession.phase == .measuring ? "Analyzing…" : "Bitrate Check",
+                    systemImage: "waveform.path.ecg",
+                    action: {
+                        guard bitrateSession.phase == .idle else { return }
+                        runBitrateCheck()
+                    },
+                    onTapFeedback: { controlTapFeedbackTrigger += 1 }
+                )
+                }
+            }
             
             // 10.5. Desktop actions (if enabled)
             if viewModel.streamSettings.showTaskManagerButton {
@@ -5243,13 +5296,15 @@ struct _CurvedDisplayStreamView: View {
             if popupEnt.parent !== screen { screen.addChild(popupEnt) }
             popupEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
             
-            let bounds = popupEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
-                let currentScaleX = max(popupEnt.scale.x, 0.0001)
-                let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.35
-                let scale = desiredLocalWidth / unscaledWidth
-                popupEnt.scale = [scale, scale, scale]
+            if showInlinePresetOverlay || bitrateSession.isActive {
+                let bounds = popupEnt.visualBounds(relativeTo: screen)
+                if bounds.extents.x > 0 {
+                    let currentScaleX = max(popupEnt.scale.x, 0.0001)
+                    let unscaledWidth = Float(bounds.extents.x) / currentScaleX
+                    let desiredLocalWidth: Float = bitrateSession.isActive ? 0.49 : 0.35
+                    let scale = desiredLocalWidth / unscaledWidth
+                    popupEnt.scale = [scale, scale, scale]
+                }
             }
         }
         
@@ -5336,7 +5391,14 @@ struct _CurvedDisplayStreamView: View {
     }
 
     func updateRealityView(content: RealityViewContent, attachments: RealityViewAttachments) {
-        let currentCurve = effectiveCurveMagnitude
+        // During slider drag: read target directly and use cached mesh for instant, smooth updates.
+        // Outside drag: use the normal high-quality 256×256 mesh generation.
+        let currentCurve: Float
+        if curvatureSliderDragging, let dragTarget = headStorage.curvatureDragTarget {
+            currentCurve = CurvedCurvatureMapping.clampMagnitude(dragTarget) * curveAnimationMultiplier
+        } else {
+            currentCurve = effectiveCurveMagnitude
+        }
 
         let curveEpsilon: Float = curvatureSliderDragging ? 0.002 : 0.001
         let curveChanged: Bool
@@ -5356,19 +5418,33 @@ struct _CurvedDisplayStreamView: View {
         let shouldRegenCollision = forceFullRegen || (geometryChanged && !curvatureSliderDragging)
 
         if shouldRegenDisplay {
-            let displayResolution: (UInt32, UInt32) = curvatureSliderDragging ? (64, 64) : (256, 256)
-            if let mesh = try? generateCurvedRoundedPlane(
-                width: CURVED_MAX_WIDTH_METERS,
-                aspectRatio: screenAspect,
-                resolution: displayResolution,
-                curveMagnitude: currentCurve,
-                cornerRadiusFraction: cornerRadiusFraction
-            ) {
-                if let model = screen.model {
-                    try? model.mesh.replace(with: mesh.contents)
+            if curvatureSliderDragging {
+                // Fast path: use pre-cached mesh for instant swap (128×128, no CPU generation).
+                // Ensure cache is populated for current aspect ratio.
+                if headStorage.curvatureCacheAspect != screenAspect {
+                    populateCurvatureMeshCache()
                 }
+                
+                if let cachedMesh = cachedCurvatureMesh(for: currentCurve),
+                   let model = screen.model {
+                    try? model.mesh.replace(with: cachedMesh.contents)
+                    headStorage.lastGeneratedCurve = currentCurve
+                    headStorage.lastGeneratedAspect = screenAspect
+                }
+                // Skip halo update during drag for performance.
+            } else {
+                // High-quality path: generate full 256×256 mesh.
+                if let mesh = try? generateCurvedRoundedPlane(
+                    width: CURVED_MAX_WIDTH_METERS,
+                    aspectRatio: screenAspect,
+                    resolution: (256, 256),
+                    curveMagnitude: currentCurve,
+                    cornerRadiusFraction: cornerRadiusFraction
+                ) {
+                    if let model = screen.model {
+                        try? model.mesh.replace(with: mesh.contents)
+                    }
 
-                if !curvatureSliderDragging {
                     if let haloEnt = headStorage.chromosphereHaloEntity,
                        let haloMesh = try? makeChromosphereMesh(curveMagnitude: currentCurve),
                        let hm = haloEnt.model {
@@ -5378,11 +5454,11 @@ struct _CurvedDisplayStreamView: View {
                         let plane = fallbackChromospherePlaneMesh()
                         try? hm.mesh.replace(with: plane.contents)
                     }
-                }
 
-                headStorage.lastMeshGenTime = Date()
-                headStorage.lastGeneratedCurve = currentCurve
-                headStorage.lastGeneratedAspect = screenAspect
+                    headStorage.lastMeshGenTime = Date()
+                    headStorage.lastGeneratedCurve = currentCurve
+                    headStorage.lastGeneratedAspect = screenAspect
+                }
             }
         }
 
@@ -5651,12 +5727,12 @@ struct _CurvedDisplayStreamView: View {
         if let popupEnt = attachments.entity(for: "presetPopup") {
             if popupEnt.parent !== screen { screen.addChild(popupEnt) }
             popupEnt.position = [0.0 as Float, 0.0 as Float, Float(0.15)]
-            if showInlinePresetOverlay {
+            if showInlinePresetOverlay || bitrateSession.isActive {
                 let bounds = popupEnt.visualBounds(relativeTo: screen)
                 if bounds.extents.x > 0 {
                     let currentScaleX = max(popupEnt.scale.x, 0.0001)
                     let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                    let desiredLocalWidth: Float = 0.35
+                    let desiredLocalWidth: Float = bitrateSession.isActive ? 0.49 : 0.35
                     let scale = desiredLocalWidth / unscaledWidth
                     popupEnt.scale = [scale, scale, scale]
                 }
@@ -6345,6 +6421,52 @@ struct _CurvedDisplayStreamView: View {
             return (dx * s, dy * s)
         }
         return nil
+    }
+    
+    // MARK: - Curvature Mesh Cache
+    
+    /// Populate the curvature mesh cache for the current aspect ratio.
+    /// Called once when aspect ratio changes or on first setup.
+    private func populateCurvatureMeshCache() {
+        let aspect = screenAspect
+        guard headStorage.curvatureCacheAspect != aspect else { return }
+        
+        headStorage.curvatureMeshCache.removeAll()
+        
+        let step = HeadPositionStorage.curvatureCacheStep
+        let resolution = HeadPositionStorage.curvatureCacheResolution
+        let maxMagnitude = CurvatureTick.maxMagnitude
+        let maxKey = Int(maxMagnitude * 1000)
+        
+        for keyValue in stride(from: 0, through: maxKey + step, by: step) {
+            let magnitude = Float(keyValue) / 1000.0
+            let clampedMagnitude = min(magnitude, maxMagnitude)
+            
+            if let mesh = try? generateCurvedRoundedPlane(
+                width: CURVED_MAX_WIDTH_METERS,
+                aspectRatio: aspect,
+                resolution: resolution,
+                curveMagnitude: clampedMagnitude,
+                cornerRadiusFraction: cornerRadiusFraction
+            ) {
+                headStorage.curvatureMeshCache[keyValue] = mesh
+            }
+        }
+        
+        headStorage.curvatureCacheAspect = aspect
+    }
+    
+    /// Get the cache key for a given curvature magnitude.
+    private func curvatureCacheKey(for magnitude: Float) -> Int {
+        let step = HeadPositionStorage.curvatureCacheStep
+        let scaled = Int(magnitude * 1000)
+        return (scaled / step) * step
+    }
+    
+    /// Look up a cached mesh for the given magnitude, or return nil if not cached.
+    private func cachedCurvatureMesh(for magnitude: Float) -> MeshResource? {
+        let key = curvatureCacheKey(for: magnitude)
+        return headStorage.curvatureMeshCache[key]
     }
 
     private func getDimmerMaterial() -> (RealityKit.Material, TextureResource?) {
@@ -8213,6 +8335,47 @@ struct _CurvedDisplayStreamView: View {
                     self.statsOverlayText = stats
                 }
             }
+        }
+    }
+
+    private func runBitrateCheck() {
+        guard bitrateSession.phase == .idle else { return }
+        bitrateSession.start(
+            extendedScan: viewModel.streamSettings.bitrateAssistantExtendedScan,
+            metricsProvider: {
+                let metrics = streamMan?.getBitrateCheckMetrics() as? [String: Any]
+                return (metrics, connectionCallbacks.connectionStatus)
+            },
+            streamConfig: streamConfig,
+            settings: viewModel.streamSettings
+        )
+        startHideTimer()
+    }
+
+    private func reconnectForBitrateChange(_ kbps: Int32) {
+        guard !viewModel.isCoopSession else { return }
+        viewModel.isBitrateReconnectInProgress = true
+        viewModel.applyBitrate(kbps)
+        streamConfig.bitRate = kbps
+        bitrateSession.beginReconnectUI()
+
+        Task {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                BitrateInPlaceReconnect.stopStreamManager(streamMan, clearReference: { self.streamMan = nil }) {
+                    cont.resume()
+                }
+            }
+
+            await ConnectionSerializer.shared.waitUntilReadyToStart()
+            await BitrateStreamReconnect.runSettleCountdown(session: bitrateSession)
+
+            renderGateOpen = true
+            firstFrameReceived = false
+            startStreamIfNeeded()
+
+            viewModel.isBitrateReconnectInProgress = false
+            bitrateSession.finishReconnect(success: true)
+            startHideTimer()
         }
     }
     

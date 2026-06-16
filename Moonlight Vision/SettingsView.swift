@@ -683,6 +683,38 @@ struct SettingsView: View {
                     .padding(.vertical, 4)
 
                     VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show Bitrate Assistant button", isOn: Binding(
+                            get: { settings.showBitrateAssistantButton },
+                            set: { newValue in
+                                settings.showBitrateAssistantButton = newValue
+                                UserDefaults.standard.set(newValue, forKey: "stream.showBitrateAssistantButton")
+                            }
+                        ))
+
+                        Text("Adds a top-bar control that runs a live bitrate scan during streaming and helps you dial in the best bitrate for your connection.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.vertical, 4)
+
+                    if settings.showBitrateAssistantButton {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("60-second scan (more accurate)", isOn: Binding(
+                                get: { settings.bitrateAssistantExtendedScan },
+                                set: { newValue in
+                                    settings.bitrateAssistantExtendedScan = newValue
+                                    UserDefaults.standard.set(newValue, forKey: "stream.bitrateAssistantExtendedScan")
+                                }
+                            ))
+
+                            Text("Uses a full minute of live samples for a steadier recommendation. Default is 30 seconds.")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
                         Toggle("Pass Through Mode", isOn: $settings.showPeekThroughButton)
                             .onChange(of: settings.showPeekThroughButton) { _, newValue in
                                 UserDefaults.standard.set(newValue, forKey: "stream.showPeekThroughButton")
@@ -959,6 +991,8 @@ struct SettingsView: View {
             settings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
             settings.gazeCursorOffsetY = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetY")
             settings.showStreamMuteButton = UserDefaults.standard.bool(forKey: "stream.showMuteButton")
+            settings.showBitrateAssistantButton = UserDefaults.standard.bool(forKey: "stream.showBitrateAssistantButton")
+            settings.bitrateAssistantExtendedScan = UserDefaults.standard.bool(forKey: "stream.bitrateAssistantExtendedScan")
             settings.showPeekThroughButton = UserDefaults.standard.bool(forKey: "stream.showPeekThroughButton")
             settings.showHeadFollowButton = UserDefaults.standard.bool(forKey: "stream.showHeadFollowButton")
             if UserDefaults.standard.object(forKey: "stream.showMicButton") != nil {

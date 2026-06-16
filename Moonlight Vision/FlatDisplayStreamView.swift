@@ -33,6 +33,30 @@ final class FlatThreadSafeHDRSettings: @unchecked Sendable {
     }
 }
 
+/// SBS 3D confirmation card — proportional sizing (default × 0.8 = −20%).
+private enum SBSConfirmPanelMetrics {
+    static let scale: CGFloat = 0.8
+    static func pt(_ base: CGFloat) -> CGFloat { base * scale }
+}
+
+/// Flat HDR menu is SwiftUI ornament; SBS/other center dialogs live on RK attachments `position.z ≈ 0.15`. This pushes the ornament forward in pts so perceived depth matches.
+private enum FlatHDRPanelMetrics {
+    static let ornamentForwardOffsetZPts: CGFloat = 150
+}
+
+/// Top toolbar ornament uses fixed pt sizes; scale with aspect-fit video width so icons track window resize (like curved `screenScale`).
+private enum FlatTopControlsMetrics {
+    /// Video width where 24.07 pt / 50×50 controls match curved perceived size at a typical window.
+    static let referenceVideoWidth: CGFloat = 1600
+    static let minScale: CGFloat = 0.48
+    static let maxScale: CGFloat = 1.0
+
+    static func scale(forVideoWidth width: CGFloat) -> CGFloat {
+        guard referenceVideoWidth > 0, width > 0 else { return 1 }
+        return min(maxScale, max(minScale, width / referenceVideoWidth))
+    }
+}
+
 // MARK: - Frame Mailbox (Thread-Safe Handoff) - Flat Display Version
 // Uses OSAllocatedUnfairLock for nanosecond-level access - critical for 120Hz M5 support.
 final class FlatFrameMailbox: @unchecked Sendable {
@@ -58,30 +82,37 @@ final class FlatFrameMailbox: @unchecked Sendable {
 
 struct FlatInputCaptureView: UIViewRepresentable {
     let controllerSupport: ControllerSupport
+    let gamepadSession: StreamGamepadSession
     @Binding var showKeyboard: Bool
     var streamConfig: StreamConfiguration
     var absoluteTouchMode: Bool
     var hideSystemCursor: Bool
     var reclaimFocusTrigger: Int
     var isHandGazeInputDisabled: Bool
+    var modalBlocksOverlay: Bool
+    /// true = gaze pinch-drag scrolls; false = click-drag (marquee).
+    var gazePinchDragUsesScroll: Bool = true
     var onReturnPressed: (() -> Void)?
     
     func makeUIView(context: Context) -> FlatInputCaptureUIView {
         let view = FlatInputCaptureUIView()
         view.controllerSupport = controllerSupport
+        view.gamepadSession = gamepadSession
         view.streamConfig = streamConfig
         view.absoluteTouchMode = absoluteTouchMode
         view.showVirtualKeyboard = showKeyboard
         view.hideSystemCursor = hideSystemCursor
         view.isHandGazeInputDisabled = isHandGazeInputDisabled
+        view.gazePinchDragUsesScroll = gazePinchDragUsesScroll
         view.onReturnPressed = onReturnPressed
         view.isMultipleTouchEnabled = true
         view.isUserInteractionEnabled = true
         view.backgroundColor = UIColor.black.withAlphaComponent(0.01)
         
-        // Become first responder immediately to capture keyboard input
+        gamepadSession.attach(captureView: view, controllerSupport: controllerSupport)
+        BluetoothMouseRouting.sync()
         DispatchQueue.main.async {
-            view.becomeFirstResponder()
+            gamepadSession.activateGamepadCapture()
         }
         
         return view
@@ -92,28 +123,33 @@ struct FlatInputCaptureView: UIViewRepresentable {
         uiView.absoluteTouchMode = absoluteTouchMode
         uiView.hideSystemCursor = hideSystemCursor
         uiView.isHandGazeInputDisabled = isHandGazeInputDisabled
+        uiView.gazePinchDragUsesScroll = gazePinchDragUsesScroll
         uiView.onReturnPressed = onReturnPressed
+        uiView.gamepadSession = gamepadSession
+        gamepadSession.setModalBlocking(showKeyboard || modalBlocksOverlay)
+        gamepadSession.attach(captureView: uiView, controllerSupport: controllerSupport)
+
+        BluetoothMouseRouting.sync()
 
         if uiView.showVirtualKeyboard != showKeyboard {
             uiView.showVirtualKeyboard = showKeyboard
         }
 
-        // Only reclaim first responder when explicitly triggered (e.g., scenePhase became .active)
-        // This prevents stealing keyboard focus from other visionOS apps
         if uiView.lastReclaimTrigger != reclaimFocusTrigger {
             uiView.lastReclaimTrigger = reclaimFocusTrigger
-            if !uiView.isFirstResponder {
-                _ = uiView.becomeFirstResponder()
-            }
+            gamepadSession.onSceneBecameActive()
         }
     }
 }
 
-class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
+class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate, UIGestureRecognizerDelegate {
     var controllerSupport: ControllerSupport?
+    weak var gamepadSession: StreamGamepadSession?
     var streamConfig: StreamConfiguration?
     var absoluteTouchMode: Bool = true
     var isHandGazeInputDisabled: Bool = false
+    /// true = gaze pinch-drag scrolls; false = click-drag (marquee).
+    var gazePinchDragUsesScroll: Bool = true
     var lastReclaimTrigger: Int = 0
     var onReturnPressed: (() -> Void)?
     var showVirtualKeyboard: Bool = false {
@@ -141,11 +177,16 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
         return showVirtualKeyboard ? nil : UIView()
     }
     
-    // Touch state for Absolute Touch (Touchscreen) Mode
+    // Touch state for Absolute Touch (Gaze) Mode
     private var longPressTimer: Timer?
     private var lastTouchDownLocation: CGPoint = .zero
     private var lastTouchUpLocation: CGPoint = .zero
     private var lastTouchUpTimestamp: TimeInterval = 0
+    private var lastGazeScrollLocation: CGPoint = .zero
+    private var isGazeScrolling = false
+    private var gazeLeftDownSent = false
+    private let gazeScrollMovementThreshold: CGFloat = 4.0
+    private let gazeScrollWheelScale: CGFloat = 120.0 * 20.0
     
     // Touch state for Relative Touch (Trackpad) Mode
     private var lastTouchPosition: CGPoint? = nil
@@ -172,29 +213,149 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     private let longPressActivationDelta: CGFloat = 0.01  // 1% of screen (normalized)
     private let doubleTapDeadZoneDelay: TimeInterval = 0.250  // 250ms
     private let doubleTapDeadZoneDelta: CGFloat = 0.025  // 2.5% of screen (normalized)
+
+    // Physical trackpad (Magic Trackpad / mouse) — separate from hand gaze/touch
+    private var lastTrackpadScrollTranslation = CGPoint.zero
+    private var lastTrackpadButtonMask: UIEvent.ButtonMask = []
+    private let trackpadWheelDelta: CGFloat = 120.0
+
+    /// Magic Trackpad uses view absolute routing; GCMouse uses ControllerSupport relative deltas.
+    private var routesAbsolutePointerThroughView: Bool {
+        !BluetoothMouseRouting.hasConnectedMouse
+    }
     
     override init(frame: CGRect) {
         super.init(frame: frame)
-        setupGestures()
         setupPointerInteraction()
+        setupTrackpadGestures()
     }
     
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        setupGestures()
         setupPointerInteraction()
+        setupTrackpadGestures()
     }
     
-    private func setupGestures() {
-        // We rely on standard touchesBegan/Moved/Ended for "Look and Pinch".
-        DispatchQueue.main.async {
-            self.controllerSupport?.attachGCEventInteraction(to: self)
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            gamepadSession?.captureViewDidMoveToWindow()
         }
     }
     
     private func setupPointerInteraction() {
         let interaction = UIPointerInteraction(delegate: self)
         self.addInteraction(interaction)
+    }
+
+    private func setupTrackpadGestures() {
+        guard #available(iOS 13.4, *) else { return }
+
+        let discreteScroll = UIPanGestureRecognizer(target: self, action: #selector(trackpadScrollDiscrete(_:)))
+        discreteScroll.maximumNumberOfTouches = 0
+        discreteScroll.allowedScrollTypesMask = .discrete
+        discreteScroll.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        discreteScroll.delegate = self
+        addGestureRecognizer(discreteScroll)
+
+        let continuousScroll = UIPanGestureRecognizer(target: self, action: #selector(trackpadScrollContinuous(_:)))
+        continuousScroll.maximumNumberOfTouches = 0
+        continuousScroll.allowedScrollTypesMask = .continuous
+        continuousScroll.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        continuousScroll.delegate = self
+        addGestureRecognizer(continuousScroll)
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let name = gestureRecognizer.name, name.hasPrefix("kbProductivity.") {
+            return false
+        }
+        return true
+    }
+
+    @objc private func trackpadScrollContinuous(_ gesture: UIPanGestureRecognizer) {
+        guard gesture.state == .began || gesture.state == .changed else {
+            lastTrackpadScrollTranslation = .zero
+            return
+        }
+        guard bounds.height > 0, bounds.width > 0 else { return }
+
+        let current = gesture.translation(in: self)
+        let deltaY = (current.y - lastTrackpadScrollTranslation.y) / bounds.height * trackpadWheelDelta
+        let deltaX = (current.x - lastTrackpadScrollTranslation.x) / bounds.width * trackpadWheelDelta
+        if deltaY != 0 {
+            LiSendHighResScrollEvent(Int16(deltaY * 20.0))
+            lastTrackpadScrollTranslation = current
+        }
+        if deltaX != 0 {
+            LiSendHighResHScrollEvent(Int16(-deltaX * 20.0))
+            lastTrackpadScrollTranslation = current
+        }
+    }
+
+    @objc private func trackpadScrollDiscrete(_ gesture: UIPanGestureRecognizer) {
+        guard gesture.state == .began || gesture.state == .changed else {
+            lastTrackpadScrollTranslation = .zero
+            return
+        }
+
+        let current = gesture.translation(in: self)
+        let deltaY = current.y - lastTrackpadScrollTranslation.y
+        let deltaX = current.x - lastTrackpadScrollTranslation.x
+        if deltaY != 0 {
+            LiSendScrollEvent(deltaY > 0 ? 1 : -1)
+        }
+        if deltaX != 0 {
+            LiSendHScrollEvent(deltaX < 0 ? 1 : -1)
+        }
+        lastTrackpadScrollTranslation = current
+    }
+
+    private func isIndirectPointer(_ touch: UITouch) -> Bool {
+        if #available(iOS 13.4, *) {
+            return touch.type == .indirectPointer
+        }
+        return false
+    }
+
+    @discardableResult
+    private func handlePhysicalTrackpadButton(action: Int8, touches: Set<UITouch>, event: UIEvent?) -> Bool {
+        guard #available(iOS 13.4, *), let touch = touches.first, touch.type == .indirectPointer else {
+            return false
+        }
+
+        let normalizedMask: UIEvent.ButtonMask
+        if #available(iOS 14.0, *) {
+            if action == BUTTON_ACTION_RELEASE {
+                normalizedMask = lastTrackpadButtonMask.subtracting(event?.buttonMask ?? [])
+            } else {
+                normalizedMask = event?.buttonMask ?? []
+            }
+        } else {
+            normalizedMask = event?.buttonMask ?? []
+        }
+
+        let changedButtons = lastTrackpadButtonMask.symmetricDifference(normalizedMask)
+        for button in 1...5 {
+            let buttonFlag = trackpadButtonFlag(for: button)
+            if changedButtons.contains(buttonFlag) {
+                LiSendMouseButtonEvent(action, Int32(button))
+            }
+        }
+
+        lastTrackpadButtonMask = normalizedMask
+        return true
+    }
+
+    private func trackpadButtonFlag(for button: Int) -> UIEvent.ButtonMask {
+        switch button {
+        case 3: // BUTTON_RIGHT — iOS button number 2
+            return UIEvent.ButtonMask(rawValue: 1 << 2)
+        case 2: // BUTTON_MIDDLE — iOS button number 3
+            return UIEvent.ButtonMask(rawValue: 1 << 3)
+        default:
+            return UIEvent.ButtonMask(rawValue: 1 << button)
+        }
     }
     
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
@@ -205,9 +366,8 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     func pointerInteraction(_ interaction: UIPointerInteraction, regionFor request: UIPointerRegionRequest, defaultRegion: UIPointerRegion) -> UIPointerRegion? {
-        // This is called when the pointer moves - send the mouse position
+        guard routesAbsolutePointerThroughView else { return defaultRegion }
         let location = request.location
-        print("[MOUSE DEBUG] Pointer moved to: (\(location.x), \(location.y))")
         sendMousePosition(x: location.x, y: location.y)
         return defaultRegion
     }
@@ -225,19 +385,28 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     @objc private func onLongPressStart() {
+        if gazePinchDragUsesScroll && !gazeLeftDownSent {
+            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT)
+            return
+        }
         // Convert Left Click/Hold into Right Click
         LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT)
         LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT)
+        gazeLeftDownSent = false
     }
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Reclaim first responder on touch if lost (e.g., after switching to another app)
-        if !isFirstResponder {
-            _ = becomeFirstResponder()
+        gamepadSession?.captureViewTouchesBegan()
+
+        if handlePhysicalTrackpadButton(action: BUTTON_ACTION_PRESS, touches: touches, event: event) {
+            return
         }
-        
+
         // Ignore when hand/gaze input is disabled
         guard !isHandGazeInputDisabled else { return }
+
+        // Hand path only — never mix with Magic Trackpad / mouse indirect pointer
+        if touches.contains(where: { isIndirectPointer($0) }) { return }
         
         // Ignore touch down events with more than one finger
         guard let allTouches = event?.allTouches, allTouches.count == 1 else {
@@ -266,8 +435,14 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
                 sendMousePosition(x: touchLocation.x, y: touchLocation.y)
             }
             
-            // Press the left button down
-            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT)
+            lastGazeScrollLocation = touchLocation
+            isGazeScrolling = false
+            gazeLeftDownSent = false
+            
+            if !gazePinchDragUsesScroll {
+                LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT)
+                gazeLeftDownSent = true
+            }
             
             // Start the long press timer
             longPressTimer?.invalidate()
@@ -302,8 +477,17 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if #available(iOS 13.4, *), let touch = touches.first, touch.type == .indirectPointer {
+            guard routesAbsolutePointerThroughView else { return }
+            let location = touch.location(in: self)
+            sendMousePosition(x: location.x, y: location.y)
+            return
+        }
+
         // Ignore when hand/gaze input is disabled
         guard !isHandGazeInputDisabled else { return }
+
+        if touches.contains(where: { isIndirectPointer($0) }) { return }
         
         // Ignore touch move events with more than one finger
         guard let allTouches = event?.allTouches, allTouches.count == 1 else {
@@ -315,7 +499,6 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
         
         if absoluteTouchMode {
             // GAZE CONTROL MODE: Absolute positioning
-            // Check if moved far enough to cancel long press
             let normalizedX = touchLocation.x / bounds.width
             let normalizedY = touchLocation.y / bounds.height
             let lastNormalizedX = lastTouchDownLocation.x / bounds.width
@@ -325,12 +508,33 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
             let dy = normalizedY - lastNormalizedY
             let distance = sqrt(dx * dx + dy * dy)
             
-            if distance > longPressActivationDelta {
+            if gazePinchDragUsesScroll {
+                let scrollDX = touchLocation.x - lastGazeScrollLocation.x
+                let scrollDY = touchLocation.y - lastGazeScrollLocation.y
+                let totalDX = touchLocation.x - lastTouchDownLocation.x
+                let totalDY = touchLocation.y - lastTouchDownLocation.y
+                let totalDist = sqrt(totalDX * totalDX + totalDY * totalDY)
+                
+                if totalDist > gazeScrollMovementThreshold {
+                    isGazeScrolling = true
+                    longPressTimer?.invalidate()
+                    longPressTimer = nil
+                }
+                
+                if isGazeScrolling {
+                    if scrollDY != 0, bounds.height > 0 {
+                        LiSendHighResScrollEvent(Int16((scrollDY / bounds.height) * gazeScrollWheelScale))
+                    }
+                    if scrollDX != 0, bounds.width > 0 {
+                        LiSendHighResHScrollEvent(Int16(-(scrollDX / bounds.width) * gazeScrollWheelScale))
+                    }
+                }
+                lastGazeScrollLocation = touchLocation
+            } else if distance > longPressActivationDelta {
                 longPressTimer?.invalidate()
                 longPressTimer = nil
             }
             
-            // CRITICAL: Always update cursor position in touchesMoved for Absolute Mode
             sendMousePosition(x: touchLocation.x, y: touchLocation.y)
         } else {
             // TOUCH CONTROL MODE: Relative movement (trackpad style)
@@ -362,23 +566,37 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
     }
     
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if handlePhysicalTrackpadButton(action: BUTTON_ACTION_RELEASE, touches: touches, event: event) {
+            return
+        }
+
         // Ignore when hand/gaze input is disabled
         guard !isHandGazeInputDisabled else { return }
+
+        if touches.contains(where: { isIndirectPointer($0) }) { return }
         
         guard let allTouches = event?.allTouches, allTouches.count == touches.count else {
             return
         }
         
         if absoluteTouchMode {
-            // GAZE CONTROL MODE: Release buttons
+            // GAZE CONTROL MODE: Release buttons / click
             longPressTimer?.invalidate()
             longPressTimer = nil
             
-            // Left button up
-            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT)
+            if gazePinchDragUsesScroll {
+                if !isGazeScrolling {
+                    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT)
+                    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT)
+                }
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT)
+            } else {
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT)
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT)
+            }
             
-            // Raise right button too in case we triggered a long press gesture
-            LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT)
+            isGazeScrolling = false
+            gazeLeftDownSent = false
             
             if let touch = touches.first {
                 lastTouchUpLocation = touch.location(in: self)
@@ -484,37 +702,25 @@ class FlatInputCaptureUIView: UIView, UIKeyInput, UIPointerInteractionDelegate {
         // Update internal tracking
         currentMouseX = centerX
         currentMouseY = centerY
-        
-        print("[Touch Mode] Centering cursor: \(centerX), \(centerY)")
+
         LiSendMousePositionEvent(centerX, centerY, Int16(config.width), Int16(config.height))
     }
     
     private func sendMousePosition(x: CGFloat, y: CGFloat) {
         guard let config = streamConfig else { return }
-        
-        // DEBUG: Print actual bounds and stream config
-        print("[MOUSE DEBUG] Input: (\(x), \(y)) | Bounds: \(bounds.size) | Stream: \(config.width)x\(config.height)")
-        
-        // Adjust coordinates to video area (handles letterboxing/pillarboxing)
+
         let adjustedPoint = adjustCoordinatesForVideoArea(CGPoint(x: x, y: y))
-        
-        // Now map from video area coordinates to stream pixel coordinates
         let videoSize = getVideoAreaSize()
-        print("[MOUSE DEBUG] VideoSize: \(videoSize) | Adjusted: (\(adjustedPoint.x), \(adjustedPoint.y))")
-        
+
         let normX = adjustedPoint.x / videoSize.width
-        // Apply vertical offset to compensate for eye-to-cursor alignment
-        // Subtracting moves cursor UP (since Y increases downward)
         let normY = (adjustedPoint.y / videoSize.height) - FLAT_GAZE_VERTICAL_OFFSET
-        
+
         let streamX = normX * CGFloat(config.width)
         let streamY = normY * CGFloat(config.height)
-        
+
         let clampedX = Int16(min(max(streamX, 0), CGFloat(config.width - 1)))
         let clampedY = Int16(min(max(streamY, 0), CGFloat(config.height - 1)))
-        
-        print("[MOUSE DEBUG] Stream coords: (\(clampedX), \(clampedY))")
-        
+
         LiSendMousePositionEvent(clampedX, clampedY, Int16(config.width), Int16(config.height))
     }
     
@@ -626,7 +832,10 @@ struct _FlatDisplayStreamView: View {
     
     @State private var streamMan: StreamManager?
     @State private var controllerSupport: ControllerSupport?
+    @State private var streamGamepadSession = StreamGamepadSession()
     @State private var isHandGazeInputDisabled = false // Long press on control mode button to disable hand/gaze input
+    /// Session-only override for gaze pinch-drag; nil uses Settings default.
+    @State private var sessionPinchDragUsesScroll: Bool? = nil
     @ObservedObject var connectionCallbacks: ObservableConnectionManager = .init()
     @ObservedObject private var coopCoordinator = CoopSessionCoordinator.shared
     
@@ -641,11 +850,13 @@ struct _FlatDisplayStreamView: View {
     @State private var lastPhysicalWidth: Float = 0
     @AppStorage("removeRoundedCorners") private var removeRoundedCorners: Bool = false
     @AppStorage("darkControlsMode") private var darkControlsMode: Bool = false
+    @AppStorage("lightControlsMode") private var lightControlsMode: Bool = false
     
     @State private var safeHDRSettings = FlatThreadSafeHDRSettings(
-        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, mode: 0)
+        params: HDRParams(boost: 1.0, contrast: 1.0, saturation: 1.0, brightness: 0.0, pqExposure: 1.0, mode: 0)
     )
     @StateObject private var hdrParams = HDRTestParams()
+    @StateObject private var hdrPanelSettings = HDRSettings()
     
     @State private var showVirtualKeyboard = false
     @State private var keyboardInput: String = " "
@@ -656,10 +867,14 @@ struct _FlatDisplayStreamView: View {
     @State private var hasPerformedTeardown = false
     @State private var windowDecommissioned = false
     @State private var spatialAudioMode: Bool = true
+    @State private var streamSceneID: String?
     @State private var soundStageSize: SoundStageSize = .medium
     @State private var statsOverlayText: String = ""
     @State private var statsTimer: Timer?
+    @State private var bitrateSession = BitrateCheckSession()
+    @AppStorage("stream.bitrateAssistantShowFirstRunHint") private var showBitrateFirstRunHint = true
     @State private var controlsHighlighted: Bool = false
+    @StateObject private var micChromeFade = MicChromeFadeController(style: .flat)
     @State private var isMenuOpen = false
     @State private var renderGateOpen: Bool = true
     @State private var dimLevel: Int = 0
@@ -668,7 +883,10 @@ struct _FlatDisplayStreamView: View {
     @State private var needsResume = false
     @State private var videoMode: VideoMode = .standard2D
     @State private var show3DConfirm = false
-    
+    @State private var showHDRPanel = false
+    @State private var showDesktopActionsPicker = false
+    @State private var desktopAltTabInteractionActive = false
+
     @State private var showInlinePresetOverlay: Bool = false
     @State private var presetOverlayText: String = ""
     @State private var presetOverlayIcon: String = "camera.filters"
@@ -682,7 +900,7 @@ struct _FlatDisplayStreamView: View {
     @State private var hostingWindow: UIWindow?
     
     @State private var isHDRTexture: Bool = false
-    
+
     @State private var streamEpoch: Int = 0
     @State private var startingStream: Bool = false
     @State private var firstFrameSeenEpoch: Int = -1
@@ -690,8 +908,22 @@ struct _FlatDisplayStreamView: View {
     @State private var watchdogIDR2: DispatchWorkItem?
     @State private var guestAggressiveIDRTimer: Timer?
     @State private var reclaimKeyboardFocus: Int = 0
+    @State private var streamVolumeBeforeMute: Float = 127
+    @State private var streamPeekThroughActive = false
+    @State private var streamVolumeBeforePeek: Float = 127
+    private let streamPeekScreenOpacity: Float = 0.05
+    private let streamPeekVolumeLevel: Float = 13 // 10% of max stream volume (127)
+    private let streamPeekFadeInDuration: TimeInterval = 0.55
+    private let streamPeekFadeOutDuration: TimeInterval = 0.35
+    @State private var passThroughFadeTimer: Timer?
+    /// Aspect-fit video width (pts) — drives top ornament scale so controls shrink with the stream plane.
+    @State private var flatVideoFitWidth: CGFloat = FlatTopControlsMetrics.referenceVideoWidth
     
     let brandPurple = Color(red: 0.7, green: 0.3, blue: 0.9)
+
+    private var flatTopControlsScale: CGFloat {
+        FlatTopControlsMetrics.scale(forVideoWidth: flatVideoFitWidth)
+    }
     
     /// Detects if the stream is a typical SBS 3D format (32:9 aspect ratio)
     var isSBSVideo: Bool {
@@ -797,7 +1029,28 @@ struct _FlatDisplayStreamView: View {
                         }
                         
                         Attachment(id: "presetPopup") {
-                            if showInlinePresetOverlay {
+                            if bitrateSession.isActive {
+                                BitrateAssistantPanel(
+                                    session: bitrateSession,
+                                    streamLabel: "\(streamConfig.width)×\(streamConfig.height) @ \(streamConfig.frameRate)",
+                                    displayScale: 1.4,
+                                    canReconnect: !viewModel.isCoopSession,
+                                    showFirstRunHint: showBitrateFirstRunHint,
+                                    onCancel: { bitrateSession.cancel() },
+                                    onClose: {
+                                        showBitrateFirstRunHint = false
+                                        bitrateSession.closeReport()
+                                    },
+                                    onApply: { kbps in
+                                        viewModel.applyBitrate(kbps)
+                                        bitrateSession.closeReport()
+                                    },
+                                    onApplyAndReconnect: { kbps in
+                                        reconnectForBitrateChange(kbps)
+                                    }
+                                )
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .center)))
+                            } else if showInlinePresetOverlay {
                                 CenterPresetPopup(
                                     text: presetOverlayText,
                                     icon: presetOverlayIcon,
@@ -853,12 +1106,15 @@ struct _FlatDisplayStreamView: View {
                     if let support = controllerSupport {
                         FlatInputCaptureView(
                             controllerSupport: support,
+                            gamepadSession: streamGamepadSession,
                             showKeyboard: $showVirtualKeyboard,
                             streamConfig: streamConfig,
                             absoluteTouchMode: viewModel.streamSettings.absoluteTouchMode,
                             hideSystemCursor: true,  // Always hide - PC renders its own cursor
                             reclaimFocusTrigger: reclaimKeyboardFocus,
-                            isHandGazeInputDisabled: isHandGazeInputDisabled
+                            isHandGazeInputDisabled: isHandGazeInputDisabled,
+                            modalBlocksOverlay: flatGamepadModalBlocksOverlay,
+                            gazePinchDragUsesScroll: effectivePinchDragUsesScroll
                         )
                         .frame(width: fitSize.width, height: fitSize.height)
                         .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
@@ -866,6 +1122,12 @@ struct _FlatDisplayStreamView: View {
                     }
                 }
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                .onAppear {
+                    flatVideoFitWidth = fitSize.width
+                }
+                .onChange(of: proxy.size) { _, newSize in
+                    flatVideoFitWidth = calculateVideoSize(containerSize: newSize).width
+                }
             }
             
             WindowResolver { win in
@@ -917,13 +1179,22 @@ struct _FlatDisplayStreamView: View {
             mainContent
                 .ornament(attachmentAnchor: OrnamentAttachmentAnchor.scene(.top), contentAlignment: Alignment.bottom) {
                     topControlsBar
+                        .scaleEffect(flatTopControlsScale, anchor: .bottom)
                         .padding(.bottom, 8)
                 }
                 .ornament(attachmentAnchor: OrnamentAttachmentAnchor.scene(.bottom), contentAlignment: Alignment.top) {
                     VStack(spacing: 12) {
                         if viewModel.streamSettings.showMicButton {
-                            FloatingMicButton()
-                                .padding(.top, -12)
+                            FloatingMicButton(
+                                chromeOpacity: flatMicChromeOpacity(),
+                                colorStyle: MicButtonColorStyle.from(raw: viewModel.streamSettings.micButtonColorStyleRaw),
+                                onActionPerformed: { micChromeFade.actionPerformed() }
+                            )
+                                .padding(.top, 10)
+                                .animation(.easeInOut(duration: 0.25), value: micChromeFade.controlsHighlighted)
+                                .animation(.easeInOut(duration: 0.25), value: micChromeFade.hideControls)
+                                .animation(.easeInOut(duration: 0.25), value: darkControlsMode)
+                                .animation(.easeInOut(duration: 0.25), value: lightControlsMode)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         
@@ -934,6 +1205,27 @@ struct _FlatDisplayStreamView: View {
                         }
                     }
                 }
+                // HDR ornament centered on window + offset(z:) toward viewer to match RK dialogs (e.g. sbsConfirm at entity z ≈ 0.15), which sit visibly off the texture plane.
+                .ornament(visibility: showHDRPanel ? .visible : .hidden, attachmentAnchor: OrnamentAttachmentAnchor.scene(UnitPoint.center), contentAlignment: .center) {
+                    HDRControlPanel(
+                        settings: hdrPanelSettings,
+                        isPresented: $showHDRPanel,
+                        onLiveUpdate: { updateHDRParamsFromPanel() },
+                        attachmentLayoutScale: 1.0,
+                        dimInactiveGradingControlsWhenReferenceHDR: true
+                    )
+                    .offset(z: FlatHDRPanelMetrics.ornamentForwardOffsetZPts)
+                }
+                .ornament(visibility: showDesktopActionsPicker ? .visible : .hidden, attachmentAnchor: OrnamentAttachmentAnchor.scene(UnitPoint.center), contentAlignment: .center) {
+                    DesktopActionsPickerView(
+                        isPresented: $showDesktopActionsPicker,
+                        sizeScale: DesktopActionsPickerView.flatClassicSizeScale,
+                        onActionPerformed: { action in
+                            handleDesktopActionPerformed(action)
+                        }
+                    )
+                    .offset(z: FlatHDRPanelMetrics.ornamentForwardOffsetZPts)
+                }
         )
         
         let withLifecycle: AnyView = AnyView(
@@ -941,130 +1233,83 @@ struct _FlatDisplayStreamView: View {
                 .task { await setupMaterial() }
                 .onAppear(perform: setupScene)
                 .onDisappear(perform: teardownScene)
-                .onTapGesture {
-                    // Only handle tap if NOT in touchscreen mode
-                    guard !viewModel.streamSettings.absoluteTouchMode else { return }
-                    guard viewModel.activelyStreaming else { return }
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        hideControls = false
-                        controlsHighlighted = true
-                    }
-                    startHighlightTimer()
-                    fixAudioForCurrentMode()
-                }
         )
         
-        return withLifecycle
-            .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
-                if shouldClose && !hasPerformedTeardown {
-                    DispatchQueue.main.async { triggerCloseSequence() }
-                }
-            }
-            .onChange(of: scenePhase) { oldValue, newValue in
-                if newValue == .background {
-                    if !isMenuOpen && viewModel.activelyStreaming, streamMan != nil {
-                        print("Suspending stream due to background (Menu is not open)")
-                        needsResume = true
-                        startingStream = false
-                        viewModel.isSuspendingForBackground = true
-                        streamMan?.stopStream()
-                        streamMan = nil
-                        controllerSupport?.cleanup()
-                        controllerSupport = nil
-                    }
-                } else if newValue == .active {
-                    // Trigger keyboard focus reclaim whenever window becomes active
-                    reclaimKeyboardFocus += 1
-                    
-                    if needsResume {
-                        print("Resuming stream from background")
-                        viewModel.isSuspendingForBackground = false
-                        needsResume = false
-                        self.renderGateOpen = true
-                        self.hasPerformedTeardown = false
-                        self.startingStream = false
-                        controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
-                        connectionCallbacks.controllerSupport = controllerSupport
-                        startStreamIfNeeded()
-                        
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            fixAudioForCurrentMode()
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            self.refreshAfterResume()
-                        }
-                    } else if viewModel.activelyStreaming {
-                        // Health check: If stream should be running but isn't, restart it
-                        if streamMan == nil {
-                            print("[FlatDisplay] Stream died while inactive - restarting")
-                            self.renderGateOpen = true
-                            self.hasPerformedTeardown = false
-                            self.startingStream = false
-                            controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
-                            connectionCallbacks.controllerSupport = controllerSupport
-                            startStreamIfNeeded()
-                        }
-                        
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                           fixAudioForCurrentMode()
-                       }
-                       DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                           self.refreshAfterResume()
-                       }
+        applyFlatStreamObserverModifiers(to: withLifecycle)
+    }
+
+    @ViewBuilder
+    private func applyFlatStreamObserverModifiers(to content: AnyView) -> some View {
+        let withCoreObservers = AnyView(
+            content
+                .onChange(of: viewModel.shouldCloseStream) { _, shouldClose in
+                    if shouldClose && !hasPerformedTeardown {
+                        DispatchQueue.main.async { triggerCloseSequence() }
                     }
                 }
-            }
-            .onChange(of: viewModel.streamSettings.statsOverlay) { _, newValue in
-                if newValue { startStatsTimer() } else { statsTimer?.invalidate(); statsTimer = nil; statsOverlayText = "" }
-            }
-            .onChange(of: viewModel.activelyStreaming) { _, newValue in
-                guard !windowDecommissioned else { return }  // Zombie window — ignore
-                if newValue {
-                    // FIX: Defer state modification to prevent "Modifying state during view update" warnings
-                    DispatchQueue.main.async {
-                        self.renderGateOpen = true
+                .onChange(of: scenePhase) { _, newValue in
+                    handleFlatScenePhaseChange(newValue)
+                }
+                .onChange(of: viewModel.streamSettings.statsOverlay) { _, newValue in
+                    if newValue { startStatsTimer() } else { statsTimer?.invalidate(); statsTimer = nil; statsOverlayText = "" }
+                }
+                .onChange(of: viewModel.activelyStreaming) { _, newValue in
+                    guard !windowDecommissioned else { return }
+                    syncFlatGamepadSession()
+                    if newValue {
+                        DispatchQueue.main.async { self.renderGateOpen = true }
+                        ensureStreamStartedIfNeeded()
+                        dismissWindow(id: "mainView")
                     }
-                    ensureStreamStartedIfNeeded()
-                    dismissWindow(id: "mainView")
                 }
-            }
-            .onChange(of: hostingWindow) { _, _ in
-                applyWindowAspectRatioLock()
-            }
-            .onChange(of: correctedResolutionVersion) { _, _ in
-                applyWindowAspectRatioLock()
-            }
-            .onChange(of: videoMode) { _, _ in
-                applyWindowAspectRatioLock()
-                updateScreenMaterial()
-            }
-            .onChange(of: viewModel.streamSettings.swapABXYButtons) { _, newValue in
-                controllerSupport?.setSwapABXYButtons(newValue)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .resumeStreamFromMenu)) { _ in
-                handleResume()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .mainViewWindowClosed)) { _ in
-                isMenuOpen = false
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("RKStreamFirstFrameShown"))) { _ in
-                if firstFrameSeenEpoch != streamEpoch {
-                    print("[FlatDisplay] First frame (RK) observed; epoch=\(streamEpoch)")
-                    firstFrameSeenEpoch = streamEpoch
-                    self.renderGateOpen = true
-                    rebindScreenMaterial()
-                    cancelFirstFrameWatchdogs()
+                .onChange(of: flatGamepadSyncToken) { _, _ in syncFlatGamepadSession() }
+                .onChange(of: showDesktopActionsPicker) { wasOpen, isOpen in
+                    handleDesktopActionsPickerDismissed(wasOpen: wasOpen, isOpen: isOpen)
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("StreamFirstFrameShownNotification"))) { _ in
-                if firstFrameSeenEpoch != streamEpoch {
-                    print("[FlatDisplay] First frame (UIKit) observed; epoch=\(streamEpoch)")
-                    firstFrameSeenEpoch = streamEpoch
-                    self.renderGateOpen = true
-                    rebindScreenMaterial()
-                    cancelFirstFrameWatchdogs()
+        )
+
+        AnyView(
+            withCoreObservers
+                .onChange(of: hostingWindow) { _, _ in applyWindowAspectRatioLock() }
+                .onChange(of: correctedResolutionVersion) { _, _ in applyWindowAspectRatioLock() }
+                .onChange(of: videoMode) { _, _ in
+                    applyWindowAspectRatioLock()
+                    updateScreenMaterial()
                 }
+                .onChange(of: viewModel.streamSettings.swapABXYButtons) { _, newValue in
+                    controllerSupport?.setSwapABXYButtons(newValue)
+                }
+                .onChange(of: viewModel.streamSettings.reportControllerAsXbox) { _, newValue in
+                    controllerSupport?.setReportControllerAsXbox(newValue)
+                }
+        )
+        .onChange(of: hdrPanelSettings.brightness) { _, _ in updateHDRParamsFromPanel() }
+        .onChange(of: hdrPanelSettings.contrast) { _, _ in updateHDRParamsFromPanel() }
+        .onChange(of: hdrPanelSettings.saturation) { _, _ in updateHDRParamsFromPanel() }
+        .onChange(of: hdrPanelSettings.pqExposure) { _, _ in updateHDRParamsFromPanel() }
+        .onChange(of: hdrPanelSettings.referenceHDR) { _, _ in updateHDRParamsFromPanel() }
+        .onReceive(NotificationCenter.default.publisher(for: .resumeStreamFromMenu)) { _ in handleResume() }
+        .onReceive(NotificationCenter.default.publisher(for: .mainViewWindowClosed)) { _ in
+            restoreStreamAudioAfterMenuDismiss()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("RKStreamFirstFrameShown"))) { _ in
+            if firstFrameSeenEpoch != streamEpoch {
+                print("[FlatDisplay] First frame (RK) observed; epoch=\(streamEpoch)")
+                firstFrameSeenEpoch = streamEpoch
+                renderGateOpen = true
+                rebindScreenMaterial()
+                cancelFirstFrameWatchdogs()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("StreamFirstFrameShownNotification"))) { _ in
+            if firstFrameSeenEpoch != streamEpoch {
+                print("[FlatDisplay] First frame (UIKit) observed; epoch=\(streamEpoch)")
+                firstFrameSeenEpoch = streamEpoch
+                renderGateOpen = true
+                rebindScreenMaterial()
+                cancelFirstFrameWatchdogs()
+            }
+        }
     }
     
     // MARK: - Controls
@@ -1091,14 +1336,55 @@ struct _FlatDisplayStreamView: View {
         .buttonStyle(.plain)
     }
     
+    private var flatGamepadModalBlocksOverlay: Bool {
+        showHDRPanel || show3DConfirm || showDisconnectConfirm || showDesktopActionsPicker
+    }
+
+    /// Bumps when any modal flag affecting gamepad capture changes (keeps onChange chain small).
+    private var flatGamepadSyncToken: String {
+        "\(showHDRPanel)|\(show3DConfirm)|\(showDisconnectConfirm)|\(showDesktopActionsPicker)|\(showVirtualKeyboard)|\(viewModel.activelyStreaming)"
+    }
+
+    private func syncFlatGamepadSession() {
+        streamGamepadSession.displayStyle = .flat
+        streamGamepadSession.setStreamActive(viewModel.activelyStreaming)
+        streamGamepadSession.setControllerModeActive(true)
+        streamGamepadSession.setModalBlocking(flatGamepadModalBlocksOverlay || showVirtualKeyboard)
+    }
+
+    private func flatTopControlsBarOpacity() -> CGFloat {
+        if streamPeekThroughActive { return 1.0 }
+        if controlsHighlighted { return 1.0 }
+        if hideControls {
+            if darkControlsMode { return 0.01 }
+            if lightControlsMode { return 0.5 }
+            return 0.05
+        }
+        if darkControlsMode { return 0.12 }
+        if lightControlsMode { return 1.0 }
+        return 0.5
+    }
+
+    private func flatMicChromeOpacity() -> CGFloat {
+        StreamMicChromeOpacity.flat(
+            hideControls: micChromeFade.hideControls,
+            controlsHighlighted: micChromeFade.controlsHighlighted,
+            peekThroughActive: streamPeekThroughActive,
+            darkControlsMode: darkControlsMode,
+            lightControlsMode: lightControlsMode
+        )
+    }
+
     @ViewBuilder
     private var topControlsBar: some View {
         Group {
             if viewModel.streamSettings.useCollapsedControlsMenu {
                 flatDynamicControlsBar
-                    .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : 0.05))
+                    .opacity(flatTopControlsBarOpacity())
                     .animation(Animation.easeInOut(duration: 0.25), value: controlsHighlighted)
                     .animation(Animation.easeInOut(duration: 0.25), value: hideControls)
+                    .animation(Animation.easeInOut(duration: 0.25), value: darkControlsMode)
+                    .animation(Animation.easeInOut(duration: 0.25), value: lightControlsMode)
                     .allowsHitTesting(true)
             } else {
                 flatOriginalControlsBar
@@ -1111,9 +1397,11 @@ struct _FlatDisplayStreamView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
         .glassBackgroundEffect()
-        .opacity(!hideControls ? (controlsHighlighted ? 1.0 : (darkControlsMode ? 0.12 : 0.5)) : (darkControlsMode ? 0.01 : 0.05))
+        .opacity(flatTopControlsBarOpacity())
         .animation(Animation.easeInOut(duration: 0.25), value: controlsHighlighted)
         .animation(Animation.easeInOut(duration: 0.25), value: hideControls)
+        .animation(Animation.easeInOut(duration: 0.25), value: darkControlsMode)
+        .animation(Animation.easeInOut(duration: 0.25), value: lightControlsMode)
         .allowsHitTesting(true)
     }
     
@@ -1123,12 +1411,11 @@ struct _FlatDisplayStreamView: View {
             makeControlButton(label: "Home", systemImage: "house.fill") {
                 if isMenuOpen {
                     dismissWindow(id: "mainView")
-                    isMenuOpen = false
+                    restoreStreamAudioAfterMenuDismiss()
                 } else {
                     pushWindow(id: "mainView")
                     isMenuOpen = true
                 }
-                fixAudioForCurrentMode()
             }
             Button {
                 if !controlsHighlighted && hideControls {
@@ -1173,7 +1460,7 @@ struct _FlatDisplayStreamView: View {
             })
             makeControlButton(label: "Dim", systemImage: dimLevel == 0 ? "lightbulb.fill" : "lightbulb") {
                 dimLevel = dimLevel == 0 ? 1 : 0
-                UserDefaults.standard.set(dimLevel, forKey: "ambient.dimming.level")
+                AmbientDimmingPersistence.save(dimLevel)
                 viewModel.streamSettings.dimPassthrough = (dimLevel != 0)
                 presetOverlayText = dimLevel == 0 ? "Dimming: Off" : "Dimming: On"
                 presetOverlayIcon = dimLevel == 0 ? "lightbulb.fill" : "lightbulb"
@@ -1189,14 +1476,21 @@ struct _FlatDisplayStreamView: View {
                 viewModel.streamSettings.uikitPreset = next
                 applyCurvedUIKitPreset(next)
                 presetCooldownUntil = Date().addingTimeInterval(0.3)
-                presetOverlayText = presetName(for: next)
-                presetOverlayIcon = "camera.filters"
-                showInlinePresetOverlay = true
-                presetOverlayTimer?.invalidate()
-                presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
-                    withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
-                }
+                presentFilterPresetCenterPopup(selectedPreset: next)
                 startHideTimer()
+            }
+            if viewModel.streamSettings.enableHdr {
+                makeControlButton(
+                    label: showHDRPanel ? "Close HDR" : "HDR",
+                    systemImage: "wand.and.stars"
+                ) {
+                    showHDRPanel.toggle()
+                    if showHDRPanel {
+                        showDesktopActionsPicker = false
+                        updateHDRParamsFromPanel()
+                    }
+                    startHideTimer()
+                }
             }
             makeControlButton(label: videoMode == .standard2D ? "Standard" : "3D", systemImage: "view.3d") {
                 if videoMode == .standard2D { show3DConfirm = true }
@@ -1222,10 +1516,48 @@ struct _FlatDisplayStreamView: View {
                 }
                 startHideTimer()
             }
+            if viewModel.streamSettings.showBitrateAssistantButton {
+                makeControlButton(label: bitrateSession.phase == .measuring ? "Analyzing…" : "Bitrate Check", systemImage: "waveform.path.ecg") {
+                    guard bitrateSession.phase == .idle else { return }
+                    runBitrateCheck()
+                }
+            }
             if viewModel.streamSettings.showTaskManagerButton {
-                makeControlButton(label: "Task Manager", systemImage: "list.bullet.circle") {
-                    sendTaskManager()
+                makeControlButton(
+                    label: showDesktopActionsPicker ? "Close Desktop" : "Desktop",
+                    systemImage: "list.bullet.circle"
+                ) {
+                    if showDesktopActionsPicker && desktopAltTabInteractionActive {
+                        endDesktopAltTabSession()
+                    }
+                    showDesktopActionsPicker.toggle()
+                    if showDesktopActionsPicker { showHDRPanel = false }
                     startHideTimer()
+                }
+            }
+            if viewModel.streamSettings.showStreamMuteButton {
+                makeControlButton(
+                    label: viewModel.vol == 0 ? "Unmute Game" : "Mute Game",
+                    systemImage: viewModel.vol == 0 ? "speaker.slash.fill" : "speaker.fill"
+                ) {
+                    if viewModel.vol == 0 {
+                        let restore = streamVolumeBeforeMute > 0 ? streamVolumeBeforeMute : 127
+                        viewModel.vol = restore
+                        StreamVolume.apply(Int32(restore))
+                    } else {
+                        streamVolumeBeforeMute = viewModel.vol
+                        viewModel.vol = 0
+                        StreamVolume.apply(0)
+                    }
+                    startHideTimer()
+                }
+            }
+            if viewModel.streamSettings.showPeekThroughButton {
+                makeControlButton(
+                    label: streamPeekThroughActive ? "Show Stream" : "Pass Through",
+                    systemImage: streamPeekThroughActive ? "vision.pro" : "vision.pro.fill"
+                ) {
+                    toggleStreamPeekThrough()
                 }
             }
             makeControlButton(label: showVirtualKeyboard ? "Hide Keyboard" : "Show Keyboard", systemImage: showVirtualKeyboard ? "keyboard.fill" : "keyboard") {
@@ -1240,6 +1572,23 @@ struct _FlatDisplayStreamView: View {
                     startHighlightTimer: startHighlightTimer,
                     startHideTimer: startHideTimer
                 )
+            }
+            if viewModel.streamSettings.showPinchDragToggle && viewModel.streamSettings.absoluteTouchMode {
+                makeControlButton(
+                    label: effectivePinchDragUsesScroll ? "Scroll Mode" : "Marquee",
+                    systemImage: effectivePinchDragUsesScroll ? "arrow.up.and.down" : "hand.draw"
+                ) {
+                    let next = !effectivePinchDragUsesScroll
+                    sessionPinchDragUsesScroll = next
+                    presetOverlayText = next ? "Scroll Mode" : "Marquee/Drag"
+                    presetOverlayIcon = next ? "arrow.up.and.down" : "hand.draw"
+                    showInlinePresetOverlay = true
+                    presetOverlayTimer?.invalidate()
+                    presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                        withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+                    }
+                    startHideTimer()
+                }
             }
             LongPressControlBtn(
                 label: viewModel.streamSettings.absoluteTouchMode ? "Gaze Control" : "Touch Control",
@@ -1415,21 +1764,6 @@ struct _FlatDisplayStreamView: View {
         .buttonStyle(.plain)
     }
     
-    private func sendTaskManager() {
-        DispatchQueue.global(qos: .userInteractive).async {
-            let MODIFIER_CTRL: Int8 = 0x02
-            let MODIFIER_SHIFT: Int8 = 0x01
-            let modifiers = MODIFIER_CTRL | MODIFIER_SHIFT
-            let ESC_KEY: Int16 = 0x1B
-            
-           
-            
-            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x03, modifiers)  // Key Down
-            usleep(50 * 1000)
-            LiSendKeyboardEvent(Int16(bitPattern: 0x8000) | ESC_KEY, 0x04, modifiers)  // Key Up
-        }
-    }
-    
     @ViewBuilder
     private var statsOverlayView: some View {
         if viewModel.streamSettings.statsOverlay {
@@ -1524,10 +1858,10 @@ struct _FlatDisplayStreamView: View {
             popupEnt.position = [0, 0, 0.15]
             
             let bounds = popupEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
+            if bounds.extents.x > 0, showInlinePresetOverlay || bitrateSession.isActive {
                 let currentScaleX = max(popupEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.25
+                let desiredLocalWidth: Float = bitrateSession.isActive ? 0.35 : 0.25
                 let scale = desiredLocalWidth / unscaledWidth
                 popupEnt.scale = [scale, scale, scale]
             }
@@ -1587,21 +1921,22 @@ struct _FlatDisplayStreamView: View {
             if bounds.extents.x > 0 {
                 let currentScaleX = max(sbsEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.3  // Slightly larger for the dialog
+                let desiredLocalWidth: Float = show3DConfirm ? 0.3 * Float(SBSConfirmPanelMetrics.scale) : 0.3
                 let scale = desiredLocalWidth / unscaledWidth
                 sbsEnt.scale = [scale, scale, scale]
             }
         }
+
     }
     
     private func updateAttachments(attachments: RealityViewAttachments, width: Float, height: Float) {
         if let popupEnt = attachments.entity(for: "presetPopup") {
             if popupEnt.parent !== screen { screen.addChild(popupEnt) }
             let bounds = popupEnt.visualBounds(relativeTo: screen)
-            if bounds.extents.x > 0 {
+            if bounds.extents.x > 0, showInlinePresetOverlay || bitrateSession.isActive {
                 let currentScaleX = max(popupEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.25
+                let desiredLocalWidth: Float = bitrateSession.isActive ? 0.35 : 0.25
                 let scale = desiredLocalWidth / unscaledWidth
                 popupEnt.scale = [scale, scale, scale]
             }
@@ -1653,11 +1988,12 @@ struct _FlatDisplayStreamView: View {
             if bounds.extents.x > 0 {
                 let currentScaleX = max(sbsEnt.scale.x, 0.0001)
                 let unscaledWidth = Float(bounds.extents.x) / currentScaleX
-                let desiredLocalWidth: Float = 0.3  // Slightly larger for the dialog
+                let desiredLocalWidth: Float = show3DConfirm ? 0.3 * Float(SBSConfirmPanelMetrics.scale) : 0.3
                 let scale = desiredLocalWidth / unscaledWidth
                 sbsEnt.scale = [scale, scale, scale]
             }
         }
+
     }
     
     private func rebindScreenMaterial() {
@@ -1668,6 +2004,9 @@ struct _FlatDisplayStreamView: View {
     private func refreshAfterResume() {
         LiRequestIdrFrame()
         rebindScreenMaterial()
+        syncFlatGamepadSession()
+        // activateGamepadCapture already restores handlers — no separate call needed
+        streamGamepadSession.activateGamepadCapture()
     }
     
     private func cancelFirstFrameWatchdogs() {
@@ -1680,6 +2019,12 @@ struct _FlatDisplayStreamView: View {
     }
     
     // MARK: - HDR & Presets
+    
+    /// Pushes persisted HDR panel values into `safeHDRSettings` right before `DrawableVideoDecoder` is created,
+    /// ensuring the first frame matches UserDefaults even if lifecycle ordering was off.
+    private func syncHDRSettingsForStreamStart() {
+        applyCurvedUIKitPreset(viewModel.streamSettings.uikitPreset)
+    }
     
     private func applyCurvedUIKitPreset(_ preset: Int32) {
         var params = safeHDRSettings.value
@@ -1746,11 +2091,148 @@ struct _FlatDisplayStreamView: View {
                 params.mode = 0
             }
         }
+        if preset == 0 {
+            params.boost       = hdrPanelSettings.brightness
+            params.contrast    = hdrPanelSettings.contrast
+            params.saturation  = hdrPanelSettings.saturation
+            params.brightness = 0.0
+            if isHdr {
+                let hrB: Float = 1.40
+                params.boost       = Swift.min(Swift.max(params.boost * hrB, 1.0), 1.50)
+                params.contrast    = Swift.min(Swift.max(params.contrast, 1.00), 1.20)
+                params.saturation = Swift.min(Swift.max(params.saturation, 0.85), 1.15)
+            }
+        }
+        if isHdr {
+            params.mode = hdrParams.mode
+        }
+        params.pqExposure = hdrPanelSettings.pqExposure
+        params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
         safeHDRSettings.value = params
         
         // HDR params are applied via hdrSettingsProvider on every frame - no IDR needed
     }
     
+    // Live update from HDR panel sliders — must match stream start logic for Custom preset (uikitPreset == 0)
+    // to prevent image "snap" when opening HDR panel
+    private func updateHDRParamsFromPanel() {
+        if viewModel.streamSettings.uikitPreset == 0 {
+            // Custom preset: use same HDR headroom/clamps as stream start
+            applyCurvedUIKitPreset(0)
+        } else {
+            // Non-custom presets: raw copy from panel (legacy behavior for non-zero presets)
+            var params = safeHDRSettings.value
+            params.boost = hdrPanelSettings.brightness
+            params.contrast = hdrPanelSettings.contrast
+            params.saturation = hdrPanelSettings.saturation
+            params.pqExposure = hdrPanelSettings.pqExposure
+            params.brightness = 0.0
+            params.hdrGradeFlags = hdrPanelSettings.referenceHDR ? 1 : 0
+            safeHDRSettings.value = params
+        }
+    }
+
+    /// Brief center toast when a stream starts with Enhanced HDR (FILTER) grading.
+    private func presentDesktopActionToast(_ action: DesktopAction) {
+        presetOverlayText = action.toastLabel
+        presetOverlayIcon = action.systemImage
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+            withAnimation(.easeOut(duration: 0.15)) {
+                showInlinePresetOverlay = false
+            }
+        }
+    }
+
+    private func endDesktopAltTabSession() {
+        desktopAltTabInteractionActive = false
+        DesktopKeyboardSender.releaseStickyModifiersOnHost()
+    }
+
+    private func handleDesktopActionPerformed(_ action: DesktopAction) {
+        presentDesktopActionToast(action)
+        switch action {
+        case .altTab, .cmdTab:
+            desktopAltTabInteractionActive = true
+            streamGamepadSession.clearHeldGamepadButtonsOnHost()
+        case .escape:
+            endDesktopAltTabSession()
+            streamGamepadSession.suppressAfterDesktopAction()
+        default:
+            endDesktopAltTabSession()
+            streamGamepadSession.suppressAfterDesktopAction()
+        }
+    }
+
+    private func handleDesktopActionsPickerDismissed(wasOpen: Bool, isOpen: Bool) {
+        guard wasOpen, !isOpen else { return }
+        if desktopAltTabInteractionActive {
+            streamGamepadSession.clearHeldGamepadButtonsOnHost()
+            syncFlatGamepadSession()
+            return
+        }
+        DesktopKeyboardSender.releaseStickyModifiersOnHost()
+        streamGamepadSession.suppressAfterDesktopAction()
+    }
+
+    private func showHDRPresetToastOnStreamStart() {
+        guard viewModel.streamSettings.uikitPreset == 0 else { return }
+
+        let label: String
+        if hdrPanelSettings.referenceHDR {
+            label = "HDR: Reference"
+        } else {
+            label = "HDR: \(hdrPanelSettings.displayName(for: hdrPanelSettings.activePresetSlot))"
+        }
+
+        presetOverlayText = label
+        presetOverlayIcon = "sun.max.fill"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+            withAnimation(.easeOut(duration: 0.15)) {
+                showInlinePresetOverlay = false
+            }
+        }
+    }
+
+    private func presentFilterPresetCenterPopup(selectedPreset: Int32) {
+        presetOverlayText = presetName(for: selectedPreset)
+        presetOverlayIcon = "camera.filters"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        
+        let needsReferenceHdrOffHint = selectedPreset != 0
+            && viewModel.streamSettings.enableHdr
+            && hdrPanelSettings.referenceHDR
+        
+        if needsReferenceHdrOffHint {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.35, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    self.presetOverlayText = "DISABLE REFERENCE HDR TO USE FILTER PRESETS"
+                    self.presetOverlayIcon = "wand.and.stars"
+                    self.presetOverlayTimer?.invalidate()
+                    self.presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 2.1, repeats: false) { _ in
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                self.showInlinePresetOverlay = false
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        self.showInlinePresetOverlay = false
+                    }
+                }
+            }
+        }
+    }
+
     private func presetName(for preset: Int32) -> String {
         switch preset {
         case 0: return "FILTER: Default"
@@ -1767,6 +2249,63 @@ struct _FlatDisplayStreamView: View {
     }
 
     // MARK: - Scene Lifecycle & Helpers
+
+    private func handleFlatScenePhaseChange(_ newValue: ScenePhase) {
+        if newValue == .background {
+            if !isMenuOpen && viewModel.activelyStreaming, streamMan != nil {
+                print("Suspending stream due to background (Menu is not open)")
+                needsResume = true
+                startingStream = false
+                viewModel.isSuspendingForBackground = true
+                streamMan?.stopStream()
+                streamMan = nil
+                controllerSupport?.cleanup()
+                BluetoothMouseRouting.releasePointerLock()
+                controllerSupport = nil
+            }
+            return
+        }
+        guard newValue == .active else { return }
+
+        reclaimKeyboardFocus += 1
+        streamGamepadSession.onSceneBecameActive()
+
+        if needsResume {
+            print("Resuming stream from background")
+            viewModel.isSuspendingForBackground = false
+            needsResume = false
+            renderGateOpen = true
+            hasPerformedTeardown = false
+            startingStream = false
+            controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
+            connectionCallbacks.controllerSupport = controllerSupport
+            syncFlatGamepadSession()
+            startStreamIfNeeded()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { fixAudioForCurrentMode() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.refreshAfterResume() }
+            return
+        }
+
+        guard viewModel.activelyStreaming else { return }
+        if streamMan == nil {
+            print("[FlatDisplay] Stream died while inactive - restarting")
+            renderGateOpen = true
+            hasPerformedTeardown = false
+            startingStream = false
+            controllerSupport = ControllerSupport(config: streamConfig, delegate: DummyControllerDelegate())
+            connectionCallbacks.controllerSupport = controllerSupport
+            syncFlatGamepadSession()
+            startStreamIfNeeded()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { fixAudioForCurrentMode() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.refreshAfterResume() }
+    }
+    
+    private var effectivePinchDragUsesScroll: Bool {
+        sessionPinchDragUsesScroll ?? viewModel.streamSettings.gazePinchDragScrollMode
+    }
     
     private func setupScene() {
         debugLog("📍 setupScene called - activelyStreaming: \(viewModel.activelyStreaming), hasPerformedTeardown: \(hasPerformedTeardown), windowDecommissioned: \(windowDecommissioned)")
@@ -1781,6 +2320,8 @@ struct _FlatDisplayStreamView: View {
         
         // Set controller support reference for rumble forwarding
         self.connectionCallbacks.controllerSupport = self.controllerSupport
+        BluetoothMouseRouting.sync()
+        syncFlatGamepadSession()
         
         // CRITICAL: Reset teardown flag to allow proper cleanup on next disconnect
         self.hasPerformedTeardown = false
@@ -1795,12 +2336,17 @@ struct _FlatDisplayStreamView: View {
         statsTimer = nil
         statsOverlayText = ""
         
-        var stored = UserDefaults.standard.integer(forKey: "ambient.dimming.level")
-        if stored > 1 { stored = 0 }
-        dimLevel = stored
+        dimLevel = AmbientDimmingPersistence.load()
+        viewModel.streamSettings.dimPassthrough = (dimLevel != 0)
         
-        // Load saved touch control preference
-        viewModel.streamSettings.absoluteTouchMode = UserDefaults.standard.bool(forKey: "flat.absoluteTouchMode")
+        // Load saved touch control preference (default Gaze when never set)
+        if UserDefaults.standard.object(forKey: "flat.absoluteTouchMode") == nil {
+            viewModel.streamSettings.absoluteTouchMode = true
+            UserDefaults.standard.set(true, forKey: "flat.absoluteTouchMode")
+        } else {
+            viewModel.streamSettings.absoluteTouchMode = UserDefaults.standard.bool(forKey: "flat.absoluteTouchMode")
+        }
+        sessionPinchDragUsesScroll = nil
         
         startStreamIfNeeded()
         spatialAudioMode = true
@@ -1815,9 +2361,19 @@ struct _FlatDisplayStreamView: View {
         applyCurvedUIKitPreset(0)
         
         applyWindowAspectRatioLock()
+
+        if let sceneID = AudioHelpers.captureAndPinStreamAudioScene(
+            preferredIdentifier: AudioHelpers.keyWindowSceneIdentifier()
+        ) {
+            streamSceneID = sceneID
+        }
+        fixAudioForCurrentMode()
     }
     
     private func teardownScene() {
+        endDesktopAltTabSession()
+        AmbientDimmingPersistence.save(dimLevel)
+
         debugLog("📍 teardownScene called - hasPerformedTeardown: \(hasPerformedTeardown)")
         statsTimer?.invalidate()
         statsTimer = nil
@@ -1833,6 +2389,11 @@ struct _FlatDisplayStreamView: View {
             return
         }
         hasPerformedTeardown = true
+
+        AudioHelpers.pinStreamAudioToScene(nil)
+        streamSceneID = nil
+
+        clearStreamPeekThroughIfNeeded()
         
         debugLog("🔴 TEARDOWN START - streamMan exists: \(streamMan != nil)")
         
@@ -1844,8 +2405,12 @@ struct _FlatDisplayStreamView: View {
         
         statsTimer?.invalidate()
         hideTimer?.invalidate()
+        micChromeFade.invalidate()
         presetOverlayTimer?.invalidate()
+        bitrateSession.cancel()
         
+        streamGamepadSession.detach()
+        BluetoothMouseRouting.releasePointerLock()
         controllerSupport?.cleanup()
         controllerSupport = nil
         
@@ -1881,7 +2446,10 @@ struct _FlatDisplayStreamView: View {
     
     private func fixAudioForCurrentMode() {
         if spatialAudioMode {
-            AudioHelpers.fixAudioForSurroundForCurrentWindow(soundStageSize: soundStageSize)
+            AudioHelpers.fixAudioForSurroundForStream(
+                soundStageSize: soundStageSize,
+                sceneIdentifier: streamSceneID
+            )
         } else {
             AudioHelpers.fixAudioForDirectStereo()
         }
@@ -1893,7 +2461,7 @@ struct _FlatDisplayStreamView: View {
             let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
             let brandOrange = Color(red: 0.976, green: 0.627, blue: 0.251)
 
-            VStack(spacing: 24) {
+            VStack(spacing: SBSConfirmPanelMetrics.pt(24)) {
                 ZStack {
                     Circle()
                         .fill(
@@ -1903,25 +2471,25 @@ struct _FlatDisplayStreamView: View {
                                 endPoint: .bottomTrailing
                             )
                         )
-                        .frame(width: 64, height: 64)
-                        .shadow(color: brandOrange.opacity(0.5), radius: 18, x: 0, y: 10)
+                        .frame(width: SBSConfirmPanelMetrics.pt(64), height: SBSConfirmPanelMetrics.pt(64))
+                        .shadow(color: brandOrange.opacity(0.5), radius: SBSConfirmPanelMetrics.pt(18), x: 0, y: SBSConfirmPanelMetrics.pt(10))
                     Image(systemName: "view.3d")
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(28), weight: .bold))
                         .foregroundStyle(.white)
                 }
 
-                VStack(spacing: 8) {
+                VStack(spacing: SBSConfirmPanelMetrics.pt(8)) {
                     Text("Enable SBS 3D")
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(22), weight: .bold))
                         .foregroundStyle(.white)
                     Text("Use software such as ReShade + Depth3D on your host PC to utilize SBS mode.")
-                        .font(.system(size: 15, weight: .regular))
+                        .font(.system(size: SBSConfirmPanelMetrics.pt(15), weight: .regular))
                         .foregroundStyle(.white.opacity(0.75))
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, SBSConfirmPanelMetrics.pt(8))
                 }
 
-                VStack(spacing: 12) {
+                VStack(spacing: SBSConfirmPanelMetrics.pt(12)) {
                     Button {
                         show3DConfirm = false
                         videoMode = .sideBySide3D
@@ -1938,15 +2506,15 @@ struct _FlatDisplayStreamView: View {
                             }
                         }
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: SBSConfirmPanelMetrics.pt(10)) {
                             Text("Enable SBS 3D")
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: SBSConfirmPanelMetrics.pt(17), weight: .semibold))
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, SBSConfirmPanelMetrics.pt(14))
                         .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                 .fill(
                                     LinearGradient(
                                         colors: [brandOrange, brandOrange.opacity(0.85)],
@@ -1956,17 +2524,17 @@ struct _FlatDisplayStreamView: View {
                                 )
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                 .stroke(
                                     LinearGradient(
                                         colors: [.white.opacity(0.4), .white.opacity(0.1)],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     ),
-                                    lineWidth: 1.5
+                                    lineWidth: SBSConfirmPanelMetrics.pt(1.5)
                                 )
                         )
-                        .shadow(color: brandOrange.opacity(0.5), radius: 18, x: 0, y: 10)
+                        .shadow(color: brandOrange.opacity(0.5), radius: SBSConfirmPanelMetrics.pt(18), x: 0, y: SBSConfirmPanelMetrics.pt(10))
                     }
                     .buttonStyle(.plain)
 
@@ -1974,22 +2542,22 @@ struct _FlatDisplayStreamView: View {
                         show3DConfirm = false
                     } label: {
                         Text("Cancel")
-                            .font(.system(size: 17, weight: .medium))
+                            .font(.system(size: SBSConfirmPanelMetrics.pt(17), weight: .medium))
                             .foregroundStyle(.white.opacity(0.75))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, SBSConfirmPanelMetrics.pt(14))
                             .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                     .fill(.ultraThinMaterial)
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        RoundedRectangle(cornerRadius: SBSConfirmPanelMetrics.pt(16), style: .continuous)
                                             .stroke(
                                                 LinearGradient(
                                                     colors: [.white.opacity(0.15), .white.opacity(0.05)],
                                                     startPoint: .topLeading,
                                                     endPoint: .bottomTrailing
                                                 ),
-                                                lineWidth: 1
+                                                lineWidth: SBSConfirmPanelMetrics.pt(1)
                                             )
                                     )
                             )
@@ -1997,24 +2565,12 @@ struct _FlatDisplayStreamView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(28)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(brandNavy.opacity(0.92))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    )
+            .padding(SBSConfirmPanelMetrics.pt(28))
+            .neoClearBluePanelChrome(
+                cornerRadius: SBSConfirmPanelMetrics.pt(24),
+                layoutScale: SBSConfirmPanelMetrics.scale
             )
-            .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 16)
-            .frame(width: 420)
+            .frame(width: SBSConfirmPanelMetrics.pt(420))
             .allowsHitTesting(true)
         } else if showDisconnectConfirm {
             let brandNavy = Color(red: 0.12, green: 0.18, blue: 0.37)
@@ -2118,36 +2674,40 @@ struct _FlatDisplayStreamView: View {
                 }
             }
             .padding(28)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(brandNavy.opacity(0.92))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.2), .white.opacity(0.05)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    )
-            )
-            .shadow(color: .black.opacity(0.25), radius: 30, x: 0, y: 16)
+            .neoClearBluePanelChrome(cornerRadius: 24)
             .frame(width: 420)
             .allowsHitTesting(true)
         }
     }
     
+    private func refreshStreamScenePin() {
+        if let sceneID = AudioHelpers.keyWindowSceneIdentifier() {
+            streamSceneID = sceneID
+            AudioHelpers.pinStreamAudioToScene(sceneID)
+        }
+    }
+
+    private func restoreStreamAudioAfterMenuDismiss() {
+        isMenuOpen = false
+        refreshStreamScenePin()
+        fixAudioForCurrentMode()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.refreshStreamScenePin()
+            self.fixAudioForCurrentMode()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.fixAudioForCurrentMode()
+        }
+    }
+
     private func handleResume() {
         dismissWindow(id: "mainView")
-        isMenuOpen = false
         withAnimation(.easeInOut(duration: 0.3)) {
             hideControls = false
             controlsHighlighted = true
         }
         startHighlightTimer()
-        fixAudioForCurrentMode()
+        restoreStreamAudioAfterMenuDismiss()
     }
     
     // MARK: - SBS 3D Material Management
@@ -2186,11 +2746,136 @@ struct _FlatDisplayStreamView: View {
             print("[FlatDisplay] Switched to standard 2D material")
         }
     }
+
+    // MARK: - Peek-through (matches curved: 5% stream opacity, ~10% volume, top bar stays visible)
+
+    private func toggleStreamPeekThrough() {
+        setStreamPeekThroughActive(!streamPeekThroughActive)
+        guard streamPeekThroughActive else { return }
+        presetOverlayText = "Pass Through"
+        presetOverlayIcon = "vision.pro"
+        showInlinePresetOverlay = true
+        presetOverlayTimer?.invalidate()
+        presetOverlayTimer = Timer.scheduledTimer(withTimeInterval: 1.4, repeats: false) { _ in
+            withAnimation(.easeOut(duration: 0.15)) { showInlinePresetOverlay = false }
+        }
+        startHideTimer()
+    }
+
+    private func cancelPassThroughFade() {
+        passThroughFadeTimer?.invalidate()
+        passThroughFadeTimer = nil
+    }
+
+    private func passThroughSmoothstep(_ t: Float) -> Float {
+        let clamped = min(max(t, 0), 1)
+        return clamped * clamped * (3 - 2 * clamped)
+    }
+
+    private func currentPassThroughStreamOpacity() -> Float {
+        screen.components[OpacityComponent.self]?.opacity ?? 1.0
+    }
+
+    private func animatePassThroughTransition(
+        targetOpacity: Float,
+        restoreFullOpacity: Bool,
+        targetVolume: Float?,
+        duration: TimeInterval,
+        completion: (() -> Void)? = nil
+    ) {
+        cancelPassThroughFade()
+
+        let startOpacity = currentPassThroughStreamOpacity()
+        let startVolume = viewModel.vol
+        let steps = max(Int(duration * 60), 1)
+        let interval = duration / Double(steps)
+        var currentStep = 0
+
+        passThroughFadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
+            currentStep += 1
+            let progress = passThroughSmoothstep(Float(currentStep) / Float(steps))
+            let newOpacity = startOpacity + (targetOpacity - startOpacity) * progress
+            screen.components.set(OpacityComponent(opacity: newOpacity))
+
+            if let targetVolume {
+                let newVolume = startVolume + (targetVolume - startVolume) * progress
+                viewModel.vol = newVolume
+                StreamVolume.apply(Int32(newVolume))
+            }
+
+            guard currentStep >= steps else { return }
+
+            timer.invalidate()
+            passThroughFadeTimer = nil
+
+            if restoreFullOpacity {
+                screen.components.remove(OpacityComponent.self)
+            } else {
+                screen.components.set(OpacityComponent(opacity: targetOpacity))
+            }
+
+            if let targetVolume {
+                viewModel.vol = targetVolume
+                StreamVolume.apply(Int32(targetVolume))
+            }
+
+            completion?()
+        }
+    }
+
+    private func setStreamPeekThroughActive(_ active: Bool) {
+        guard streamPeekThroughActive != active else { return }
+        streamPeekThroughActive = active
+
+        if active {
+            hideTimer?.invalidate()
+            hideControls = false
+            controlsHighlighted = true
+            if viewModel.vol > 0 {
+                streamVolumeBeforePeek = viewModel.vol
+            }
+
+            let targetVolume: Float? = viewModel.vol > 0 ? streamPeekVolumeLevel : nil
+            animatePassThroughTransition(
+                targetOpacity: streamPeekScreenOpacity,
+                restoreFullOpacity: false,
+                targetVolume: targetVolume,
+                duration: streamPeekFadeInDuration
+            )
+        } else {
+            let targetVolume: Float? = (viewModel.vol > 0 && streamVolumeBeforePeek > 0) ? streamVolumeBeforePeek : nil
+            animatePassThroughTransition(
+                targetOpacity: 1.0,
+                restoreFullOpacity: true,
+                targetVolume: targetVolume,
+                duration: streamPeekFadeOutDuration
+            ) {
+                startHideTimer()
+            }
+        }
+    }
+
+    private func clearStreamPeekThroughIfNeeded() {
+        guard streamPeekThroughActive else { return }
+        cancelPassThroughFade()
+        streamPeekThroughActive = false
+        screen.components.remove(OpacityComponent.self)
+        if viewModel.vol > 0, streamVolumeBeforePeek > 0 {
+            viewModel.vol = streamVolumeBeforePeek
+            StreamVolume.apply(Int32(streamVolumeBeforePeek))
+        }
+    }
     
     private func startHideTimer() {
         hideTimer?.invalidate()
+        if streamPeekThroughActive {
+            hideControls = false
+            controlsHighlighted = true
+            return
+        }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
             DispatchQueue.main.async {
+                if self.streamPeekThroughActive { return }
                 if viewModel.activelyStreaming {
                     if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
                         withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
@@ -2215,8 +2900,14 @@ struct _FlatDisplayStreamView: View {
     
     private func startHighlightTimer() {
         hideTimer?.invalidate()
+        if streamPeekThroughActive {
+            hideControls = false
+            controlsHighlighted = true
+            return
+        }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             DispatchQueue.main.async {
+                if self.streamPeekThroughActive { return }
                 if self.viewModel.streamSettings.useCollapsedControlsMenu && self.controlsExpanded {
                     withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
                         self.controlsExpanded = false
@@ -2244,6 +2935,46 @@ struct _FlatDisplayStreamView: View {
             if let streamMan = self.streamMan, let stats = streamMan.getStatsOverlayText() {
                 self.statsOverlayText = stats
             }
+        }
+    }
+
+    private func runBitrateCheck() {
+        guard bitrateSession.phase == .idle else { return }
+        bitrateSession.start(
+            extendedScan: viewModel.streamSettings.bitrateAssistantExtendedScan,
+            metricsProvider: {
+                let metrics = streamMan?.getBitrateCheckMetrics() as? [String: Any]
+                return (metrics, connectionCallbacks.connectionStatus)
+            },
+            streamConfig: streamConfig,
+            settings: viewModel.streamSettings
+        )
+        startHideTimer()
+    }
+
+    private func reconnectForBitrateChange(_ kbps: Int32) {
+        guard !viewModel.isCoopSession else { return }
+        viewModel.isBitrateReconnectInProgress = true
+        viewModel.applyBitrate(kbps)
+        streamConfig.bitRate = kbps
+        bitrateSession.beginReconnectUI()
+
+        Task {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                BitrateInPlaceReconnect.stopStreamManager(streamMan, clearReference: { self.streamMan = nil }) {
+                    cont.resume()
+                }
+            }
+
+            await ConnectionSerializer.shared.waitUntilReadyToStart()
+            await BitrateStreamReconnect.runSettleCountdown(session: bitrateSession)
+
+            renderGateOpen = true
+            ensureStreamStartedIfNeeded()
+
+            viewModel.isBitrateReconnectInProgress = false
+            bitrateSession.finishReconnect(success: true)
+            startHideTimer()
         }
     }
     
@@ -2295,6 +3026,12 @@ struct _FlatDisplayStreamView: View {
             let myEpoch = self.streamEpoch
             print("[FlatDisplay] 🚀 Starting stream (epoch \(myEpoch))")
             
+            // CRITICAL: Sync HDR settings from panel to safeHDRSettings BEFORE decoder creation
+            self.syncHDRSettingsForStreamStart()
+            DispatchQueue.main.async {
+                self.showHDRPresetToastOnStreamStart()
+            }
+            
             self.renderGateOpen = true
             self.ensureHDRTextureMatchesSetting()
         
@@ -2302,6 +3039,7 @@ struct _FlatDisplayStreamView: View {
             
             // Set controller support reference for rumble forwarding
             self.connectionCallbacks.controllerSupport = self.controllerSupport
+            syncFlatGamepadSession()
         
             // Capture texture locally for thread-safe background access
             let localTexture = self.texture
@@ -2316,11 +3054,17 @@ struct _FlatDisplayStreamView: View {
                         useFramePacing: self.streamConfig.useFramePacing,
                         enableHDR: self.viewModel.streamSettings.enableHdr,
                         hdrSettingsProvider: { [safeHDRSettings] in safeHDRSettings.value },
-                        enhancementsProvider: { [weak viewModel] in
-                            let warmth: Float = viewModel?.streamSettings.enableHdr ?? false ? 0.03 : 0.0
-                            return (1.0, 1.0, warmth)
+                        enhancementsProvider: {
+                            let p = self.viewModel.streamSettings.uikitPreset
+                            switch p {
+                            case 0: return (1.0, 1.0, 0.0)
+                            case 1: return (1.15, 1.0, 0.0)
+                            case 2: return (1.25, 1.0, 0.0)
+                            case 3: return (0.90, 1.05, 0.0)
+                            default: return (1.0, 1.0, 0.0)
+                            }
                         },
-                        callbackToRender: { textureQueue, correctedResolution in
+                        callbackToRender: { textureQueue, _, correctedResolution in
                             guard self.renderGateOpen else { return }
                             
                             // 1. Drop frame in mailbox (Zero latency, No blocking)
@@ -2349,10 +3093,11 @@ struct _FlatDisplayStreamView: View {
                                     if let firstFrame = self.frameMailbox.collect() {
                                         self.texture.replace(withDrawables: firstFrame)
                                     }
+
+                                    self.controllerSupport?.connectionEstablished()
+                                    self.syncFlatGamepadSession()
+                                    self.startHideTimer()
                                 }
-                                
-                                self.controllerSupport?.connectionEstablished()
-                                self.startHideTimer()
                             }
                         }
                     )

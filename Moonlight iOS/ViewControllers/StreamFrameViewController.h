@@ -50,7 +50,14 @@ typedef void (^noargCallbackType)(void);
 // Method to get stats overlay text
 - (nullable NSString*)getStatsOverlayText;
 
+- (nullable NSDictionary*)getBitrateCheckMetrics;
+
+@property (nonatomic, assign) int32_t connectionStatus;
+
 // Toggle the virtual keyboard and return YES if keyboard is now visible
 - (BOOL)toggleKeyboard;
+
+/// Updates pointer lock when a Bluetooth mouse is connected (Classic display).
+- (void)applyBluetoothMouseRouting;
 
 @end

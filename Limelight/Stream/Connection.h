@@ -36,6 +36,7 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 -(void) terminateWithCompletion:(void (^)(void))completion;
 -(void) main;
 -(BOOL) getVideoStats:(video_stats_t*)stats;
+-(NSTimeInterval) streamUptimeSeconds;
 -(NSString*) getActiveCodecName;
 
 @end

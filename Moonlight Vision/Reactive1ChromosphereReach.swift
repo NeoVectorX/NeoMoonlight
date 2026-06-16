@@ -2,7 +2,7 @@
 //  Reactive1ChromosphereReach.swift
 //  Neo Moonlight
 //
-//  Four chromosphere halo radii for Reactive 1 (dim level 2); each tap on the picker preset cycles tier.
+//  
 //
 
 import Foundation

@@ -85,6 +85,7 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     /// Set true before stopStream() during background suspend so that the
     /// resulting ConnectionLost notification is ignored (it's not a real disconnect).
     @Published var isSuspendingForBackground: Bool = false
+    @Published var isBitrateReconnectInProgress = false
     
     // Co-op Session State
     @Published var isCoopSession: Bool = false
@@ -136,6 +137,34 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         streamSettings.curvedGazeUseTouchMode = UserDefaults.standard.bool(forKey: "curved.gazeUseTouchMode")
         streamSettings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
         streamSettings.gazeCursorOffsetY = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetY")
+        streamSettings.showStreamMuteButton = UserDefaults.standard.bool(forKey: "stream.showMuteButton")
+        streamSettings.showPeekThroughButton = UserDefaults.standard.bool(forKey: "stream.showPeekThroughButton")
+        streamSettings.showHeadFollowButton = UserDefaults.standard.bool(forKey: "stream.showHeadFollowButton")
+        streamSettings.showBitrateAssistantButton = UserDefaults.standard.bool(forKey: "stream.showBitrateAssistantButton")
+        streamSettings.bitrateAssistantExtendedScan = UserDefaults.standard.bool(forKey: "stream.bitrateAssistantExtendedScan")
+        if UserDefaults.standard.object(forKey: "stream.showMicButton") != nil {
+            streamSettings.showMicButton = UserDefaults.standard.bool(forKey: "stream.showMicButton")
+        } else if streamSettings.showMicButton {
+            UserDefaults.standard.set(true, forKey: "stream.showMicButton")
+        }
+        if let micColorRaw = UserDefaults.standard.string(forKey: "stream.micButtonColorStyle") {
+            streamSettings.micButtonColorStyleRaw = micColorRaw
+        }
+        if UserDefaults.standard.object(forKey: "gaze.pinchDragScroll") == nil {
+            streamSettings.gazePinchDragScrollMode = true
+        } else {
+            streamSettings.gazePinchDragScrollMode = UserDefaults.standard.bool(forKey: "gaze.pinchDragScroll")
+        }
+        streamSettings.showPinchDragToggle = UserDefaults.standard.bool(forKey: "stream.showPinchDragToggle")
+        if UserDefaults.standard.object(forKey: "flat.absoluteTouchMode") == nil {
+            streamSettings.absoluteTouchMode = true
+            UserDefaults.standard.set(true, forKey: "flat.absoluteTouchMode")
+        } else {
+            streamSettings.absoluteTouchMode = UserDefaults.standard.bool(forKey: "flat.absoluteTouchMode")
+        }
+        if UserDefaults.standard.object(forKey: "curved.defaultControlMode") == nil {
+            UserDefaults.standard.set(2, forKey: "curved.defaultControlMode")
+        }
         appManager = AppAssetManager(callback: self)
         discoveryManager = DiscoveryManager(hosts: hosts, andCallback: self, uniqueId: uniqueId, cert: clientCert)
 
@@ -574,6 +603,10 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     }
       
     @objc func beginRefresh() {
+        guard !activelyStreaming else {
+            print("[Discovery] Skipping beginRefresh — actively streaming")
+            return
+        }
         discoveryManager?.resetDiscoveryState()
         discoveryManager?.startDiscovery()
     }
@@ -583,6 +616,12 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
     }
       
     // MARK: - Stream Control
+
+    func applyBitrate(_ kbps: Int32) {
+        streamSettings.bitrate = kbps
+        streamSettings.save()
+        print("[ViewModel] Bitrate saved: \(kbps / 1000) Mbps")
+    }
 
     func stream(app: TemporaryApp) -> StreamConfiguration? {
         guard canStartNewStream() else {
@@ -649,6 +688,7 @@ class MainViewModel: NSObject, ObservableObject, DiscoveryCallback, PairCallback
         config.playAudioOnPC = streamSettings.playAudioOnPC
         config.useFramePacing = streamSettings.useFramePacing
         config.swapABXYButtons = streamSettings.swapABXYButtons
+        config.reportControllerAsXbox = streamSettings.reportControllerAsXbox
         
         // Co-op session: Use assigned controller slot. Otherwise, auto-detect connected gamepads.
         if isCoopSession {

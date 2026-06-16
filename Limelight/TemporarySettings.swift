@@ -50,6 +50,8 @@ public class TemporarySettings: NSObject {
     /// When true, show a stream-bar toggle to switch scroll/drag mid-session.
     @objc public var showPinchDragToggle = false
     @objc public var hideHandsIn360Environment = false
+    @objc public var showBitrateAssistantButton = false
+    @objc public var bitrateAssistantExtendedScan = false
     @objc public var showTaskManagerButton = false
     @objc public var showControllerBattery = false
     /// When enabled, PlayStation controllers are reported to the host as Xbox for XInput-only PC games.

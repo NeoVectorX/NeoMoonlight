@@ -62,6 +62,7 @@
 		DC1F5A07206436B20037755F /* ConnectionHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = DC1F5A06206436B20037755F /* ConnectionHelper.m */; };
 		DD1B2A212F4BABA0003DA4AF /* ControllerBatteryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */; };
 		DD1B2A222F4BABA0003DA4AF /* BatteryIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */; };
+		DD1B2A262F4BABB0003DA4AF /* BluetoothMousePointerLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1B2A252F4BABB0003DA4AF /* BluetoothMousePointerLock.swift */; };
 		DD2563522F1A8FF7008F8B66 /* camo.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563512F1A8FF7008F8B66 /* camo.jpg */; };
 		DD2563542F1AEC82008F8B66 /* ParticleManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2563532F1AEC82008F8B66 /* ParticleManager.swift */; };
 		DD2563562F1C1841008F8B66 /* nebula.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD2563552F1C1841008F8B66 /* nebula.jpg */; };
@@ -89,6 +90,8 @@
 		DD8A1FEE2F15EA7600230746 /* DimmingPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */; };
 		DD8A1FF02F15EAB300230746 /* Polar.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DD8A1FEF2F15EAB300230746 /* Polar.jpg */; };
 		DD8A202F2F16CE8B00230746 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8A202E2F16CE8B00230746 /* SplashView.swift */; };
+		DD9BA0012F50000100ED7528 /* BitrateAssistantCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD9BA0002F50000100ED7528 /* BitrateAssistantCore.swift */; };
+		DD9BA0032F50000200ED7528 /* BitrateAssistantViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD9BA0022F50000200ED7528 /* BitrateAssistantViews.swift */; };
 		DDA65F742EF5CAD100E58211 /* placeholderthumb.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA65F732EF5CAD100E58211 /* placeholderthumb.jpg */; };
 		DDA668AC2EF72AE200E58211 /* 17.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668A12EF72AE200E58211 /* 17.jpg */; };
 		DDA668AD2EF72AE200E58211 /* 18.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DDA668A22EF72AE200E58211 /* 18.jpg */; };
@@ -120,6 +123,8 @@
 		DDB7A9512F08BA2200F0DF39 /* ControlComponents+LongPress.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB7A9502F08BA2200F0DF39 /* ControlComponents+LongPress.swift */; };
 		DDB7AB412F0DE4B800F0DF39 /* EnvironmentPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDB7AB402F0DE4B800F0DF39 /* EnvironmentPickerView.swift */; };
 		DDCAEC3E2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = DDCAEC3D2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist */; };
+		DDCTRL022F500A000FACAA1 /* StreamGamepadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDCTRL012F500A000FACAA1 /* StreamGamepadSession.swift */; };
+		DDCURVMAP022F20A200FACAA3 /* CurvedCurvatureMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDCURVMAP012F20A200FACAA3 /* CurvedCurvatureMapping.swift */; };
 		DDD5894A2EC8FC6B00D56AA8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */; };
 		DDE4F1B52ED8C588002C2394 /* MainContentViewAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE4F1B42ED8C588002C2394 /* MainContentViewAttachment.swift */; };
 		DDE4F1C02ED91011002C2394 /* ColorGradingHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE4F1BF2ED91011002C2394 /* ColorGradingHelpers.swift */; };
@@ -140,9 +145,16 @@
 		DDF84EBB2EEB2D4D00FACAA3 /* Fredoka-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DDF84EB72EEB2D4D00FACAA3 /* Fredoka-SemiBold.ttf */; };
 		DDF84EBC2EEB2D4D00FACAA3 /* Fredoka-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DDF84EB32EEB2D4D00FACAA3 /* Fredoka-Bold.ttf */; };
 		DDF84F1A2EECBFCB00FACAA3 /* kofi.webp in Resources */ = {isa = PBXBuildFile; fileRef = DDF84F192EECBFCB00FACAA3 /* kofi.webp */; };
+		DDF84F312EEF010100FACAA3 /* ScreenPresetSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDF84F302EEF010100FACAA3 /* ScreenPresetSettings.swift */; };
+		DDNEOCLBL2F0A103000000002 /* NeoClearBluePanelBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDNEOCLBL2F0A103000000001 /* NeoClearBluePanelBackground.swift */; };
+		DDNEODESK022F20A100FACAA3 /* DesktopActionsPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDNEODESK012F20A100FACAA3 /* DesktopActionsPickerView.swift */; };
+		DDNEOGAZE2F0A104000000002 /* NeoMenuGazeHighlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDNEOGAZE2F0A104000000001 /* NeoMenuGazeHighlight.swift */; };
+		DDSCRADJ022F20A200FACAA3 /* ScreenAdjustCurvaturePill.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDSCRADJ012F20A200FACAA3 /* ScreenAdjustCurvaturePill.swift */; };
+		DDSCRPR132EEF010200FACAA3 /* ScreenPresetPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDSCRPR122EEF010200FACAA3 /* ScreenPresetPanel.swift */; };
 		E77582CD2D53F3EB00948545 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = E77582CC2D53F3E500948545 /* Shaders.metal */; };
 		E77582CF2D54020700948545 /* CVMetalHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77582CE2D54020300948545 /* CVMetalHelpers.swift */; };
 		E77582EB2D5550D500948545 /* AudioHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77582EA2D5550D200948545 /* AudioHelpers.swift */; };
+		E7C001002EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */; };
 		F71801422B65483D00A9336B /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71801412B65483D00A9336B /* AppsView.swift */; };
 		F71801442B654D9100A9336B /* TemporaryApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71801432B654D9100A9336B /* TemporaryApp.swift */; };
 		F71801452B65583700A9336B /* TemporaryApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71801432B654D9100A9336B /* TemporaryApp.swift */; };
@@ -219,6 +231,7 @@
 		F7A4A4D62B61E2F2001591F3 /* TemporaryHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A4A4D52B61E2F2001591F3 /* TemporaryHost.swift */; };
 		F7A4A4D72B61E6FC001591F3 /* TemporaryHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A4A4D52B61E2F2001591F3 /* TemporaryHost.swift */; };
 		F7A4A4D82B61E6FD001591F3 /* TemporaryHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7A4A4D52B61E2F2001591F3 /* TemporaryHost.swift */; };
+		F7CARD5D2B5DE1FE001E8686 /* MenuCardStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CARD5C2B5DE1FE001E8686 /* MenuCardStyle.swift */; };
 		FB1A674D2131E65900507771 /* KeyboardSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = FB1A674C2131E65900507771 /* KeyboardSupport.m */; };
 		FB1A67602132419700507771 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = FB1A675E2132419700507771 /* Main.storyboard */; };
 		FB1A67622132419A00507771 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FB1A67612132419A00507771 /* Assets.xcassets */; };
@@ -307,6 +320,7 @@
 		FBD349621A0089F6002D2A60 /* DataManager.m in Sources */ = {isa = PBXBuildFile; fileRef = FBD349611A0089F6002D2A60 /* DataManager.m */; };
 		FBDE86E019F7A837001C18A8 /* UIComputerView.m in Sources */ = {isa = PBXBuildFile; fileRef = FBDE86DF19F7A837001C18A8 /* UIComputerView.m */; };
 		FBDE86E619F82297001C18A8 /* UIAppView.m in Sources */ = {isa = PBXBuildFile; fileRef = FBDE86E519F82297001C18A8 /* UIAppView.m */; };
+		STRVOL0012EE7C50800FACAA3 /* StreamVolume.swift in Sources */ = {isa = PBXBuildFile; fileRef = STRVOL0002EE7C50800FACAA3 /* StreamVolume.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -420,6 +434,7 @@
 		DC1F5A06206436B20037755F /* ConnectionHelper.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ConnectionHelper.m; sourceTree = "<group>"; };
 		DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatteryIndicatorView.swift; sourceTree = "<group>"; };
 		DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerBatteryState.swift; sourceTree = "<group>"; };
+		DD1B2A252F4BABB0003DA4AF /* BluetoothMousePointerLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothMousePointerLock.swift; sourceTree = "<group>"; };
 		DD2563512F1A8FF7008F8B66 /* camo.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = camo.jpg; sourceTree = "<group>"; };
 		DD2563532F1AEC82008F8B66 /* ParticleManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParticleManager.swift; sourceTree = "<group>"; };
 		DD2563552F1C1841008F8B66 /* nebula.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = nebula.jpg; sourceTree = "<group>"; };
@@ -447,6 +462,8 @@
 		DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmingPickerView.swift; sourceTree = "<group>"; };
 		DD8A1FEF2F15EAB300230746 /* Polar.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = Polar.jpg; sourceTree = "<group>"; };
 		DD8A202E2F16CE8B00230746 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
+		DD9BA0002F50000100ED7528 /* BitrateAssistantCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BitrateAssistantCore.swift; sourceTree = "<group>"; };
+		DD9BA0022F50000200ED7528 /* BitrateAssistantViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BitrateAssistantViews.swift; sourceTree = "<group>"; };
 		DDA65F732EF5CAD100E58211 /* placeholderthumb.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = placeholderthumb.jpg; sourceTree = "<group>"; };
 		DDA668912EF72AE200E58211 /* 1.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 1.jpg; sourceTree = "<group>"; };
 		DDA668922EF72AE200E58211 /* 2.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = 2.jpg; sourceTree = "<group>"; };
@@ -479,6 +496,8 @@
 		DDB7AB402F0DE4B800F0DF39 /* EnvironmentPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPickerView.swift; sourceTree = "<group>"; };
 		DDCAEC3D2EC7B7CE0073A6C7 /* Moonlight copy-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Moonlight copy-Info.plist"; sourceTree = "<group>"; };
 		DDCAEC3F2EC814FF0073A6C7 /* Vision.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Vision.entitlements; sourceTree = "<group>"; };
+		DDCTRL012F500A000FACAA1 /* StreamGamepadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamGamepadSession.swift; sourceTree = "<group>"; };
+		DDCURVMAP012F20A200FACAA3 /* CurvedCurvatureMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurvedCurvatureMapping.swift; sourceTree = "<group>"; };
 		DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		DDE4F1B42ED8C588002C2394 /* MainContentViewAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainContentViewAttachment.swift; sourceTree = "<group>"; };
 		DDE4F1BF2ED91011002C2394 /* ColorGradingHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorGradingHelpers.swift; sourceTree = "<group>"; };
@@ -499,9 +518,16 @@
 		DDF84EB62EEB2D4D00FACAA3 /* Fredoka-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Fredoka-Regular.ttf"; sourceTree = "<group>"; };
 		DDF84EB72EEB2D4D00FACAA3 /* Fredoka-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Fredoka-SemiBold.ttf"; sourceTree = "<group>"; };
 		DDF84F192EECBFCB00FACAA3 /* kofi.webp */ = {isa = PBXFileReference; lastKnownFileType = file; path = kofi.webp; sourceTree = "<group>"; };
+		DDF84F302EEF010100FACAA3 /* ScreenPresetSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenPresetSettings.swift; sourceTree = "<group>"; };
+		DDNEOCLBL2F0A103000000001 /* NeoClearBluePanelBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeoClearBluePanelBackground.swift; sourceTree = "<group>"; };
+		DDNEODESK012F20A100FACAA3 /* DesktopActionsPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopActionsPickerView.swift; sourceTree = "<group>"; };
+		DDNEOGAZE2F0A104000000001 /* NeoMenuGazeHighlight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeoMenuGazeHighlight.swift; sourceTree = "<group>"; };
+		DDSCRADJ012F20A200FACAA3 /* ScreenAdjustCurvaturePill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenAdjustCurvaturePill.swift; sourceTree = "<group>"; };
+		DDSCRPR122EEF010200FACAA3 /* ScreenPresetPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenPresetPanel.swift; sourceTree = "<group>"; };
 		E77582CC2D53F3E500948545 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		E77582CE2D54020300948545 /* CVMetalHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CVMetalHelpers.swift; sourceTree = "<group>"; };
 		E77582EA2D5550D200948545 /* AudioHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioHelpers.swift; sourceTree = "<group>"; };
+		E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reactive1ChromosphereReach.swift; sourceTree = "<group>"; };
 		F71801412B65483D00A9336B /* AppsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsView.swift; sourceTree = "<group>"; };
 		F71801432B654D9100A9336B /* TemporaryApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryApp.swift; sourceTree = "<group>"; };
 		F71801492B655C1F00A9336B /* Utils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utils.swift; sourceTree = "<group>"; };
@@ -519,6 +545,7 @@
 		F7A11A1F2B5DF46B001E8686 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = Platforms/XROS.platform/Developer/SDKs/XROS1.0.sdk/System/Library/Frameworks/RealityKit.framework; sourceTree = DEVELOPER_DIR; };
 		F7A4A4D02B5F216C001591F3 /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
 		F7A4A4D52B61E2F2001591F3 /* TemporaryHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryHost.swift; sourceTree = "<group>"; };
+		F7CARD5C2B5DE1FE001E8686 /* MenuCardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuCardStyle.swift; sourceTree = "<group>"; };
 		FB1A674B2131E65900507771 /* KeyboardSupport.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = KeyboardSupport.h; sourceTree = "<group>"; };
 		FB1A674C2131E65900507771 /* KeyboardSupport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KeyboardSupport.m; sourceTree = "<group>"; };
 		FB1A67532132419700507771 /* Moonlight TV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Moonlight TV.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -699,6 +726,7 @@
 		FBDE86DF19F7A837001C18A8 /* UIComputerView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = UIComputerView.m; sourceTree = "<group>"; };
 		FBDE86E419F82297001C18A8 /* UIAppView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = UIAppView.h; sourceTree = "<group>"; };
 		FBDE86E519F82297001C18A8 /* UIAppView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = UIAppView.m; sourceTree = "<group>"; };
+		STRVOL0002EE7C50800FACAA3 /* StreamVolume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamVolume.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -859,11 +887,15 @@
 			isa = PBXGroup;
 			children = (
 				DD1B2A1F2F4BABA0003DA4AF /* BatteryIndicatorView.swift */,
+				DD1B2A252F4BABB0003DA4AF /* BluetoothMousePointerLock.swift */,
 				DD1B2A202F4BABA0003DA4AF /* ControllerBatteryState.swift */,
+				DDCTRL012F500A000FACAA1 /* StreamGamepadSession.swift */,
 				DD7DD6CE2F423FFE0010D797 /* DebugLogger.swift */,
 				DD2563532F1AEC82008F8B66 /* ParticleManager.swift */,
 				DD8A202E2F16CE8B00230746 /* SplashView.swift */,
 				DD8A1FED2F15EA7600230746 /* DimmingPickerView.swift */,
+				DDNEODESK012F20A100FACAA3 /* DesktopActionsPickerView.swift */,
+				E7C001012EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift */,
 				DD8A1F282F14023C00230746 /* CoopConnectingPopup.swift */,
 				DD8A1F242F11ADF900230746 /* CoopHostView.swift */,
 				DD8A1F252F11ADF900230746 /* CoopModeSelectionView.swift */,
@@ -879,6 +911,8 @@
 				DD273ACF2F01969F00ED7528 /* RemoteMicManager.swift */,
 				DD273A892F01857000ED7528 /* ConditionalGlass.swift */,
 				DD273A8B2F01858500ED7528 /* CenterPresetPopup.swift */,
+				DD9BA0002F50000100ED7528 /* BitrateAssistantCore.swift */,
+				DD9BA0022F50000200ED7528 /* BitrateAssistantViews.swift */,
 				DDF84F192EECBFCB00FACAA3 /* kofi.webp */,
 				DDA668AB2EF72AE200E58211 /* 360 */,
 				DDF84EB32EEB2D4D00FACAA3 /* Fredoka-Bold.ttf */,
@@ -891,9 +925,15 @@
 				DDF84E912EE7B1C100FACAA3 /* Quicksand-Light.ttf */,
 				DDF84EA82EEA207E00FACAA3 /* AmbientLightEngine.swift */,
 				DDF84E9B2EE8BABE00FACAA3 /* CurvedDisplayTutorialView.swift */,
+				DDNEOCLBL2F0A103000000001 /* NeoClearBluePanelBackground.swift */,
+				DDNEOGAZE2F0A104000000001 /* NeoMenuGazeHighlight.swift */,
 				DDF84E992EE874EC00FACAA3 /* MetalVideoDecoderRenderer.swift */,
 				DDF84E972EE7C66700FACAA3 /* AV1Parser.swift */,
 				DDF84E952EE7C50800FACAA3 /* HDRSettings.swift */,
+				DDF84F302EEF010100FACAA3 /* ScreenPresetSettings.swift */,
+				DDCURVMAP012F20A200FACAA3 /* CurvedCurvatureMapping.swift */,
+				DDSCRADJ012F20A200FACAA3 /* ScreenAdjustCurvaturePill.swift */,
+				STRVOL0002EE7C50800FACAA3 /* StreamVolume.swift */,
 				DDF84E792EE3BE9000FACAA3 /* CurvedDisplayStreamView.swift */,
 				DDE4F1BF2ED91011002C2394 /* ColorGradingHelpers.swift */,
 				DDE4F1B42ED8C588002C2394 /* MainContentViewAttachment.swift */,
@@ -914,6 +954,7 @@
 				F7A1195A2B5DE1E2001E8686 /* MoonlightVisionApp.swift */,
 				3E4F94682DC2E2D6006CF0C1 /* ComputerViewWrapper.swift */,
 				F7A1195C2B5DE1FD001E8686 /* MainContentView.swift */,
+				F7CARD5C2B5DE1FE001E8686 /* MenuCardStyle.swift */,
 				F77B58B12B5EFC9000482BD5 /* ComputerView.swift */,
 				F71801412B65483D00A9336B /* AppsView.swift */,
 				F7199AFA2B72F33000E6D62D /* SettingsView.swift */,
@@ -952,6 +993,7 @@
 			children = (
 				DDEDDEA52ED4A2F0008A337C /* UserGuideView.swift */,
 				DDEDDE952ED3EE9F008A337C /* HDRControlPanel.swift */,
+				DDSCRPR122EEF010200FACAA3 /* ScreenPresetPanel.swift */,
 				DDD589492EC8FC6B00D56AA8 /* Assets.xcassets */,
 				F7A119592B5DE1AB001E8686 /* Moonlight Vision */,
 				F7A119072B5DDECC001E8686 /* Moonlight iOS */,
@@ -1584,10 +1626,17 @@
 				F7A1190C2B5DDF73001E8686 /* Limelight.xcdatamodeld in Sources */,
 				F7A1190D2B5DDF73001E8686 /* AbsoluteTouchHandler.m in Sources */,
 				DD8A1FEE2F15EA7600230746 /* DimmingPickerView.swift in Sources */,
+				DDNEODESK022F20A100FACAA3 /* DesktopActionsPickerView.swift in Sources */,
+				E7C001002EFACA0100FACAA3 /* Reactive1ChromosphereReach.swift in Sources */,
 				F7A1190E2B5DDF73001E8686 /* RelativeTouchHandler.m in Sources */,
 				F7A1190F2B5DDF73001E8686 /* KeyboardSupport.m in Sources */,
 				F7A119102B5DDF73001E8686 /* VideoDecoderRenderer.m in Sources */,
 				DDF84E962EE7C50800FACAA3 /* HDRSettings.swift in Sources */,
+				DDF84F312EEF010100FACAA3 /* ScreenPresetSettings.swift in Sources */,
+				DDCURVMAP022F20A200FACAA3 /* CurvedCurvatureMapping.swift in Sources */,
+				DDSCRADJ022F20A200FACAA3 /* ScreenAdjustCurvaturePill.swift in Sources */,
+				DDSCRPR132EEF010200FACAA3 /* ScreenPresetPanel.swift in Sources */,
+				STRVOL0012EE7C50800FACAA3 /* StreamVolume.swift in Sources */,
 				F7A119122B5DDF73001E8686 /* AppListResponse.m in Sources */,
 				F7A119132B5DDF73001E8686 /* Utils.m in Sources */,
 				F7A119152B5DDF73001E8686 /* Connection.m in Sources */,
@@ -1625,6 +1674,7 @@
 				F7A119212B5DDF73001E8686 /* HttpManager.m in Sources */,
 				DDE4F1C02ED91011002C2394 /* ColorGradingHelpers.swift in Sources */,
 				F7A1195D2B5DE1FD001E8686 /* MainContentView.swift in Sources */,
+				F7CARD5D2B5DE1FE001E8686 /* MenuCardStyle.swift in Sources */,
 				DD8A1D702F101C0B00230746 /* MoonlightCoopActivity.swift in Sources */,
 				DD8A1D712F101C0B00230746 /* CoopSessionCoordinator.swift in Sources */,
 				DD8A1D722F101C0B00230746 /* CoopSetupView.swift in Sources */,
@@ -1632,6 +1682,8 @@
 				DDB7A94F2F08B6CB00F0DF39 /* DataCatalog.swift in Sources */,
 				F7A11A232B5DF76F001E8686 /* AppDelegate.m in Sources */,
 				DDF84E9C2EE8BABE00FACAA3 /* CurvedDisplayTutorialView.swift in Sources */,
+				DDNEOCLBL2F0A103000000002 /* NeoClearBluePanelBackground.swift in Sources */,
+				DDNEOGAZE2F0A104000000002 /* NeoMenuGazeHighlight.swift in Sources */,
 				F7A119232B5DDF73001E8686 /* StreamView.m in Sources */,
 				F7A119242B5DDF73001E8686 /* DiscoveryManager.m in Sources */,
 				F77B58B02B5EF94900482BD5 /* SidebarView.swift in Sources */,
@@ -1644,7 +1696,9 @@
 				F71801442B654D9100A9336B /* TemporaryApp.swift in Sources */,
 				DDF84E9A2EE874EC00FACAA3 /* MetalVideoDecoderRenderer.swift in Sources */,
 				DD1B2A212F4BABA0003DA4AF /* ControllerBatteryState.swift in Sources */,
+				DDCTRL022F500A000FACAA1 /* StreamGamepadSession.swift in Sources */,
 				DD1B2A222F4BABA0003DA4AF /* BatteryIndicatorView.swift in Sources */,
+				DD1B2A262F4BABB0003DA4AF /* BluetoothMousePointerLock.swift in Sources */,
 				F7A1192D2B5DDF73001E8686 /* CryptoManager.m in Sources */,
 				F7A1192E2B5DDF73001E8686 /* ConnectionHelper.m in Sources */,
 				B1AC7CF12D4E011B0013B9A3 /* HDRParsingUtils.m in Sources */,
@@ -1671,6 +1725,8 @@
 				DDE4F1B52ED8C588002C2394 /* MainContentViewAttachment.swift in Sources */,
 				F7A1193B2B5DDF73001E8686 /* StreamManager.m in Sources */,
 				DD273A8C2F01858500ED7528 /* CenterPresetPopup.swift in Sources */,
+				DD9BA0012F50000100ED7528 /* BitrateAssistantCore.swift in Sources */,
+				DD9BA0032F50000200ED7528 /* BitrateAssistantViews.swift in Sources */,
 				F7A1193C2B5DDF73001E8686 /* KeyboardInputField.m in Sources */,
 				F7A4A4D12B5F216C001591F3 /* MainViewModel.swift in Sources */,
 				DDEDDE962ED3EE9F008A337C /* HDRControlPanel.swift in Sources */,
@@ -1844,7 +1900,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 3;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1893,7 +1949,7 @@
 					"$(PROJECT_DIR)/libs/FFmpeg/lib/iOS",
 					"$(PROJECT_DIR)/libs/SDL2/lib/visionOS-Sim",
 				);
-				MARKETING_VERSION = 12.0;
+				MARKETING_VERSION = 12.2;
 				OTHER_LDFLAGS = "-ld64";
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1924,7 +1980,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = "Moonlight Vision/Vision.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 3;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = YJ7T2CX9YB;
 				ENABLE_MODULE_VERIFIER = YES;
@@ -1973,7 +2029,7 @@
 					"$(PROJECT_DIR)/libs/FFmpeg/lib/iOS",
 					"$(PROJECT_DIR)/libs/SDL2/lib/visionOS-Sim",
 				);
-				MARKETING_VERSION = 12.0;
+				MARKETING_VERSION = 12.2;
 				OTHER_LDFLAGS = "-ld64";
 				PRODUCT_BUNDLE_IDENTIFIER = com.neovectorx.neomoonlight;
 				PRODUCT_NAME = "$(TARGET_NAME)";

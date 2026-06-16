@@ -20,4 +20,6 @@
 
 - (NSString*) getStatsOverlayText;
 
+- (NSDictionary*) getBitrateCheckMetrics;
+
 @end

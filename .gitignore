@@ -1,3 +1,6 @@
+# Private design notes — never commit to GitHub
+_private/
+
 **/xcuserdata/
 **/Moonlight.xcscmblueprint
 **/xcschemes/*.xcscheme
