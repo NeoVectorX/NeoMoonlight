@@ -2441,6 +2441,9 @@ struct _CurvedDisplayStreamView: View {
                     } else {
                         if startDragPosition == nil {
                             startDragPosition = screenPosition
+                            if viewModel.streamSettings.curvedAutoAim {
+                                stopPresetAnchorMonitoring()
+                            }
                         }
                         let translation = value.convert(value.translation3D, from: .local, to: .scene)
                         guard let startPos = startDragPosition else { break }
@@ -7567,6 +7570,11 @@ struct _CurvedDisplayStreamView: View {
         let preservedScale = screenScale
         let preservedTargetScale = targetScale
 
+        // Recentering moves the panel off any preset pose the monitor is still holding.
+        if viewModel.streamSettings.curvedAutoAim {
+            stopPresetAnchorMonitoring()
+        }
+
         let headPos = head.position(relativeTo: nil)
         let current = currentScreenWorldPosition()
         let yOffset = current.y - headPos.y
@@ -7612,7 +7620,21 @@ struct _CurvedDisplayStreamView: View {
     }
 
     private func applyScreenPresetValues(_ values: ScreenPresetValues) {
-        screenPosition = values.position
+        // Auto-Aim keeps the preset's height and depth but places the panel in the direction
+        // the user is facing, so applying a preset does not shift it sideways.
+        if viewModel.streamSettings.curvedAutoAim, !isLocked, let head = headStorage.headAnchor {
+            let headPos = head.position(relativeTo: nil)
+            let flatForward = flatHeadForward(head)
+            let savedDepth = simd_length(SIMD3<Float>(values.position.x - headPos.x, 0, values.position.z - headPos.z))
+            let depth = savedDepth > 0.5 ? savedDepth : CurvedFirstLaunch.defaultDistance
+            screenPosition = SIMD3<Float>(
+                headPos.x + flatForward.x * depth,
+                values.position.y,
+                headPos.z + flatForward.z * depth
+            )
+        } else {
+            screenPosition = values.position
+        }
         screenScale = values.scale
         targetScale = values.scale
         tiltAngle = CurvedFirstLaunch.clampTilt(values.tiltAngle)
@@ -7623,6 +7645,8 @@ struct _CurvedDisplayStreamView: View {
         headStorage.forceCollisionRegen = true
         screenAdjustBaselineTilt = tiltAngle
         screenAdjustBaselineYaw = yawAngle
+        // Presets carry their own tilt and yaw; Auto-Aim replaces them.
+        applyAutoAim()
     }
 
     private func applyScreenPreset(slot: Int, showToast: Bool = true, atLaunch: Bool = false) {
@@ -7696,6 +7720,9 @@ struct _CurvedDisplayStreamView: View {
             }
 
             guard !Task.isCancelled else { return }
+            // Auto-Aim places the panel relative to the viewer, so the monitor would keep
+            // pulling it back to the preset's saved world pose.
+            guard !viewModel.streamSettings.curvedAutoAim else { return }
             startPresetAnchorMonitoring(anchorID: anchorID)
         }
     }
@@ -7815,6 +7842,8 @@ struct _CurvedDisplayStreamView: View {
         }
         screenAdjustBaselineTilt = tiltAngle
         screenAdjustBaselineYaw = yawAngle
+        // The monitor re-applies the stored pose on every update; keep Auto-Aim's angle.
+        applyAutoAim()
     }
 
     private func findTrackedWorldAnchor(id: UUID, in provider: WorldTrackingProvider) async -> WorldAnchor? {
