@@ -2449,6 +2449,7 @@ struct _CurvedDisplayStreamView: View {
                             proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
                         }
                         screenPosition = proposed
+                        applyAutoAim()
                     }
                     headStorage.lastDragTime = CACurrentMediaTime()
                     
@@ -2511,6 +2512,12 @@ struct _CurvedDisplayStreamView: View {
     
     private var screenAdjustHandlesVisible: Bool {
         inputMode == .screenMove && !isLocked
+    }
+
+    /// The tilt and pan handles. Auto-Aim owns the screen angle, so they are hidden while it
+    /// is enabled. Curvature is not an aiming control and stays available.
+    private var screenAdjustAngleHandlesVisible: Bool {
+        screenAdjustHandlesVisible && !viewModel.streamSettings.curvedAutoAim
     }
     
     private func captureScreenAdjustBaselines() {
@@ -2660,7 +2667,7 @@ struct _CurvedDisplayStreamView: View {
     
     /// Matches top-bar fade tiers; grabbed handle stays full brightness on first drag frame.
     private func screenAdjustHandleDisplayOpacity(for edge: ScreenAdjustHandleEdge) -> CGFloat {
-        guard screenAdjustHandlesVisible else { return 0 }
+        guard screenAdjustAngleHandlesVisible else { return 0 }
         if activeScreenAdjustHandle == edge { return 1.0 }
         if controlsHighlighted { return 1.0 }
         if !hideControls { return fadedTopControlsInactiveOpacity() }
@@ -2737,7 +2744,7 @@ struct _CurvedDisplayStreamView: View {
             .opacity(screenAdjustHandleDisplayOpacity(for: edge))
             .animation(.easeInOut(duration: 0.35), value: hideControls)
             .animation(.easeInOut(duration: 0.35), value: controlsHighlighted)
-            .allowsHitTesting(screenAdjustHandlesVisible)
+            .allowsHitTesting(screenAdjustAngleHandlesVisible)
             .highPriorityGesture(screenAdjustHandleDragGesture(for: edge))
             .sensoryFeedback(.impact(weight: .medium), trigger: screenAdjustHandleFeedbackTrigger)
     }
@@ -2745,7 +2752,7 @@ struct _CurvedDisplayStreamView: View {
     private func screenAdjustHandleDragGesture(for edge: ScreenAdjustHandleEdge) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard screenAdjustHandlesVisible else { return }
+                guard screenAdjustAngleHandlesVisible else { return }
                 let wasInactive = activeScreenAdjustHandle == nil
                 activeScreenAdjustHandle = edge
                 if wasInactive {
@@ -2823,7 +2830,7 @@ struct _CurvedDisplayStreamView: View {
     }
     
     private func positionScreenAdjustHandles(attachments: RealityViewAttachments) {
-        let visible = screenAdjustHandlesVisible
+        let visible = screenAdjustAngleHandlesVisible
         
         for edge in ScreenAdjustHandleEdge.allCases {
             guard let handleEnt = attachments.entity(for: edge.attachmentID) else { continue }
@@ -7485,6 +7492,23 @@ struct _CurvedDisplayStreamView: View {
         return position + rightAxis * (clampedOffset - lateralOffset)
     }
 
+    /// Yaw (degrees) that turns the panel to face the head. The panel's local +Z is its
+    /// viewer-facing axis, matching `headFollowLookAtRotation(for:)`.
+    private func aimYawTowardHead(panelPos: SIMD3<Float>, headPos: SIMD3<Float>) -> Float {
+        let toHead = headPos - panelPos
+        let horizontalDistance = simd_length(SIMD3<Float>(toHead.x, 0, toHead.z))
+        guard horizontalDistance > 1e-3 else { return yawAngle }
+        return CurvedFirstLaunch.clampYaw(atan2(toHead.x, toHead.z) * 180 / .pi)
+    }
+
+    /// Turns the panel to face the viewer. No-op when Auto-Aim is off or in Head Follow.
+    private func applyAutoAim() {
+        guard viewModel.streamSettings.curvedAutoAim, !isLocked, let head = headStorage.headAnchor else { return }
+        yawAngle = aimYawTowardHead(panelPos: screenPosition, headPos: head.position(relativeTo: nil))
+        savedYawAngle = Double(yawAngle)
+        screenAdjustBaselineYaw = yawAngle
+    }
+
     /// First launch: place the panel in front of the user's head at a fixed distance (immersive world space).
     private func placeScreenInFrontOfHead(head: AnchorEntity, distance: Float, verticalOffset: Float) {
         let headPos = head.position(relativeTo: nil)
@@ -7492,6 +7516,7 @@ struct _CurvedDisplayStreamView: View {
         var newPos = headPos + flatForward * distance
         newPos.y = defaultScreenY(headPos: headPos, verticalOffset: verticalOffset)
         screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
+        applyAutoAim()
     }
 
     private func recenterScreenToHead(head: AnchorEntity) {
@@ -7523,6 +7548,7 @@ struct _CurvedDisplayStreamView: View {
         screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
         screenScale = preservedScale
         targetScale = preservedTargetScale
+        applyAutoAim()
     }
 
     private func saveCurrentTransform() {
