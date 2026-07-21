@@ -2443,7 +2443,11 @@ struct _CurvedDisplayStreamView: View {
                         let translation = value.convert(value.translation3D, from: .local, to: .scene)
                         guard let startPos = startDragPosition else { break }
                         var proposed = startPos + simd_float3(translation.x, translation.y, translation.z)
-                        proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
+                        if let head = headStorage.headAnchor {
+                            proposed = clampLateral(proposed, headPos: head.position(relativeTo: nil), forward: flatHeadForward(head))
+                        } else {
+                            proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
+                        }
                         screenPosition = proposed
                     }
                     headStorage.lastDragTime = CACurrentMediaTime()
@@ -7462,17 +7466,23 @@ struct _CurvedDisplayStreamView: View {
         placeScreenAtFirstInstallPosition(head: head)
     }
 
-    /// Compute the fixed default Y for the screen (consistent regardless of head height at call time).
+    /// Default Y for the screen at the user's current head height.
     private func defaultScreenY(headPos: SIMD3<Float>, verticalOffset: Float) -> Float {
         let panelHalfHeight = CURVED_MAX_WIDTH_METERS * screenAspect * CurvedFirstLaunch.eyeLevelLiftReferenceScale * 0.5
-        let computedY = headPos.y + verticalOffset + panelHalfHeight * 2
+        return headPos.y + verticalOffset + panelHalfHeight * 2
+    }
 
-        let savedY = UserDefaults.standard.float(forKey: kCurvedDefaultYKey)
-        if savedY > 0 {
-            return savedY
-        }
-        UserDefaults.standard.set(computedY, forKey: kCurvedDefaultYKey)
-        return computedY
+    /// Clamps how far the panel may sit to the left or right of the user's forward axis.
+    /// Measured against the head, since world X is meaningless once the user turns.
+    private func clampLateral(
+        _ position: SIMD3<Float>,
+        headPos: SIMD3<Float>,
+        forward: SIMD3<Float>
+    ) -> SIMD3<Float> {
+        let rightAxis = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), forward))
+        let lateralOffset = simd_dot(position - headPos, rightAxis)
+        let clampedOffset = min(max(lateralOffset, -allowedLateralMax), allowedLateralMax)
+        return position + rightAxis * (clampedOffset - lateralOffset)
     }
 
     /// First launch: place the panel in front of the user's head at a fixed distance (immersive world space).
@@ -7481,8 +7491,7 @@ struct _CurvedDisplayStreamView: View {
         let flatForward = flatHeadForward(head)
         var newPos = headPos + flatForward * distance
         newPos.y = defaultScreenY(headPos: headPos, verticalOffset: verticalOffset)
-        newPos.x = min(max(newPos.x, -allowedLateralMax), allowedLateralMax)
-        screenPosition = newPos
+        screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
     }
 
     private func recenterScreenToHead(head: AnchorEntity) {
@@ -7496,17 +7505,22 @@ struct _CurvedDisplayStreamView: View {
         let headPos = head.position(relativeTo: nil)
         let current = currentScreenWorldPosition()
         let yOffset = current.y - headPos.y
-        let actualDistance = simd_length(current - headPos)
+
+        // Horizontal distance only. Using the 3D distance re-adds the vertical offset on
+        // every recenter, walking the panel steadily further away.
+        let horizontalDelta = simd_float3(current.x - headPos.x, 0, current.z - headPos.z)
+        let horizontalDistance = simd_length(horizontalDelta)
+        let distance = horizontalDistance > 0.5 ? horizontalDistance : CurvedFirstLaunch.defaultDistance
+
         let flatForward = flatHeadForward(head)
 
-        var newPos = simd_float3(
-            headPos.x + flatForward.x * actualDistance,
+        let newPos = simd_float3(
+            headPos.x + flatForward.x * distance,
             headPos.y + yOffset,
-            headPos.z + flatForward.z * actualDistance
+            headPos.z + flatForward.z * distance
         )
-        newPos.x = min(max(newPos.x, -allowedLateralMax), allowedLateralMax)
 
-        screenPosition = newPos
+        screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
         screenScale = preservedScale
         targetScale = preservedTargetScale
     }
@@ -7938,7 +7952,6 @@ struct _CurvedDisplayStreamView: View {
     private let kCurvedLockedKey = "curved.locked"
     private let kCurvedPosKey = "curved.pos"
     private let kCurvedScaleKey = "curved.scale"
-    private let kCurvedDefaultYKey = "curved.defaultY"
     private let kCurvedSpecialModeExitKey = "curved.specialModeExit"
     private let tutorialSeenKey = "hasSeenCurvedDisplayTutorial_v3"
 
