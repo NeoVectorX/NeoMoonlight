@@ -103,6 +103,8 @@ class HeadPositionStorage {
     var presetAnchorMonitorTask: Task<Void, Never>?
     var presetApplyRefineTask: Task<Void, Never>?
     var activePresetWorldAnchorID: UUID?
+    /// Starts world tracking so Auto-Aim can read the real eye height.
+    var autoAimTrackingStartTask: Task<Void, Never>?
     /// While `CACurrentMediaTime()` is below this, anchor monitor/refine must not move the screen.
     var presetAnchorApplySuppressUntil: CFTimeInterval = 0
 }
@@ -7492,20 +7494,58 @@ struct _CurvedDisplayStreamView: View {
         return position + rightAxis * (clampedOffset - lateralOffset)
     }
 
-    /// Yaw (degrees) that turns the panel to face the head. The panel's local +Z is its
-    /// viewer-facing axis, matching `headFollowLookAtRotation(for:)`.
-    private func aimYawTowardHead(panelPos: SIMD3<Float>, headPos: SIMD3<Float>) -> Float {
+    /// Yaw and tilt (degrees) that point the panel at the head. The panel's local +Z is its
+    /// viewer-facing axis, matching `headFollowLookAtRotation(for:)`. The curved mesh is
+    /// centred on its anchor, so aiming the anchor aims the panel's centre at any size.
+    private func aimAnglesTowardHead(panelPos: SIMD3<Float>, headPos: SIMD3<Float>) -> (tilt: Float, yaw: Float) {
         let toHead = headPos - panelPos
         let horizontalDistance = simd_length(SIMD3<Float>(toHead.x, 0, toHead.z))
-        guard horizontalDistance > 1e-3 else { return yawAngle }
-        return CurvedFirstLaunch.clampYaw(atan2(toHead.x, toHead.z) * 180 / .pi)
+        guard horizontalDistance > 1e-3 else { return (tiltAngle, yawAngle) }
+
+        let yaw = atan2(toHead.x, toHead.z) * 180 / .pi
+        let tilt = atan2(-toHead.y, horizontalDistance) * 180 / .pi
+        return (CurvedFirstLaunch.clampTilt(tilt), CurvedFirstLaunch.clampYaw(yaw))
     }
 
-    /// Turns the panel to face the viewer. No-op when Auto-Aim is off or in Head Follow.
+    /// Head pose from ARKit. `AnchorEntity(.head)` is privacy-protected on visionOS and its
+    /// transform reads as the origin, so it cannot supply the eye height. Nil until the
+    /// world-tracking provider is running.
+    private func currentHeadWorldPosition() -> SIMD3<Float>? {
+        guard let provider = headStorage.presetWorldTrackingProvider ?? headStorage.crownWorldTrackingProvider,
+              provider.state == .running,
+              let deviceAnchor = provider.queryDeviceAnchor(atTimestamp: CACurrentMediaTime())
+        else { return nil }
+        return translationFromTransform(deviceAnchor.originFromAnchorTransform)
+    }
+
+    /// Starts world tracking once, then re-aims with the resolved eye height.
+    private func ensureAutoAimHeadTracking() {
+        guard currentHeadWorldPosition() == nil, headStorage.autoAimTrackingStartTask == nil else { return }
+        headStorage.autoAimTrackingStartTask = Task { @MainActor in
+            _ = await ensurePresetWorldTrackingSession()
+            headStorage.autoAimTrackingStartTask = nil
+            applyAutoAim()
+        }
+    }
+
+    /// Points the panel at the viewer. No-op when Auto-Aim is off or in Head Follow.
     private func applyAutoAim() {
         guard viewModel.streamSettings.curvedAutoAim, !isLocked, let head = headStorage.headAnchor else { return }
-        yawAngle = aimYawTowardHead(panelPos: screenPosition, headPos: head.position(relativeTo: nil))
+        ensureAutoAimHeadTracking()
+
+        // Only the eye height comes from ARKit. Its horizontal origin differs from the
+        // RealityKit scene, so taking X and Z from it breaks the left/right aim.
+        var headPos = head.position(relativeTo: nil)
+        if let eyeHeight = currentHeadWorldPosition()?.y {
+            headPos.y = eyeHeight
+        }
+
+        let angles = aimAnglesTowardHead(panelPos: screenPosition, headPos: headPos)
+        tiltAngle = angles.tilt
+        yawAngle = angles.yaw
+        savedTiltAngle = Double(tiltAngle)
         savedYawAngle = Double(yawAngle)
+        screenAdjustBaselineTilt = tiltAngle
         screenAdjustBaselineYaw = yawAngle
     }
 
@@ -7548,7 +7588,10 @@ struct _CurvedDisplayStreamView: View {
         screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
         screenScale = preservedScale
         targetScale = preservedTargetScale
-        applyAutoAim()
+        // A crown recenter redefines the world origin. Aiming before it settles inverts the
+        // tilt, so re-aim shortly afterwards instead.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { applyAutoAim() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { applyAutoAim() }
     }
 
     private func saveCurrentTransform() {
