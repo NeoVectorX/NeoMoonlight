@@ -428,7 +428,7 @@ struct SettingsView: View {
                                 UserDefaults.standard.set(newValue, forKey: "curved.autoAim")
                             }
 
-                        Text("The headset keeps the screen facing you and hides the manual tilt and pan handles. Turn off for full manual control of the screen angle.")
+                        Text("When enabled, the app will make sure the screen keeps facing you on recenter. It hides the manual tilt and pan handles (curvature still adjustable). Leave off for full manual control")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
@@ -1001,7 +1001,7 @@ struct SettingsView: View {
             // Load gaze control method from UserDefaults
             settings.curvedGazeUseTouchMode = UserDefaults.standard.bool(forKey: "curved.gazeUseTouchMode")
             // Defaults to on; bool(forKey:) would report false for a missing key.
-            settings.curvedAutoAim = UserDefaults.standard.object(forKey: "curved.autoAim") as? Bool ?? true
+            settings.curvedAutoAim = UserDefaults.standard.object(forKey: "curved.autoAim") as? Bool ?? false
             
             // Load gaze cursor calibration from UserDefaults
             settings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")
