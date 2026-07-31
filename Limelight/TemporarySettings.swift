@@ -33,6 +33,7 @@ public class TemporarySettings: NSObject {
     @objc public var absoluteTouchMode = true
     @objc public var curvedDefaultControlMode = 2  // 0: Screen Adjust, 1: Accessory, 2: Gaze (default)
     @objc public var curvedGazeUseTouchMode = false  // false: Eye tracking (gaze), true: Hand drag (touch/trackpad)
+    @objc public var curvedAutoAim = false  // Curved display: screen angle follows the viewer
     @objc public var gazeCursorOffsetX: Int = 0  // -15 to +15 pixels horizontal calibration
     @objc public var gazeCursorOffsetY: Int = 0  // -15 to +15 pixels vertical calibration
     @objc public var statsOverlay = false

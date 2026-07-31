@@ -420,7 +420,21 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.vertical, 4)
-                    
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Auto-Aim Screen", isOn: $settings.curvedAutoAim)
+                            .foregroundColor(.white)
+                            .onChange(of: settings.curvedAutoAim) { _, newValue in
+                                UserDefaults.standard.set(newValue, forKey: "curved.autoAim")
+                            }
+
+                        Text("When enabled, the app will make sure the screen keeps facing you on recenter. It hides the manual tilt and pan handles (curvature still adjustable). Leave off for full manual control")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Pinch and Drag")
@@ -986,6 +1000,8 @@ struct SettingsView: View {
             
             // Load gaze control method from UserDefaults
             settings.curvedGazeUseTouchMode = UserDefaults.standard.bool(forKey: "curved.gazeUseTouchMode")
+            // Defaults to on; bool(forKey:) would report false for a missing key.
+            settings.curvedAutoAim = UserDefaults.standard.object(forKey: "curved.autoAim") as? Bool ?? false
             
             // Load gaze cursor calibration from UserDefaults
             settings.gazeCursorOffsetX = UserDefaults.standard.integer(forKey: "gaze.cursorOffsetX")

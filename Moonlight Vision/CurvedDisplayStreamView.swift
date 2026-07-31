@@ -103,6 +103,8 @@ class HeadPositionStorage {
     var presetAnchorMonitorTask: Task<Void, Never>?
     var presetApplyRefineTask: Task<Void, Never>?
     var activePresetWorldAnchorID: UUID?
+    /// Starts world tracking so Auto-Aim can read the real eye height.
+    var autoAimTrackingStartTask: Task<Void, Never>?
     /// While `CACurrentMediaTime()` is below this, anchor monitor/refine must not move the screen.
     var presetAnchorApplySuppressUntil: CFTimeInterval = 0
 }
@@ -2439,12 +2441,20 @@ struct _CurvedDisplayStreamView: View {
                     } else {
                         if startDragPosition == nil {
                             startDragPosition = screenPosition
+                            if viewModel.streamSettings.curvedAutoAim {
+                                stopPresetAnchorMonitoring()
+                            }
                         }
                         let translation = value.convert(value.translation3D, from: .local, to: .scene)
                         guard let startPos = startDragPosition else { break }
                         var proposed = startPos + simd_float3(translation.x, translation.y, translation.z)
-                        proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
+                        if let head = headStorage.headAnchor {
+                            proposed = clampLateral(proposed, headPos: head.position(relativeTo: nil), forward: flatHeadForward(head))
+                        } else {
+                            proposed.x = min(max(proposed.x, -allowedLateralMax), allowedLateralMax)
+                        }
                         screenPosition = proposed
+                        applyAutoAim()
                     }
                     headStorage.lastDragTime = CACurrentMediaTime()
                     
@@ -2507,6 +2517,12 @@ struct _CurvedDisplayStreamView: View {
     
     private var screenAdjustHandlesVisible: Bool {
         inputMode == .screenMove && !isLocked
+    }
+
+    /// The tilt and pan handles. Auto-Aim owns the screen angle, so they are hidden while it
+    /// is enabled. Curvature is not an aiming control and stays available.
+    private var screenAdjustAngleHandlesVisible: Bool {
+        screenAdjustHandlesVisible && !viewModel.streamSettings.curvedAutoAim
     }
     
     private func captureScreenAdjustBaselines() {
@@ -2656,7 +2672,7 @@ struct _CurvedDisplayStreamView: View {
     
     /// Matches top-bar fade tiers; grabbed handle stays full brightness on first drag frame.
     private func screenAdjustHandleDisplayOpacity(for edge: ScreenAdjustHandleEdge) -> CGFloat {
-        guard screenAdjustHandlesVisible else { return 0 }
+        guard screenAdjustAngleHandlesVisible else { return 0 }
         if activeScreenAdjustHandle == edge { return 1.0 }
         if controlsHighlighted { return 1.0 }
         if !hideControls { return fadedTopControlsInactiveOpacity() }
@@ -2733,7 +2749,7 @@ struct _CurvedDisplayStreamView: View {
             .opacity(screenAdjustHandleDisplayOpacity(for: edge))
             .animation(.easeInOut(duration: 0.35), value: hideControls)
             .animation(.easeInOut(duration: 0.35), value: controlsHighlighted)
-            .allowsHitTesting(screenAdjustHandlesVisible)
+            .allowsHitTesting(screenAdjustAngleHandlesVisible)
             .highPriorityGesture(screenAdjustHandleDragGesture(for: edge))
             .sensoryFeedback(.impact(weight: .medium), trigger: screenAdjustHandleFeedbackTrigger)
     }
@@ -2741,7 +2757,7 @@ struct _CurvedDisplayStreamView: View {
     private func screenAdjustHandleDragGesture(for edge: ScreenAdjustHandleEdge) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard screenAdjustHandlesVisible else { return }
+                guard screenAdjustAngleHandlesVisible else { return }
                 let wasInactive = activeScreenAdjustHandle == nil
                 activeScreenAdjustHandle = edge
                 if wasInactive {
@@ -2819,7 +2835,7 @@ struct _CurvedDisplayStreamView: View {
     }
     
     private func positionScreenAdjustHandles(attachments: RealityViewAttachments) {
-        let visible = screenAdjustHandlesVisible
+        let visible = screenAdjustAngleHandlesVisible
         
         for edge in ScreenAdjustHandleEdge.allCases {
             guard let handleEnt = attachments.entity(for: edge.attachmentID) else { continue }
@@ -7462,17 +7478,78 @@ struct _CurvedDisplayStreamView: View {
         placeScreenAtFirstInstallPosition(head: head)
     }
 
-    /// Compute the fixed default Y for the screen (consistent regardless of head height at call time).
+    /// Default Y for the screen at the user's current head height.
     private func defaultScreenY(headPos: SIMD3<Float>, verticalOffset: Float) -> Float {
         let panelHalfHeight = CURVED_MAX_WIDTH_METERS * screenAspect * CurvedFirstLaunch.eyeLevelLiftReferenceScale * 0.5
-        let computedY = headPos.y + verticalOffset + panelHalfHeight * 2
+        return headPos.y + verticalOffset + panelHalfHeight * 2
+    }
 
-        let savedY = UserDefaults.standard.float(forKey: kCurvedDefaultYKey)
-        if savedY > 0 {
-            return savedY
+    /// Clamps how far the panel may sit to the left or right of the user's forward axis.
+    /// Measured against the head, since world X is meaningless once the user turns.
+    private func clampLateral(
+        _ position: SIMD3<Float>,
+        headPos: SIMD3<Float>,
+        forward: SIMD3<Float>
+    ) -> SIMD3<Float> {
+        let rightAxis = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), forward))
+        let lateralOffset = simd_dot(position - headPos, rightAxis)
+        let clampedOffset = min(max(lateralOffset, -allowedLateralMax), allowedLateralMax)
+        return position + rightAxis * (clampedOffset - lateralOffset)
+    }
+
+    /// Yaw and tilt (degrees) that point the panel at the head. The panel's local +Z is its
+    /// viewer-facing axis, matching `headFollowLookAtRotation(for:)`. The curved mesh is
+    /// centred on its anchor, so aiming the anchor aims the panel's centre at any size.
+    private func aimAnglesTowardHead(panelPos: SIMD3<Float>, headPos: SIMD3<Float>) -> (tilt: Float, yaw: Float) {
+        let toHead = headPos - panelPos
+        let horizontalDistance = simd_length(SIMD3<Float>(toHead.x, 0, toHead.z))
+        guard horizontalDistance > 1e-3 else { return (tiltAngle, yawAngle) }
+
+        let yaw = atan2(toHead.x, toHead.z) * 180 / .pi
+        let tilt = atan2(-toHead.y, horizontalDistance) * 180 / .pi
+        return (CurvedFirstLaunch.clampTilt(tilt), CurvedFirstLaunch.clampYaw(yaw))
+    }
+
+    /// Head pose from ARKit. `AnchorEntity(.head)` is privacy-protected on visionOS and its
+    /// transform reads as the origin, so it cannot supply the eye height. Nil until the
+    /// world-tracking provider is running.
+    private func currentHeadWorldPosition() -> SIMD3<Float>? {
+        guard let provider = headStorage.presetWorldTrackingProvider ?? headStorage.crownWorldTrackingProvider,
+              provider.state == .running,
+              let deviceAnchor = provider.queryDeviceAnchor(atTimestamp: CACurrentMediaTime())
+        else { return nil }
+        return translationFromTransform(deviceAnchor.originFromAnchorTransform)
+    }
+
+    /// Starts world tracking once, then re-aims with the resolved eye height.
+    private func ensureAutoAimHeadTracking() {
+        guard currentHeadWorldPosition() == nil, headStorage.autoAimTrackingStartTask == nil else { return }
+        headStorage.autoAimTrackingStartTask = Task { @MainActor in
+            _ = await ensurePresetWorldTrackingSession()
+            headStorage.autoAimTrackingStartTask = nil
+            applyAutoAim()
         }
-        UserDefaults.standard.set(computedY, forKey: kCurvedDefaultYKey)
-        return computedY
+    }
+
+    /// Points the panel at the viewer. No-op when Auto-Aim is off or in Head Follow.
+    private func applyAutoAim() {
+        guard viewModel.streamSettings.curvedAutoAim, !isLocked, let head = headStorage.headAnchor else { return }
+        ensureAutoAimHeadTracking()
+
+        // Only the eye height comes from ARKit. Its horizontal origin differs from the
+        // RealityKit scene, so taking X and Z from it breaks the left/right aim.
+        var headPos = head.position(relativeTo: nil)
+        if let eyeHeight = currentHeadWorldPosition()?.y {
+            headPos.y = eyeHeight
+        }
+
+        let angles = aimAnglesTowardHead(panelPos: screenPosition, headPos: headPos)
+        tiltAngle = angles.tilt
+        yawAngle = angles.yaw
+        savedTiltAngle = Double(tiltAngle)
+        savedYawAngle = Double(yawAngle)
+        screenAdjustBaselineTilt = tiltAngle
+        screenAdjustBaselineYaw = yawAngle
     }
 
     /// First launch: place the panel in front of the user's head at a fixed distance (immersive world space).
@@ -7481,8 +7558,8 @@ struct _CurvedDisplayStreamView: View {
         let flatForward = flatHeadForward(head)
         var newPos = headPos + flatForward * distance
         newPos.y = defaultScreenY(headPos: headPos, verticalOffset: verticalOffset)
-        newPos.x = min(max(newPos.x, -allowedLateralMax), allowedLateralMax)
-        screenPosition = newPos
+        screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
+        applyAutoAim()
     }
 
     private func recenterScreenToHead(head: AnchorEntity) {
@@ -7493,22 +7570,36 @@ struct _CurvedDisplayStreamView: View {
         let preservedScale = screenScale
         let preservedTargetScale = targetScale
 
+        // Recentering moves the panel off any preset pose the monitor is still holding.
+        if viewModel.streamSettings.curvedAutoAim {
+            stopPresetAnchorMonitoring()
+        }
+
         let headPos = head.position(relativeTo: nil)
         let current = currentScreenWorldPosition()
         let yOffset = current.y - headPos.y
-        let actualDistance = simd_length(current - headPos)
+
+        // Horizontal distance only. Using the 3D distance re-adds the vertical offset on
+        // every recenter, walking the panel steadily further away.
+        let horizontalDelta = simd_float3(current.x - headPos.x, 0, current.z - headPos.z)
+        let horizontalDistance = simd_length(horizontalDelta)
+        let distance = horizontalDistance > 0.5 ? horizontalDistance : CurvedFirstLaunch.defaultDistance
+
         let flatForward = flatHeadForward(head)
 
-        var newPos = simd_float3(
-            headPos.x + flatForward.x * actualDistance,
+        let newPos = simd_float3(
+            headPos.x + flatForward.x * distance,
             headPos.y + yOffset,
-            headPos.z + flatForward.z * actualDistance
+            headPos.z + flatForward.z * distance
         )
-        newPos.x = min(max(newPos.x, -allowedLateralMax), allowedLateralMax)
 
-        screenPosition = newPos
+        screenPosition = clampLateral(newPos, headPos: headPos, forward: flatForward)
         screenScale = preservedScale
         targetScale = preservedTargetScale
+        // A crown recenter redefines the world origin. Aiming before it settles inverts the
+        // tilt, so re-aim shortly afterwards instead.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { applyAutoAim() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { applyAutoAim() }
     }
 
     private func saveCurrentTransform() {
@@ -7529,7 +7620,21 @@ struct _CurvedDisplayStreamView: View {
     }
 
     private func applyScreenPresetValues(_ values: ScreenPresetValues) {
-        screenPosition = values.position
+        // Auto-Aim keeps the preset's height and depth but places the panel in the direction
+        // the user is facing, so applying a preset does not shift it sideways.
+        if viewModel.streamSettings.curvedAutoAim, !isLocked, let head = headStorage.headAnchor {
+            let headPos = head.position(relativeTo: nil)
+            let flatForward = flatHeadForward(head)
+            let savedDepth = simd_length(SIMD3<Float>(values.position.x - headPos.x, 0, values.position.z - headPos.z))
+            let depth = savedDepth > 0.5 ? savedDepth : CurvedFirstLaunch.defaultDistance
+            screenPosition = SIMD3<Float>(
+                headPos.x + flatForward.x * depth,
+                values.position.y,
+                headPos.z + flatForward.z * depth
+            )
+        } else {
+            screenPosition = values.position
+        }
         screenScale = values.scale
         targetScale = values.scale
         tiltAngle = CurvedFirstLaunch.clampTilt(values.tiltAngle)
@@ -7540,6 +7645,8 @@ struct _CurvedDisplayStreamView: View {
         headStorage.forceCollisionRegen = true
         screenAdjustBaselineTilt = tiltAngle
         screenAdjustBaselineYaw = yawAngle
+        // Presets carry their own tilt and yaw; Auto-Aim replaces them.
+        applyAutoAim()
     }
 
     private func applyScreenPreset(slot: Int, showToast: Bool = true, atLaunch: Bool = false) {
@@ -7613,6 +7720,9 @@ struct _CurvedDisplayStreamView: View {
             }
 
             guard !Task.isCancelled else { return }
+            // Auto-Aim places the panel relative to the viewer, so the monitor would keep
+            // pulling it back to the preset's saved world pose.
+            guard !viewModel.streamSettings.curvedAutoAim else { return }
             startPresetAnchorMonitoring(anchorID: anchorID)
         }
     }
@@ -7732,6 +7842,8 @@ struct _CurvedDisplayStreamView: View {
         }
         screenAdjustBaselineTilt = tiltAngle
         screenAdjustBaselineYaw = yawAngle
+        // The monitor re-applies the stored pose on every update; keep Auto-Aim's angle.
+        applyAutoAim()
     }
 
     private func findTrackedWorldAnchor(id: UUID, in provider: WorldTrackingProvider) async -> WorldAnchor? {
@@ -7938,7 +8050,6 @@ struct _CurvedDisplayStreamView: View {
     private let kCurvedLockedKey = "curved.locked"
     private let kCurvedPosKey = "curved.pos"
     private let kCurvedScaleKey = "curved.scale"
-    private let kCurvedDefaultYKey = "curved.defaultY"
     private let kCurvedSpecialModeExitKey = "curved.specialModeExit"
     private let tutorialSeenKey = "hasSeenCurvedDisplayTutorial_v3"
 
